@@ -365,6 +365,38 @@ def test_release_smoke_and_operator_tls_validation_are_strict() -> None:
     assert secrets.count("openssl verify -x509_strict -purpose sslserver") == 2
 
 
+def test_release_smoke_expected_upload_rejection_is_fail_closed() -> None:
+    smoke = (ROOT / "scripts/release_deployment_smoke.sh").read_text(encoding="utf-8")
+    transport = smoke.split("curl_transport_common=(", maxsplit=1)[1].split(")", maxsplit=1)[0]
+    for required in (
+        "--silent",
+        "--show-error",
+        "--connect-timeout 5",
+        "--max-time 30",
+        '--resolve "${hostname}:8443:127.0.0.1"',
+        '--cacert "$work/tls-ca.crt"',
+    ):
+        assert required in transport
+    assert "--fail" not in transport
+    assert 'curl_common=(--fail "${curl_transport_common[@]}")' in smoke
+
+    upload = smoke.split('upload_status="$(curl', maxsplit=1)[1].split(
+        'jq -e \'.code == "BILL_RATE_IMPORT_REJECTED"\'', maxsplit=1
+    )[0]
+    assert '"${curl_transport_common[@]}"' in upload
+    assert '"${curl_common[@]}"' not in upload
+    assert '-o "$work/upload-response.json"' in upload
+    assert "-w '%{http_code}'" in upload
+    assert '[[ "$upload_status" == "422" ]]' in upload
+    assert 'readonly upload_status="$(curl' not in smoke
+    assert re.search(
+        r'^upload_status="\$\(curl .*?\)"\nreadonly upload_status$',
+        smoke,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert smoke.startswith("#!/usr/bin/env bash\nset -Eeuo pipefail\n")
+
+
 def test_release_smoke_preserves_redacted_failure_diagnostics() -> None:
     smoke = (ROOT / "scripts/release_deployment_smoke.sh").read_text(encoding="utf-8")
     release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
