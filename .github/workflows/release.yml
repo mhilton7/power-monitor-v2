@@ -289,13 +289,28 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: Run authenticated sensor, cost, command, sandbox, and recovery checks
+      - id: smoke
+        name: Run authenticated sensor, cost, command, sandbox, and recovery checks
         shell: bash
         env:
           COMPOSE_FILE: release/smoke/power-monitor-v2-${{ github.ref_name }}.yaml
           EVIDENCE_FILE: release/smoke/deployment-test-report.json
         run: bash scripts/release_deployment_smoke.sh
+      - name: Require complete deployment or failure evidence
+        if: always()
+        shell: bash
+        env:
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          EXPECTED_VERSION: ${{ github.ref_name }}
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: >-
+          python scripts/validate_deployment_evidence.py
+          --prefix release/smoke/deployment-test-report
+          --outcome "$SMOKE_OUTCOME"
+          --expected-version "$EXPECTED_VERSION"
+          --expected-revision "$EXPECTED_REVISION"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
         with:
           name: release-gate-deployment
           path: |
@@ -303,6 +318,10 @@ jobs:
             release/smoke/deployment-test-report-authenticated.json
             release/smoke/deployment-test-report-compose-ps.jsonl
             release/smoke/deployment-test-report-permissions.txt
+            release/smoke/deployment-test-report-failure.json
+            release/smoke/deployment-test-report-failure-compose-ps.jsonl
+            release/smoke/deployment-test-report-failure-health.jsonl
+            release/smoke/deployment-test-report-failure-log-events.jsonl
           if-no-files-found: error
           retention-days: 90
 

@@ -89,6 +89,9 @@ COPY --chown=0:0 backend/app/bill_rate_import/sandbox_entry.py /opt/pm-pdf-sandb
 USER 10001:10001
 EXPOSE 8000
 STOPSIGNAL SIGTERM
-HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=4 \
-  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()"]
-CMD ["python", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
+HEALTHCHECK --interval=15s --timeout=15s --start-period=20s --retries=4 \
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=10).read()"]
+# The fail-closed PDF sandbox uses asyncio subprocess pipes. Exact restricted-image
+# validation proves that boundary on the standard loop; Uvicorn's optional uvloop
+# cannot be used for the production readiness or parsing path.
+CMD ["python", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*", "--loop", "asyncio"]

@@ -7,6 +7,7 @@ import os
 import platform
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,39 @@ def test_portable_parser_is_explicitly_test_only(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("PM_ENV", "production")
     with pytest.raises(RuntimeError, match="only when PM_ENV=test"):
         isolated.extract_rate_plan_portable_for_tests(_valid_pdf())
+
+
+@pytest.mark.asyncio
+async def test_readiness_retries_failure_then_caches_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [100.0]
+    results = iter((False, True))
+    calls = 0
+
+    async def self_test() -> bool:
+        nonlocal calls
+        calls += 1
+        return next(results)
+
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(isolated, "_run_sandbox_self_test", self_test)
+    monkeypatch.setattr(isolated, "_health_cache", (None, False))
+
+    assert await isolated.pdf_sandbox_is_ready() is False
+    assert calls == 1
+
+    clock[0] += isolated._HEALTH_FAILURE_TTL_SECONDS - 1
+    assert await isolated.pdf_sandbox_is_ready() is False
+    assert calls == 1
+
+    clock[0] += 2
+    assert await isolated.pdf_sandbox_is_ready() is True
+    assert calls == 2
+
+    clock[0] += isolated._HEALTH_SUCCESS_TTL_SECONDS - 1
+    assert await isolated.pdf_sandbox_is_ready() is True
+    assert calls == 2
 
 
 @pytest.mark.asyncio

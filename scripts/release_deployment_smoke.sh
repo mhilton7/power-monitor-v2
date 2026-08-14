@@ -3,36 +3,208 @@ set -Eeuo pipefail
 
 # This destructive-looking test is restricted to a disposable GitHub-hosted
 # runner. It never targets an operator's TrueNAS host.
-[[ "${GITHUB_ACTIONS:-}" == "true" && "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]]
-: "${COMPOSE_FILE:?COMPOSE_FILE is required}"
-: "${EVIDENCE_FILE:?EVIDENCE_FILE is required}"
-[[ -f "$COMPOSE_FILE" ]]
-command -v docker >/dev/null
-command -v setfacl >/dev/null
-
 readonly hostname="power-monitor.home.arpa"
 readonly base="/mnt/Apps/PowerMeterV2"
-readonly work="$(mktemp -d "${RUNNER_TEMP:?}/pm-release-smoke.XXXXXX")"
-readonly cookie_jar="$work/cookies.txt"
+readonly supplied_compose_file="${COMPOSE_FILE:-}"
+readonly supplied_evidence_file="${EVIDENCE_FILE:-}"
+readonly COMPOSE_FILE="$supplied_compose_file"
+readonly EVIDENCE_FILE="${supplied_evidence_file:-release/smoke/deployment-test-report.json}"
+work=""
+cookie_jar=""
+runner_authorized=false
+base_owned=false
+hosts_entry_added=false
 readonly endpoint="https://${hostname}:8443"
-readonly hosts_marker="powermeter-v2-release-smoke-${GITHUB_RUN_ID:?}"
+readonly hosts_marker="powermeter-v2-release-smoke-${GITHUB_RUN_ID:-unknown}"
 readonly authenticated_evidence="${EVIDENCE_FILE%.json}-authenticated.json"
+readonly compose_ps_evidence="${EVIDENCE_FILE%.json}-compose-ps.jsonl"
+readonly permissions_evidence="${EVIDENCE_FILE%.json}-permissions.txt"
+readonly failure_evidence="${EVIDENCE_FILE%.json}-failure.json"
+readonly failure_compose_ps="${EVIDENCE_FILE%.json}-failure-compose-ps.jsonl"
+readonly failure_health="${EVIDENCE_FILE%.json}-failure-health.jsonl"
+readonly failure_logs="${EVIDENCE_FILE%.json}-failure-log-events.jsonl"
 
 compose() {
   PM_HOSTNAME="$hostname" docker compose -f "$COMPOSE_FILE" "$@"
 }
 
+project_compose_state() {
+  jq -c '
+    (if type == "array" then .[] else . end) |
+    {service:.Service,state:.State,health:(if .Health == "" then null else .Health end),exit_code:.ExitCode} |
+    . as $record |
+    select(
+      (["postgres","migrate","api","worker","frontend","gateway","backup"] | index($record.service)) != null and
+      (["created","running","paused","restarting","removing","exited","dead"] | index($record.state)) != null and
+      ($record.health == null or (["starting","healthy","unhealthy"] | index($record.health)) != null) and
+      ($record.exit_code | type) == "number"
+    )
+  '
+}
+
+collect_api_readiness() {
+  local container_id="$1"
+  docker exec "$container_id" python -c '
+import json
+import urllib.error
+import urllib.request
+
+try:
+    response = urllib.request.urlopen("http://127.0.0.1:8000/health/ready", timeout=10)
+except urllib.error.HTTPError as error:
+    response = error
+try:
+    payload = json.loads(response.read(4096))
+    payload["http_status"] = response.status
+    print(json.dumps(payload, allow_nan=False, separators=(",", ":")))
+finally:
+    response.close()
+' 2>/dev/null | jq -ce '
+    select(
+      (type == "object") and
+      (.http_status == 200 or .http_status == 503) and
+      (.status == "ready" or .status == "not_ready") and
+      (.database == "ready" or .database == "unavailable") and
+      (.pdf_sandbox == "enforced" or .pdf_sandbox == "unavailable")
+    ) |
+    {http_status,status,database,pdf_sandbox}
+  '
+}
+
+collect_failure_diagnostics() {
+  local exit_code="$1" service container_id readiness
+  mkdir -p -- "$(dirname -- "$EVIDENCE_FILE")"
+  rm -f -- "$EVIDENCE_FILE" "$authenticated_evidence" \
+    "$compose_ps_evidence" "$permissions_evidence"
+  : > "$failure_compose_ps"
+  if [[ "$runner_authorized" == "true" ]]; then
+    compose ps --all --format json 2>/dev/null \
+      | project_compose_state > "$failure_compose_ps" || true
+  fi
+  if [[ ! -s "$failure_compose_ps" ]]; then
+    printf '%s\n' '{"service":null,"state":null,"health":null,"exit_code":null}' \
+      > "$failure_compose_ps"
+  fi
+  : > "$failure_health"
+  if [[ "$runner_authorized" == "true" ]]; then
+    for service in postgres migrate api worker frontend gateway backup; do
+      container_id="$(compose ps --all --quiet "$service" 2>/dev/null | head -n 1)"
+      [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || continue
+      readiness="null"
+      if [[ "$service" == "api" ]]; then
+        readiness="$(collect_api_readiness "$container_id")" || readiness="null"
+      fi
+      if ! docker inspect "$container_id" 2>/dev/null | jq -c \
+        --arg service "$service" --arg container_id "$container_id" --argjson readiness "$readiness" \
+        '.[0].State as $state |
+          {service:$service,container_id:$container_id,state:(
+            if
+              (["created","running","paused","restarting","removing","exited","dead"] | index($state.Status)) != null and
+              ($state.Running | type) == "boolean" and
+              ($state.Restarting | type) == "boolean" and
+              ($state.OOMKilled | type) == "boolean" and
+              ($state.Dead | type) == "boolean" and
+              ($state.ExitCode | type) == "number"
+            then
+              {status:$state.Status,running:$state.Running,restarting:$state.Restarting,oom_killed:$state.OOMKilled,dead:$state.Dead,exit_code:$state.ExitCode,health:(
+                if
+                  ($state.Health | type) == "object" and
+                  (["starting","healthy","unhealthy"] | index($state.Health.Status)) != null and
+                  ($state.Health.FailingStreak | type) == "number"
+                then {status:$state.Health.Status,failing_streak:$state.Health.FailingStreak}
+                else null
+                end
+              ),readiness:$readiness}
+            else null
+            end
+          )}' \
+        >> "$failure_health"; then
+        jq -cn --arg service "$service" --arg container_id "$container_id" \
+          '{service:$service,container_id:$container_id,state:null}' >> "$failure_health"
+      fi
+    done
+  fi
+  if [[ ! -s "$failure_health" ]]; then
+    printf '%s\n' '{"service":null,"container_id":null,"state":null}' \
+      > "$failure_health"
+  fi
+  : > "$failure_logs"
+  if [[ "$runner_authorized" == "true" ]]; then
+    compose logs --tail 2000 --no-color --timestamps 2>&1 \
+      | python scripts/redact_deployment_logs.py > "$failure_logs" || true
+  fi
+  if [[ ! -s "$failure_logs" ]]; then
+    printf '%s\n' \
+      '{"line_number":0,"service":null,"timestamp":null,"event":"unavailable"}' \
+      > "$failure_logs"
+  fi
+  python -c '
+import json
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(
+    json.dumps(
+        {
+            "schema": "pm-deployment-failure/1.0.0",
+            "version": sys.argv[2],
+            "revision": sys.argv[3],
+            "completed_at": sys.argv[4],
+            "status": "failed",
+            "exit_code": int(sys.argv[5]),
+            "diagnostics": [
+                "allowlisted service log event timeline",
+                "Compose service state",
+                "allowlisted container health state",
+            ],
+        },
+        allow_nan=False,
+        separators=(",", ":"),
+    ) + "\n",
+    encoding="utf-8",
+)
+' "$failure_evidence" "${GITHUB_REF_NAME:-unknown}" "${GITHUB_SHA:-unknown}" \
+    "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$exit_code"
+}
+
 cleanup() {
-  compose down --volumes --remove-orphans >/dev/null 2>&1 || true
-  sudo sed -i "/# ${hosts_marker}$/d" /etc/hosts >/dev/null 2>&1 || true
-  if [[ "$base" == "/mnt/Apps/PowerMeterV2" && -d "$base" ]]; then
+  local exit_code="$?"
+  trap - EXIT
+  set +e
+  if [[ "$exit_code" -ne 0 ]]; then
+    collect_failure_diagnostics "$exit_code"
+  fi
+  if [[ "$runner_authorized" == "true" && -n "$COMPOSE_FILE" && -f "$COMPOSE_FILE" ]]; then
+    compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+  fi
+  if [[ "$hosts_entry_added" == "true" ]]; then
+    sudo sed -i "/# ${hosts_marker}$/d" /etc/hosts >/dev/null 2>&1 || true
+  fi
+  if [[ "$base_owned" == "true" && "$base" == "/mnt/Apps/PowerMeterV2" && -d "$base" ]]; then
     sudo rm -rf -- "$base"
   fi
-  rm -rf -- "$work"
+  if [[ -n "$work" && -d "$work" ]]; then
+    rm -rf -- "$work"
+  fi
+  exit "$exit_code"
 }
 trap cleanup EXIT
 
+[[ "${GITHUB_ACTIONS:-}" == "true" && "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]]
+[[ -n "$supplied_compose_file" && -n "$supplied_evidence_file" ]]
+[[ -f "$COMPOSE_FILE" ]]
+command -v python >/dev/null
+command -v jq >/dev/null
+command -v docker >/dev/null
+command -v setfacl >/dev/null
+runner_authorized=true
+work="$(mktemp -d "${RUNNER_TEMP:?}/pm-release-smoke.XXXXXX")"
+readonly work
+cookie_jar="$work/cookies.txt"
+readonly cookie_jar
+
 [[ ! -e "$base" ]]
+base_owned=true
 sudo install -d -o 0 -g 0 -m 0755 "$base"
 sudo install -d -o 70 -g 70 -m 0700 "$base/postgres"
 sudo install -d -o 0 -g 0 -m 0755 "$base/config"
@@ -111,6 +283,7 @@ curl "${curl_common[@]}" --cookie-jar "$cookie_jar" \
   -H 'Content-Type: application/json' --data-binary "@$work/bootstrap.json" \
   "$endpoint/api/v1/auth/bootstrap" | jq -e '.user.email == "release-smoke@example.invalid"' >/dev/null
 printf '127.0.0.1 %s # %s\n' "$hostname" "$hosts_marker" | sudo tee -a /etc/hosts >/dev/null
+hosts_entry_added=true
 python backend/tests/deployment_evidence_probe.py \
   --base-url "$endpoint" --ca-file "$work/tls-ca.crt" \
   --email release-smoke@example.invalid --password "$test_password" \
@@ -157,7 +330,7 @@ for evidence in last-backup-attempt last-successful-backup \
 done
 [[ -n "$(find "$base/backups/archives" -maxdepth 1 -type f -name 'powermeter-*.dump.gpg' -print -quit)" ]]
 
-compose ps --format json > "$work/compose-ps.jsonl"
+compose ps --format json | project_compose_state > "$work/compose-ps.jsonl"
 sudo find "$base" -maxdepth 3 -printf '%M %u:%g %p\n' | sort > "$work/permissions.txt"
 jq -cn \
   --arg version "$GITHUB_REF_NAME" --arg revision "$GITHUB_SHA" \
@@ -169,5 +342,5 @@ jq -cn \
   --argjson pdf_sandbox "$(cat "$work/pdf-sandbox.json")" \
   '{schema:"pm-deployment-test/1.0.0",version:$version,revision:$revision,completed_at:$completed_at,status:"passed",services:($services|split(" ")),checks:["exact service set","digest-pinned image startup","TLS chain and hostname","liveness and readiness","API image PDF sandbox self-test","authenticated owner login","authenticated sensor enrollment","authenticated PZEM heartbeat and reading","PZEM-only History","reviewed rate-only PDF","worker-produced sensor cost","authenticated command round trip","authenticated system health","SSE proxy streaming","oversize PDF rejection","per-service restarts","migration rerun","full-stack restart","bind-mount access","encrypted backup","isolated restore"],rollback:"not_applicable_initial_release_candidate",pdf_sandbox:$pdf_sandbox,authenticated_sensor_evidence:$authenticated,backup:$backup,restore_test:$restore}' \
   > "$EVIDENCE_FILE"
-cp "$work/compose-ps.jsonl" "${EVIDENCE_FILE%.json}-compose-ps.jsonl"
-cp "$work/permissions.txt" "${EVIDENCE_FILE%.json}-permissions.txt"
+cp "$work/compose-ps.jsonl" "$compose_ps_evidence"
+cp "$work/permissions.txt" "$permissions_evidence"

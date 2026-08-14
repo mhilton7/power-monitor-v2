@@ -67,8 +67,18 @@ class _SandboxSelfTest(BaseModel):
     sensitive_mounts_inaccessible: Literal[True]
 
 
-_health_cache: tuple[float, bool] = (0.0, False)
+_HEALTH_SUCCESS_TTL_SECONDS: Final = 300.0
+_HEALTH_FAILURE_TTL_SECONDS: Final = 5.0
+_health_cache: tuple[float | None, bool] = (None, False)
 _health_lock = asyncio.Lock()
+
+
+def _health_cache_is_fresh(now: float) -> bool:
+    checked_at, ready = _health_cache
+    if checked_at is None:
+        return False
+    ttl = _HEALTH_SUCCESS_TTL_SECONDS if ready else _HEALTH_FAILURE_TTL_SECONDS
+    return now - checked_at < ttl
 
 
 def extract_rate_plan_portable_for_tests(
@@ -262,11 +272,11 @@ async def pdf_sandbox_is_ready(*, force: bool = False) -> bool:
 
     global _health_cache
     now = time.monotonic()
-    if not force and now - _health_cache[0] < 300:
+    if not force and _health_cache_is_fresh(now):
         return _health_cache[1]
     async with _health_lock:
         now = time.monotonic()
-        if not force and now - _health_cache[0] < 300:
+        if not force and _health_cache_is_fresh(now):
             return _health_cache[1]
         try:
             ready = await _run_sandbox_self_test()
