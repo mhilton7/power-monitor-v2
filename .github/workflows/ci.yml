@@ -288,10 +288,10 @@ jobs:
           restrictions=(
             --rm --read-only --user 1000:1000 --cap-drop ALL
             --security-opt no-new-privileges:true
-            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m,uid=1000,gid=1000,mode=1770
-            --tmpfs /data:rw,noexec,nosuid,nodev,size=8m,uid=1000,gid=1000,mode=0750
-            --tmpfs /config:rw,noexec,nosuid,nodev,size=8m,uid=1000,gid=1000,mode=0750
-            --tmpfs /var/log/powermeter:rw,noexec,nosuid,nodev,size=8m,uid=1000,gid=1000,mode=0750
+            --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=32m,uid=1000,gid=1000,mode=1770"
+            --tmpfs "/data:rw,noexec,nosuid,nodev,size=8m,uid=1000,gid=1000,mode=0750"
+            --tmpfs "/config:rw,noexec,nosuid,nodev,size=8m,uid=1000,gid=1000,mode=0750"
+            --tmpfs "/var/log/powermeter:rw,noexec,nosuid,nodev,size=8m,uid=1000,gid=1000,mode=0750"
           )
           docker run "${restrictions[@]}" "$image" caddy version
           docker run "${restrictions[@]}" \
