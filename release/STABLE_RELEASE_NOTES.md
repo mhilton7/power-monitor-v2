@@ -2,7 +2,7 @@
 
 This stable release promotes a previously tested release candidate without
 rebuilding its application images. The release manifest records the exact API,
-frontend, and backup digests, compatible firmware release, and SHA-256 of the
+frontend, gateway, and backup digests, compatible firmware release, and SHA-256 of the
 attached marked-unit hardware certification evidence.
 
 Stable promotion is fail-closed: it requires the public candidate release and

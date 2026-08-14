@@ -4,7 +4,7 @@ Status vocabulary: **implemented** means linked code and automated evidence exis
 
 | Section | Requirement/evidence | Status |
 |---|---|---|
-| 0 | Fixed product/protocol/time defaults in `backend/app/constants.py`; three fixed GHCR image names and generated release-manifest contract | implemented and statically validated; registry publication pending |
+| 0 | Fixed product/protocol/time defaults in `backend/app/constants.py`; four fixed GHCR image names and generated release-manifest contract | implemented and statically validated; registry publication pending |
 | 1 | `docs/BASELINE_AUDIT.md`, `docs/DEPENDENCY_AUDIT.md`, `docs/MIGRATION.md`; legacy repositories preserved read-only | audited; target Git publication pending |
 | 2 | PZEM-only authority and bill-rate-only boundary in architecture, closed schemas/services, invariance tests, and UI copy | implemented; local 105-test suite passed 101 with four expected environment skips |
 | 3 | Monitoring-only exclusions and maintenance-sleep semantics in architecture/commands/security | implemented and host-tested; physical firmware evidence pending |
@@ -19,7 +19,7 @@ Status vocabulary: **implemented** means linked code and automated evidence exis
 | 12 | `pm-protocol/1.0.0`, HMAC/HKDF/replay/dedupe contracts and generated schemas | server tests and live-schema cross-repository validator passed; public coordinated workflow pending |
 | 13 | Durable outbound command lifecycle, OTA/destructive prepare/commit, credential rotation, and recovery | server and firmware host contracts passed; marked-unit command round trips pending |
 | 14 | OTA metadata/download/manifest/queue/rollback implementation and local release pack | built and contract-tested; signed tag, public artifacts, and physical OTA rollback pending |
-| 15 | FastAPI/PostgreSQL/React/Caddy Compose structure and exact dependency pins | implemented; final API/frontend/backup local images passed restricted-runtime checks; CI registry build pending |
+| 15 | FastAPI/PostgreSQL/React/Caddy Compose structure and exact dependency pins | implemented; final API/frontend/gateway/backup local images pass restricted-runtime checks; CI registry build pending |
 | 16 | immutable PZEM ingestion/cost lineage, bill separation, and frozen explicit migrations through `20260813_0007` | local PostgreSQL 17.10 head/base/head and 102-pass role-split suite passed; tagged release run pending |
 | 17 | sessions/MFA/CSRF/throttling/roles/last-owner/home scope/server permissions | implemented and covered in passing local suite; external CI pending |
 | 18 | exact four-item navigation, responsive/accessibility surfaces, supplied dashboard composition | 13 Vitest and 18 production Playwright tests passed; 1680x946 visual/browser acceptance passed |

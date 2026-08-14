@@ -25,6 +25,7 @@ python scripts/render_truenas_release.py --template deploy/truenas/power-monitor
   --version 0.1.0-rc.1 --revision 0123456789abcdef0123456789abcdef01234567 `
   --api-digest sha256:<published-api-digest> `
   --frontend-digest sha256:<published-frontend-digest> `
+  --gateway-digest sha256:<published-gateway-digest> `
   --backup-digest sha256:<published-backup-digest>
 docker compose -f release/power-monitor-v2-test.yaml config --quiet
 python scripts/verify_release_artifacts.py --manifest release/release-manifest-test.json
@@ -121,8 +122,24 @@ certification.
   roots, dropped capabilities, `no-new-privileges`, and owned tmpfs paths:
   API `sha256:69411146a6969374529208415b931dfed3e16d7eaced3c935c54bb9cb75c63c4`,
   frontend `sha256:c77152237ec2c0653f164007f80f0b158220e7834cae64eb66d970440a530a75`,
+  gateway amd64 `sha256:38b9ea3553dad7423ca6dbb1722b227dbdc15d826a9c1ab713a3d370b02c819a`,
+  gateway arm64 `sha256:c145ceee27e0b18594ab88875318faeeb4ff4582fb3bf341f370d247c86c259c`,
   and backup `sha256:0a7748ddb6ac514b5ab49d8c581e3de7794708095673ec36ecf6cb524201593d`.
   These are local Docker image IDs, not GHCR manifest digests.
+- The gateway image reproducibly compiled the locked standard-module-only Caddy
+  2.11.4 source twice with Go 1.26.6 and byte-compared the outputs. Build info
+  proved exact `x/net 0.56.0`, `x/text 0.39.0`, and `grpc 1.82.1`; pinned Trivy
+  0.72.0 reported zero HIGH/CRITICAL findings in both the amd64 and arm64 final
+  images. The image had no file capability on `/usr/bin/caddy`, declared
+  `USER 1000:1000`, and its configuration validated with a read-only root, all
+  capabilities dropped, and `no-new-privileges`.
+- The root Compose gateway profile used host TLS files owned by numeric UID 1000
+  at mode 0440. Its named `/data`, `/config`, and `/var/log/powermeter` mounts
+  retained image-initialized UID/GID 1000 and mode 0750 and were writable by the
+  non-root process. In a fresh disposable production bind-mount recreation, all
+  six long-run services became healthy, migration exited 0, the CA-validated
+  HTTPS health probe succeeded, and routed readiness reported database ready and
+  the PDF sandbox enforced.
 - Backup run `20260814T034111Z-55e55c1d6d34` created encrypted archive
   `powermeter-20260814T034111Z-55e55c1d6d34.dump.gpg` (23,469 bytes; ciphertext
   SHA-256 `24969e1a3e0321ae7253ab4f79b8bb90371d1a595a730b3676e8994a01bf2ca3`).

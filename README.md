@@ -14,6 +14,8 @@ total fields and emits a closed, review-required reusable rate-plan draft.
 - `backend/`: FastAPI API, PostgreSQL model, migrations, ingestion and pricing.
 - `worker/`: database-leased cost, rollup, alert, and maintenance jobs.
 - `frontend/`: responsive React/TypeScript interface.
+- `gateway/`: non-root Caddy runtime with the unnecessary privileged-port
+  file capability removed for the all-capabilities-dropped deployment.
 - `backup/`: encrypted PostgreSQL backup and isolated restore verification.
 - `shared/`: versioned protocol schemas and cross-language authentication vectors.
 - `deploy/truenas/`: hardened TrueNAS Compose templates and operator guides.
@@ -43,8 +45,12 @@ docker compose -f compose.yaml -f compose.dev.yaml up --build
 ```
 
 The optional `gateway` profile additionally requires locally trusted TLS files
-named `.secrets/tls_cert.pem` and `.secrets/tls_key.pem`. Never reuse these
-development secrets on TrueNAS; follow the production generation and ACL guide.
+named `.secrets/tls_cert.pem` and `.secrets/tls_key.pem` that are readable by
+container UID/GID `1000:1000`. Compose file-backed secrets do not remap host
+ownership; on a Linux host, make that numeric identity the owner (or grant it a
+read ACL) and keep the key at mode `0440`, never world-readable. Never reuse
+these development secrets on TrueNAS; follow the production generation and ACL
+guide.
 
 ## Installation and safety
 

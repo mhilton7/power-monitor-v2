@@ -296,7 +296,7 @@ services:
     stop_grace_period: 20s
 
   gateway:
-    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    image: ghcr.io/mhilton7/power-monitor-v2-gateway:0.0.0-unpublished@sha256:UNPUBLISHED_GATEWAY_DIGEST
     user: "1000:1000"
     environment:
       PM_HOSTNAME: ${PM_HOSTNAME:-power-monitor.home.arpa}
@@ -362,7 +362,7 @@ services:
     cpus: 1.0
     mem_limit: 256m
     healthcheck:
-      test: [CMD-SHELL, "wget -q --spider --ca-certificate=/run/secrets/tls_ca https://$${PM_HOSTNAME}:8443/healthz"]
+      test: [CMD-SHELL, "curl --fail --silent --show-error --cacert /run/secrets/tls_ca https://$${PM_HOSTNAME}:8443/healthz >/dev/null"]
       interval: 30s
       timeout: 5s
       retries: 3

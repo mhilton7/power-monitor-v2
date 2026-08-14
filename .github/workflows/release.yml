@@ -149,6 +149,10 @@ jobs:
             image: ghcr.io/mhilton7/power-monitor-v2-frontend
             context: frontend
             dockerfile: frontend/Dockerfile
+          - name: gateway
+            image: ghcr.io/mhilton7/power-monitor-v2-gateway
+            context: .
+            dockerfile: gateway/Dockerfile
           - name: backup
             image: ghcr.io/mhilton7/power-monitor-v2-backup
             context: .
@@ -268,7 +272,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          for component in api frontend backup; do
+          for component in api frontend gateway backup; do
             digest="$(jq -er '.digest' "release/smoke/${component}-image.json")"
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
             printf '%s_digest=%s\n' "$component" "$digest" >> "$GITHUB_OUTPUT"
@@ -283,6 +287,7 @@ jobs:
           --revision ${{ github.sha }}
           --api-digest ${{ steps.digests.outputs.api_digest }}
           --frontend-digest ${{ steps.digests.outputs.frontend_digest }}
+          --gateway-digest ${{ steps.digests.outputs.gateway_digest }}
           --backup-digest ${{ steps.digests.outputs.backup_digest }}
       - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
@@ -343,7 +348,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           docker logout ghcr.io >/dev/null 2>&1 || true
-          for component in api frontend backup; do
+          for component in api frontend gateway backup; do
             image="$(jq -er '.image' "release/public-check/${component}-image.json")"
             digest="$(jq -er '.digest' "release/public-check/${component}-image.json")"
             docker buildx imagetools inspect "${image}@${digest}" >/dev/null
@@ -381,7 +386,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          for component in api frontend backup; do
+          for component in api frontend gateway backup; do
             digest="$(jq -er '.digest' "release/assets/${component}-image.json")"
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
             printf '%s_digest=%s\n' "$component" "$digest" >> "$GITHUB_OUTPUT"
@@ -390,7 +395,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          for component in api frontend backup; do
+          for component in api frontend gateway backup; do
             mv "release/assets/${component}-image.json" \
               "release/assets/candidate-${component}-image.json"
           done
@@ -404,6 +409,7 @@ jobs:
           --revision ${{ github.sha }}
           --api-digest ${{ steps.digests.outputs.api_digest }}
           --frontend-digest ${{ steps.digests.outputs.frontend_digest }}
+          --gateway-digest ${{ steps.digests.outputs.gateway_digest }}
           --backup-digest ${{ steps.digests.outputs.backup_digest }}
       - run: docker compose -f release/assets/power-monitor-v2-${{ github.ref_name }}.yaml config --quiet
       - run: python scripts/verify_release_artifacts.py --manifest release/assets/release-manifest.json
@@ -454,9 +460,10 @@ jobs:
           set -Eeuo pipefail
           for file in \
             release-manifest.json "power-monitor-v2-${GITHUB_REF_NAME}.yaml" \
-            api.spdx.json frontend.spdx.json backup.spdx.json \
-            api-security.json frontend-security.json backup-security.json \
-            candidate-api-image.json candidate-frontend-image.json candidate-backup-image.json \
+            api.spdx.json frontend.spdx.json gateway.spdx.json backup.spdx.json \
+            api-security.json frontend-security.json gateway-security.json backup-security.json \
+            candidate-api-image.json candidate-frontend-image.json \
+            candidate-gateway-image.json candidate-backup-image.json \
             test-report.json security-report.json migration-report.json \
             frontend-playwright-results.xml frontend-npm-audit.json frontend-test-results.tar.gz \
             deployment-test-report.json deployment-test-report-authenticated.json \

@@ -198,20 +198,6 @@ jobs:
       - run: python scripts/validate_release.py
       - run: bash scripts/verify_workflows.sh
       - run: bash -n backup/*.sh deploy/truenas/*.sh scripts/*.sh
-      - name: Parse gateway configuration with the pinned production image
-        run: |
-          set -Eeuo pipefail
-          install -d -m 0700 "${RUNNER_TEMP}/caddy-config-test"
-          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-            -subj "/CN=power-monitor.home.arpa" \
-            -keyout "${RUNNER_TEMP}/caddy-config-test/tls.key" \
-            -out "${RUNNER_TEMP}/caddy-config-test/tls.crt" >/dev/null 2>&1
-          docker run --rm --env PM_HOSTNAME=power-monitor.home.arpa \
-            --volume "${{ github.workspace }}/deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
-            --volume "${RUNNER_TEMP}/caddy-config-test/tls.crt:/run/secrets/tls_cert:ro" \
-            --volume "${RUNNER_TEMP}/caddy-config-test/tls.key:/run/secrets/tls_key:ro" \
-            caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 \
-            caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate
       - name: Verify fail-closed release renderer
         run: >-
           python scripts/render_truenas_release.py
@@ -222,6 +208,7 @@ jobs:
           --revision ${{ github.sha }}
           --api-digest sha256:1111111111111111111111111111111111111111111111111111111111111111
           --frontend-digest sha256:2222222222222222222222222222222222222222222222222222222222222222
+          --gateway-digest sha256:4444444444444444444444444444444444444444444444444444444444444444
           --backup-digest sha256:3333333333333333333333333333333333333333333333333333333333333333
       - run: docker compose -f release/power-monitor-v2-ci.yaml config --quiet
       - run: python scripts/verify_release_artifacts.py --manifest release/release-manifest-ci.json
@@ -239,6 +226,9 @@ jobs:
           - name: frontend
             context: frontend
             dockerfile: frontend/Dockerfile
+          - name: gateway
+            context: .
+            dockerfile: gateway/Dockerfile
           - name: backup
             context: .
             dockerfile: backup/Dockerfile
@@ -274,6 +264,42 @@ jobs:
           --tmpfs /run/secrets:rw,noexec,nosuid,nodev,size=1m,uid=10001,gid=10001,mode=0700
           local/power-monitor-v2-api:${{ github.sha }}
           python -m backend.app.bill_rate_import.sandbox_check
+      - name: Prove the gateway image under release restrictions
+        if: matrix.name == 'gateway'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image="local/power-monitor-v2-gateway:${GITHUB_SHA}"
+          test -z "$(docker run --rm --entrypoint /usr/sbin/getcap "$image" /usr/bin/caddy)"
+          version="$(docker run --rm "$image" caddy version)"
+          [[ "$version" == "v2.11.4-pmv2.1 v2.11.4 h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0=" ]]
+          test -z "$(docker run --rm "$image" caddy list-modules --skip-standard)"
+          install -d -m 0700 "${RUNNER_TEMP}/gateway-runtime-test"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj "/CN=power-monitor.home.arpa" \
+            -keyout "${RUNNER_TEMP}/gateway-runtime-test/tls.key" \
+            -out "${RUNNER_TEMP}/gateway-runtime-test/tls.crt" >/dev/null 2>&1
+          sudo chown 1000:1000 \
+            "${RUNNER_TEMP}/gateway-runtime-test/tls.key" \
+            "${RUNNER_TEMP}/gateway-runtime-test/tls.crt"
+          sudo chmod 0400 \
+            "${RUNNER_TEMP}/gateway-runtime-test/tls.key" \
+            "${RUNNER_TEMP}/gateway-runtime-test/tls.crt"
+          restrictions=(
+            --rm --read-only --user 1000:1000 --cap-drop ALL
+            --security-opt no-new-privileges:true
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m,uid=1000,gid=1000,mode=1770
+            --tmpfs /data:rw,noexec,nosuid,nodev,size=8m,uid=1000,gid=1000,mode=0750
+            --tmpfs /config:rw,noexec,nosuid,nodev,size=8m,uid=1000,gid=1000,mode=0750
+            --tmpfs /var/log/powermeter:rw,noexec,nosuid,nodev,size=8m,uid=1000,gid=1000,mode=0750
+          )
+          docker run "${restrictions[@]}" "$image" caddy version
+          docker run "${restrictions[@]}" \
+            --env PM_HOSTNAME=power-monitor.home.arpa \
+            --volume "${GITHUB_WORKSPACE}/deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            --volume "${RUNNER_TEMP}/gateway-runtime-test/tls.crt:/run/secrets/tls_cert:ro" \
+            --volume "${RUNNER_TEMP}/gateway-runtime-test/tls.key:/run/secrets/tls_key:ro" \
+            "$image" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Block HIGH and CRITICAL final-image findings
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         with:

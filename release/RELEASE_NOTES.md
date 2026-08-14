@@ -16,7 +16,7 @@ the complete release artifact set is checksum-valid and attested.
 
 A successfully published candidate includes:
 
-- immutable multi-architecture API, frontend, and backup images in GHCR, each
+- immutable multi-architecture API, frontend, gateway, and backup images in GHCR, each
   referenced by registry-reported SHA-256 digest;
 - a complete generated `power-monitor-v2-v0.1.0-rc.1.yaml` suitable for TrueNAS
   **Apps > Install via YAML**;

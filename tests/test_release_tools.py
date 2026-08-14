@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import shutil
 import uuid
@@ -22,12 +23,15 @@ from scripts.validate_deployment_evidence import (
 from scripts.validate_deployment_evidence import (
     LOG_EVENTS as VALIDATED_LOG_EVENTS,
 )
+from scripts.validate_release import validate_compose as validate_static_compose
 from scripts.verify_hardware_certification import canonical_record_sha256, load_strict_json, verify
+from scripts.verify_release_artifacts import verify_release_artifacts
 
 ROOT = Path(__file__).resolve().parents[1]
 DIGEST_A = "sha256:" + "1" * 64
 DIGEST_B = "sha256:" + "2" * 64
 DIGEST_C = "sha256:" + "3" * 64
+DIGEST_D = "sha256:" + "4" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
 VERSION = "0.1.0-rc.1"
@@ -45,6 +49,42 @@ def evidence_dir() -> Iterator[Path]:
 
 def _write(path: Path, value: str) -> None:
     path.write_text(value, encoding="utf-8")
+
+
+def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]:
+    template = (ROOT / "deploy/truenas/power-monitor-v2.yaml").read_text(encoding="utf-8")
+    compose_text = render(template, VERSION, DIGEST_A, DIGEST_B, DIGEST_D, DIGEST_C)
+    compose_path = directory / "power-monitor-v2-test.yaml"
+    compose_path.write_text(compose_text, encoding="utf-8")
+    manifest: dict[str, object] = {
+        "schema": "pm-server-release/1.0.0",
+        "protocol": "pm-protocol/1.0.0",
+        "version": VERSION,
+        "revision": COMMIT,
+        "release_status": "candidate_physical_certification_pending",
+        "images": {
+            "api": {"name": "ghcr.io/mhilton7/power-monitor-v2-api", "digest": DIGEST_A},
+            "frontend": {
+                "name": "ghcr.io/mhilton7/power-monitor-v2-frontend",
+                "digest": DIGEST_B,
+            },
+            "gateway": {
+                "name": "ghcr.io/mhilton7/power-monitor-v2-gateway",
+                "digest": DIGEST_D,
+            },
+            "backup": {
+                "name": "ghcr.io/mhilton7/power-monitor-v2-backup",
+                "digest": DIGEST_C,
+            },
+        },
+        "compose": {
+            "file": compose_path.name,
+            "sha256": hashlib.sha256(compose_path.read_bytes()).hexdigest(),
+        },
+    }
+    manifest_path = directory / "release-manifest.json"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    return manifest_path, manifest
 
 
 def _authenticated_evidence() -> dict[str, object]:
@@ -205,13 +245,13 @@ def test_deployment_evidence_validator_accepts_only_complete_exact_sets(
     partial = evidence_dir / "partial-report"
     _write_success_evidence(partial)
     partial.with_name(partial.name + "-permissions.txt").unlink()
-    with pytest.raises(EvidenceError, match="missing|exact|nonempty"):
+    with pytest.raises(EvidenceError, match=r"missing|exact|nonempty"):
         _validate(partial, outcome="success")
 
     mixed = evidence_dir / "mixed-report"
     _write_failure_evidence(mixed)
     _write(mixed.with_name(mixed.name + ".json"), "{}")
-    with pytest.raises(EvidenceError, match="unexpected|opposite"):
+    with pytest.raises(EvidenceError, match=r"unexpected|opposite"):
         _validate(mixed, outcome="failure")
 
     with pytest.raises(EvidenceError, match="unsupported"):
@@ -485,8 +525,9 @@ def certification() -> dict[str, object]:
 
 def test_release_template_requires_exact_sentinels_and_real_digests() -> None:
     template = (ROOT / "deploy/truenas/power-monitor-v2.yaml").read_text(encoding="utf-8")
-    output = render(template, VERSION, DIGEST_A, DIGEST_B, DIGEST_C)
+    output = render(template, VERSION, DIGEST_A, DIGEST_B, DIGEST_D, DIGEST_C)
     assert output.count(f"power-monitor-v2-api:{VERSION}@{DIGEST_A}") == 3
+    assert output.count(f"power-monitor-v2-gateway:{VERSION}@{DIGEST_D}") == 1
     assert "UNPUBLISHED" not in output
     validate_compose(load_yaml(output), published=True)
     with pytest.raises(ReleaseError):
@@ -495,8 +536,96 @@ def test_release_template_requires_exact_sentinels_and_real_digests() -> None:
             VERSION,
             DIGEST_A,
             DIGEST_B,
+            DIGEST_D,
             DIGEST_C,
         )
+    with pytest.raises(ReleaseError):
+        render(
+            template.replace("UNPUBLISHED_GATEWAY_DIGEST", "MISSING", 1),
+            VERSION,
+            DIGEST_A,
+            DIGEST_B,
+            DIGEST_D,
+            DIGEST_C,
+        )
+    invalid_gateway = render(
+        template,
+        VERSION,
+        DIGEST_A,
+        DIGEST_B,
+        "sha256:" + "4" * 63,
+        DIGEST_C,
+    )
+    with pytest.raises(ReleaseError, match="digest pinned"):
+        validate_compose(load_yaml(invalid_gateway), published=True)
+
+
+def test_static_release_validation_binds_each_exact_component_sentinel(
+    evidence_dir: Path,
+) -> None:
+    template = (ROOT / "deploy/truenas/power-monitor-v2.yaml").read_text(encoding="utf-8")
+    wrong = template.replace("UNPUBLISHED_GATEWAY_DIGEST", "UNPUBLISHED_API_DIGEST", 1)
+    path = evidence_dir / "wrong-gateway-sentinel.yaml"
+    path.write_text(wrong, encoding="utf-8")
+    errors = validate_static_compose(path)
+    assert any("gateway must use the exact gateway image contract" in error for error in errors)
+
+
+def test_release_artifact_verifier_accepts_exact_four_image_binding(
+    evidence_dir: Path,
+) -> None:
+    manifest_path, _ = _candidate_release_bundle(evidence_dir)
+    verify_release_artifacts(manifest_path)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra"])
+def test_release_artifact_verifier_requires_exact_manifest_image_keys(
+    evidence_dir: Path,
+    mutation: str,
+) -> None:
+    manifest_path, manifest = _candidate_release_bundle(evidence_dir)
+    images = manifest["images"]
+    assert isinstance(images, dict)
+    if mutation == "missing":
+        del images["gateway"]
+    else:
+        images["unexpected"] = {
+            "name": "ghcr.io/mhilton7/power-monitor-v2-unexpected",
+            "digest": DIGEST_D,
+        }
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    with pytest.raises(ValueError, match="exactly the expected images"):
+        verify_release_artifacts(manifest_path)
+
+
+def test_release_artifact_verifier_rejects_manifest_yaml_digest_mismatch(
+    evidence_dir: Path,
+) -> None:
+    manifest_path, manifest = _candidate_release_bundle(evidence_dir)
+    images = manifest["images"]
+    assert isinstance(images, dict)
+    gateway = images["gateway"]
+    assert isinstance(gateway, dict)
+    gateway["digest"] = "sha256:" + "5" * 64
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    with pytest.raises(ValueError, match="gateway does not match"):
+        verify_release_artifacts(manifest_path)
+
+
+@pytest.mark.parametrize("mutation", ["wrong_gateway", "frontend_published"])
+def test_release_compose_rejects_any_port_other_than_gateway_tcp_8443(
+    mutation: str,
+) -> None:
+    template = (ROOT / "deploy/truenas/power-monitor-v2.yaml").read_text(encoding="utf-8")
+    compose = load_yaml(render(template, VERSION, DIGEST_A, DIGEST_B, DIGEST_D, DIGEST_C))
+    if mutation == "wrong_gateway":
+        compose["services"]["gateway"]["ports"][0]["published"] = "8444"
+    else:
+        compose["services"]["frontend"]["ports"] = [
+            {"target": 8080, "published": "8080", "protocol": "tcp"}
+        ]
+    with pytest.raises(ReleaseError):
+        validate_compose(compose, published=True)
 
 
 @pytest.mark.parametrize("field", ["commit", "image_sha256", "version"])

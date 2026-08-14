@@ -11,7 +11,7 @@ PowerMeter V2 assumes the LAN is not inherently trusted. TLS, authentication, au
 - SCE fetches are HTTPS/host allowlisted with redirect, DNS rebinding, non-public IP, timeout, and size defenses. Browser and firmware never scrape sources.
 - Bill-rate processing is isolated and local. A pre-parser launcher enforces Landlock ABI 3+ filesystem confinement, a seccomp network/dangerous-syscall deny policy, no-new-privileges, no dumps, closed file descriptors, a cleared fixed environment, rlimits/deadline/output caps, and a private per-job directory on hardened tmpfs. Only the frozen parser runtime/code, fonts, and Tesseract data are readable; API code/data, `/run/secrets`, DB paths, and socket creation are denied. Only closed-schema reusable rate fields escape; originals are encrypted when retained and excluded from logs, ordinary backups, exports, diagnostics, and browser persistence.
 - Database constraints/transactions enforce immutable readings, sequence uniqueness/conflict detection, cost lineage, immutable used rate versions, and append-only audit data. PostgreSQL uses separate bootstrap, schema-owner, API, worker, read-only backup, and isolated-restore credentials; no runtime service mounts the bootstrap or migrator secret, and only the isolated restore identity has `CREATEDB`.
-- Production containers use immutable digests, non-root identities where supported, read-only root filesystems, no-new-privileges, all capabilities dropped, bounded resources, file secrets, internal database networking, and no Docker socket/privileged mode.
+- Production containers use immutable digests, non-root identities where supported, read-only root filesystems, no-new-privileges, all capabilities dropped, bounded resources, file secrets, internal database networking, and no Docker socket/privileged mode. The project-owned gateway rebuilds Caddy 2.11.4 with Go 1.26.6 and the exact security-fixed `x/net 0.56.0`, `x/text 0.39.0`, and `grpc 1.82.1` module floors; it upgrades only the affected pinned Alpine runtime packages. It then removes Caddy's inherited `cap_net_bind_service` file capability because HTTPS listens on unprivileged port 8443. This keeps Caddy executable as UID 1000 while preserving the all-capabilities-dropped and no-new-privileges boundary. The strict Trivy HIGH/CRITICAL gate has no ignore or unfixed-vulnerability exemption.
 - Tagged builds use a clean checkout, minimally scoped `GITHUB_TOKEN`, immutable action SHAs, dependency/secret/static/container scanning, SBOMs, and Sigstore/GitHub attestations. Dependabot changes are never auto-merged without gates.
 
 ## Sensitive data
@@ -44,7 +44,8 @@ The 2026-08-14 local candidate produced the following bounded evidence:
   zero vulnerabilities;
 - final local containers ran as their declared non-root users with read-only
   roots, all capabilities dropped, `no-new-privileges`, and restricted tmpfs
-  paths; and
+  paths; the rebuilt gateway's amd64 and arm64 final images each returned zero
+  HIGH/CRITICAL findings from pinned Trivy 0.72.0; and
 - the closed bill-rate boundary, home scoping, session throttling, credential
   rotation, diagnostics redaction, HMAC/replay, SSRF, and immutable cost/reading
   controls are exercised by the passing local suites described in
