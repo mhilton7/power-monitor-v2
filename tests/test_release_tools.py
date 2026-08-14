@@ -2,11 +2,26 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
+import uuid
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 import yaml
+from scripts.redact_deployment_logs import LOG_EVENTS as SANITIZED_LOG_EVENTS
+from scripts.redact_deployment_logs import MAX_LOG_LINES, sanitize_stream
 from scripts.render_truenas_release import ReleaseError, load_yaml, render, validate_compose
+from scripts.validate_deployment_evidence import (
+    FAILURE_DIAGNOSTICS,
+    SUCCESS_CHECKS,
+    SUCCESS_SERVICES,
+    EvidenceError,
+    validate,
+)
+from scripts.validate_deployment_evidence import (
+    LOG_EVENTS as VALIDATED_LOG_EVENTS,
+)
 from scripts.verify_hardware_certification import canonical_record_sha256, load_strict_json, verify
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +31,284 @@ DIGEST_C = "sha256:" + "3" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
 VERSION = "0.1.0-rc.1"
+
+
+@pytest.fixture
+def evidence_dir() -> Iterator[Path]:
+    path = ROOT / ".test-runtime" / f"deployment-evidence-{uuid.uuid4()}"
+    path.mkdir(parents=True)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path)
+
+
+def _write(path: Path, value: str) -> None:
+    path.write_text(value, encoding="utf-8")
+
+
+def _authenticated_evidence() -> dict[str, object]:
+    return {
+        "schema": "pm-deployment-authenticated-evidence/1.0.0",
+        "status": "passed",
+        "protocol": "pm-protocol/1.0.0",
+        "device_id": "123e4567-e89b-12d3-a456-426614174000",
+        "enrollment": "authenticated",
+        "heartbeat": "authenticated_pzem",
+        "reading_sequence": 1,
+        "energy_kwh": "0.2452",
+        "usage_source": "authenticated PZEM-004T sensor intervals only",
+        "rate_source": "reviewed_rate_only_pdf",
+        "rate_source_sha256": "c" * 64,
+        "cost": "0.17",
+        "cost_rule": "sum_only_when_every_visible_interval_is_priced",
+        "command": {
+            "id": "123e4567-e89b-42d3-a456-426614174001",
+            "type": "reboot",
+            "delivery": "authenticated",
+            "state": "succeeded",
+            "result_code": "REBOOT_COMPLETED",
+        },
+    }
+
+
+def _backup_evidence(*, restore: bool) -> dict[str, object]:
+    minimum = 5 if restore else 4
+    return {
+        "format": "pm-backup/1.0.0",
+        "state": "verified",
+        "run_id": "restore-verified" if restore else "backup-verified",
+        "sha256": "d" * 64,
+        "verification_checks": [f"check-{index}" for index in range(minimum)],
+    }
+
+
+def _write_success_evidence(prefix: Path) -> None:
+    authenticated = _authenticated_evidence()
+    report = {
+        "schema": "pm-deployment-test/1.0.0",
+        "version": VERSION,
+        "revision": COMMIT,
+        "completed_at": "2026-08-14T12:00:00Z",
+        "status": "passed",
+        "services": SUCCESS_SERVICES,
+        "checks": SUCCESS_CHECKS,
+        "rollback": "not_applicable_initial_release_candidate",
+        "pdf_sandbox": {
+            "schema_id": "pm-pdf-sandbox-health/1.0.0",
+            "pdf_sandbox": "enforced",
+        },
+        "authenticated_sensor_evidence": authenticated,
+        "backup": _backup_evidence(restore=False),
+        "restore_test": _backup_evidence(restore=True),
+    }
+    _write(prefix.with_name(prefix.name + ".json"), json.dumps(report, allow_nan=False))
+    _write(
+        prefix.with_name(prefix.name + "-authenticated.json"),
+        json.dumps(authenticated, allow_nan=False),
+    )
+    compose_records = [
+        {"service": service, "state": "running", "health": "healthy", "exit_code": 0}
+        for service in ("postgres", "api", "worker", "frontend", "gateway", "backup")
+    ]
+    _write(
+        prefix.with_name(prefix.name + "-compose-ps.jsonl"),
+        "".join(json.dumps(record) + "\n" for record in compose_records),
+    )
+    permission_paths = (
+        "postgres",
+        "config",
+        "firmware",
+        "logs/application",
+        "logs/gateway",
+        "rate-source-artifacts",
+        "bill-rate-source-artifacts",
+        "backups",
+        "secrets",
+    )
+    _write(
+        prefix.with_name(prefix.name + "-permissions.txt"),
+        "".join(
+            f"drwx------ owner:group /mnt/Apps/PowerMeterV2/{path}\n"
+            for path in permission_paths
+        ),
+    )
+
+
+def _write_failure_evidence(prefix: Path) -> None:
+    failure = {
+        "schema": "pm-deployment-failure/1.0.0",
+        "version": VERSION,
+        "revision": COMMIT,
+        "completed_at": "2026-08-14T12:00:00Z",
+        "status": "failed",
+        "exit_code": 1,
+        "diagnostics": FAILURE_DIAGNOSTICS,
+    }
+    _write(
+        prefix.with_name(prefix.name + "-failure.json"),
+        json.dumps(failure, allow_nan=False),
+    )
+    _write(
+        prefix.with_name(prefix.name + "-failure-compose-ps.jsonl"),
+        '{"service":"api","state":"running","health":"unhealthy","exit_code":0}\n',
+    )
+    health = {
+        "service": "api",
+        "container_id": "a" * 64,
+        "state": {
+            "status": "running",
+            "running": True,
+            "restarting": False,
+            "oom_killed": False,
+            "dead": False,
+            "exit_code": 0,
+            "health": {"status": "unhealthy", "failing_streak": 3},
+            "readiness": {
+                "http_status": 503,
+                "status": "not_ready",
+                "database": "ready",
+                "pdf_sandbox": "unavailable",
+            },
+        },
+    }
+    _write(
+        prefix.with_name(prefix.name + "-failure-health.jsonl"),
+        json.dumps(health, allow_nan=False) + "\n",
+    )
+    _write(
+        prefix.with_name(prefix.name + "-failure-log-events.jsonl"),
+        '{"line_number":1,"service":"api","timestamp":"2026-08-14T12:00:00Z","event":"readiness_not_ready"}\n',
+    )
+
+
+def _validate(prefix: Path, *, outcome: str) -> None:
+    validate(
+        prefix,
+        outcome=outcome,
+        expected_version=VERSION,
+        expected_revision=COMMIT,
+    )
+
+
+def test_deployment_evidence_validator_accepts_only_complete_exact_sets(
+    evidence_dir: Path,
+) -> None:
+    success = evidence_dir / "success-report"
+    _write_success_evidence(success)
+    _validate(success, outcome="success")
+
+    failure = evidence_dir / "failure-report"
+    _write_failure_evidence(failure)
+    _validate(failure, outcome="failure")
+
+    partial = evidence_dir / "partial-report"
+    _write_success_evidence(partial)
+    partial.with_name(partial.name + "-permissions.txt").unlink()
+    with pytest.raises(EvidenceError, match="missing|exact|nonempty"):
+        _validate(partial, outcome="success")
+
+    mixed = evidence_dir / "mixed-report"
+    _write_failure_evidence(mixed)
+    _write(mixed.with_name(mixed.name + ".json"), "{}")
+    with pytest.raises(EvidenceError, match="unexpected|opposite"):
+        _validate(mixed, outcome="failure")
+
+    with pytest.raises(EvidenceError, match="unsupported"):
+        _validate(failure, outcome="cancelled")
+
+    malformed = evidence_dir / "malformed-report"
+    _write_success_evidence(malformed)
+    report_path = malformed.with_name(malformed.name + ".json")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report.pop("authenticated_sensor_evidence")
+    _write(report_path, json.dumps(report))
+    with pytest.raises(EvidenceError, match="missing or unexpected"):
+        _validate(malformed, outcome="success")
+
+    with pytest.raises(EvidenceError, match="expected release"):
+        validate(
+            failure,
+            outcome="failure",
+            expected_version=VERSION,
+            expected_revision="b" * 40,
+        )
+
+
+def test_deployment_failure_health_allowlist_checks_every_jsonl_record(
+    evidence_dir: Path,
+) -> None:
+    prefix = evidence_dir / "failure-report"
+    _write_failure_evidence(prefix)
+    health_path = prefix.with_name(prefix.name + "-failure-health.jsonl")
+    unsafe = {
+        "service": "api",
+        "container_id": "b" * 64,
+        "state": {
+            "status": "running",
+            "running": True,
+            "restarting": False,
+            "oom_killed": False,
+            "dead": False,
+            "exit_code": 0,
+            "health": {"status": "unhealthy", "failing_streak": 3, "log": "secret"},
+        },
+    }
+    safe = json.loads(health_path.read_text(encoding="utf-8"))
+    _write(health_path, json.dumps(unsafe) + "\n" + json.dumps(safe) + "\n")
+    with pytest.raises(EvidenceError, match="non-allowlisted"):
+        _validate(prefix, outcome="failure")
+
+    unsafe.pop("state")
+    unsafe.update({"service": "arbitrary secret text", "state": None})
+    _write(health_path, json.dumps(unsafe) + "\n")
+    with pytest.raises(EvidenceError, match="fixed allowlist"):
+        _validate(prefix, outcome="failure")
+
+    _write(health_path, json.dumps(safe) + "\n\n" + json.dumps(safe) + "\n")
+    with pytest.raises(EvidenceError, match="blank JSONL"):
+        _validate(prefix, outcome="failure")
+
+
+def test_deployment_log_sanitizer_is_bounded_and_emits_no_raw_text() -> None:
+    secret = "A" * 96
+    lines = [
+        f"api-1 | 2026-08-14T12:00:00.123456789Z password={secret}\n",
+        "api-1 | -----BEGIN PRIVATE KEY-----\n",
+        f"api-1 | {secret}\n",
+        "api-1 | INFO: 127.0.0.1 GET /health/ready HTTP/1.1 503 Service Unavailable\n",
+    ]
+    records = sanitize_stream(lines * (MAX_LOG_LINES + 1))
+    encoded = json.dumps(records, allow_nan=False)
+    assert SANITIZED_LOG_EVENTS == VALIDATED_LOG_EVENTS
+    assert len(records) == MAX_LOG_LINES
+    assert secret not in encoded
+    assert "PRIVATE KEY" not in encoded
+    assert all(
+        set(record) == {"line_number", "service", "timestamp", "event"}
+        for record in records
+    )
+    assert records[-1] == {
+        "line_number": MAX_LOG_LINES,
+        "service": "api",
+        "timestamp": None,
+        "event": "readiness_not_ready",
+    }
+
+
+def test_deployment_evidence_rejects_symlinks_when_supported(evidence_dir: Path) -> None:
+    prefix = evidence_dir / "success-report"
+    _write_success_evidence(prefix)
+    permissions = prefix.with_name(prefix.name + "-permissions.txt")
+    target = evidence_dir / "target.txt"
+    _write(target, "permissions verified\n")
+    permissions.unlink()
+    try:
+        permissions.symlink_to(target)
+    except OSError:
+        pytest.skip("the test environment does not permit symlink creation")
+    with pytest.raises(EvidenceError, match="symlink"):
+        _validate(prefix, outcome="success")
 
 
 def test_local_compose_backup_uses_the_backup_script_contract() -> None:

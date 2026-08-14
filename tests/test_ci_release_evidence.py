@@ -173,6 +173,9 @@ def test_api_image_uses_the_zero_finding_alpine_base_and_pinned_ocr() -> None:
     assert "tesseract-ocr=5.5.1-r0" in dockerfile
     assert "tesseract-ocr-data-eng=5.5.1-r0" in dockerfile
     assert "font-dejavu=2.37-r6" in dockerfile
+    assert "timeout=10" in dockerfile
+    assert "HEALTHCHECK --interval=15s --timeout=15s" in dockerfile
+    assert '"--loop", "asyncio"' in dockerfile
 
     launcher = (
         ROOT / "backend/app/bill_rate_import/sandbox_launcher.py"
@@ -189,6 +192,60 @@ def test_api_image_uses_the_zero_finding_alpine_base_and_pinned_ocr() -> None:
     assert "image-ref: local/power-monitor-v2-${{ matrix.name }}:${{ github.sha }}" in ci
     assert "ignore-unfixed: false" in ci
     assert ci.index("Prove the API image PDF parser sandbox") < ci.index(image_gate)
+
+
+def test_release_smoke_preserves_redacted_failure_diagnostics() -> None:
+    smoke = (ROOT / "scripts/release_deployment_smoke.sh").read_text(encoding="utf-8")
+    release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    truenas = (ROOT / "deploy/truenas/power-monitor-v2.yaml").read_text(encoding="utf-8")
+
+    assert "collect_failure_diagnostics" in smoke
+    assert 'rm -f -- "$EVIDENCE_FILE" "$authenticated_evidence"' in smoke
+    assert ".[0].State as $state" in smoke
+    assert "failing_streak:$state.Health.FailingStreak" in smoke
+    assert "readiness:$readiness" in smoke
+    assert "$state.Error" not in smoke
+    assert "$state.Health.Log" not in smoke
+    assert "project_compose_state" in smoke
+    assert "--tail 2000" in smoke
+    assert "python scripts/redact_deployment_logs.py" in smoke
+    assert "sed -E" not in smoke
+    assert smoke.index("trap cleanup EXIT") < smoke.index(
+        '[[ "${GITHUB_ACTIONS:-}" == "true"'
+    )
+    assert 'runner_authorized" == "true"' in smoke
+    assert 'base_owned" == "true"' in smoke
+    assert smoke.index('collect_failure_diagnostics "$exit_code"') < smoke.index(
+        "compose down --volumes --remove-orphans"
+    )
+
+    deployment = release.split("  deployment-smoke:", maxsplit=1)[1]
+    deployment = deployment.split("  public-distribution:", maxsplit=1)[0]
+    upload = deployment.split("uses: actions/upload-artifact@", maxsplit=1)[1]
+    assert "if: always()" in upload
+    assert "continue-on-error" not in deployment
+    assert "id: smoke" in deployment
+    assert "Require complete deployment or failure evidence" in deployment
+    assert "SMOKE_OUTCOME: ${{ steps.smoke.outcome }}" in deployment
+    assert "EXPECTED_VERSION: ${{ github.ref_name }}" in deployment
+    assert "EXPECTED_REVISION: ${{ github.sha }}" in deployment
+    assert "python scripts/validate_deployment_evidence.py" in deployment
+    assert '--outcome "$SMOKE_OUTCOME"' in deployment
+    assert '--expected-version "$EXPECTED_VERSION"' in deployment
+    assert '--expected-revision "$EXPECTED_REVISION"' in deployment
+    for suffix in (
+        "failure.json",
+        "failure-compose-ps.jsonl",
+        "failure-health.jsonl",
+        "failure-log-events.jsonl",
+    ):
+        assert f"deployment-test-report-{suffix}" in upload
+
+    assemble = release.split("  assemble:", maxsplit=1)[1]
+    assert "needs: [release-gates, build-images, deployment-smoke, public-distribution]" in assemble
+
+    assert "timeout=10" in truenas
+    assert "timeout: 15s" in truenas
 
 
 def test_frontend_uses_clean_runtime_base_and_ci_scans_every_final_image() -> None:

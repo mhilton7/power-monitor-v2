@@ -39,6 +39,18 @@ exercised when such a tag exists. For the first V2 candidate, prior-version
 migration and rollback are explicitly `not_applicable_initial_release`, not
 reported as passes.
 
+The API image starts Uvicorn on Python's standard `asyncio` loop because the
+fail-closed PDF sandbox establishes its boundary through asyncio subprocess
+pipes; the restricted-image gate validates that exact path. Successful sandbox
+evidence is cached for five minutes, while a failed probe is retried after at
+most five seconds. API healthcheck client and container timeouts both exceed the
+sandbox's bounded self-test duration. If the digest-pinned deployment smoke
+fails, it uploads redacted Compose status, container health state, and service
+log-event JSONL (`deployment-test-report-failure-log-events.jsonl`) before
+cleanup. The event stream is bounded and contains only known service, UTC
+timestamp, and event enums—never raw log text. Those diagnostics never make a
+failed smoke eligible for release assembly.
+
 The target TrueNAS deployment suite records machine-readable evidence for clean
 migration, service health, HTTPS routing and headers, SSE proxying, upload
 rejection, dataset permissions, backup/restore, every individual service
