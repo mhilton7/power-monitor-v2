@@ -343,7 +343,9 @@ for evidence in last-backup-attempt last-successful-backup \
   last-restore-test-attempt last-successful-restore-test; do
   sudo jq -e '.state == "verified"' "$base/backups/status/${evidence}.json" >/dev/null
 done
-[[ -n "$(find "$base/backups/archives" -maxdepth 1 -type f -name 'powermeter-*.dump.gpg' -print -quit)" ]]
+archive_path="$(sudo find "$base/backups/archives" -maxdepth 1 -type f -name 'powermeter-*.dump.gpg' -print -quit)"
+readonly archive_path
+[[ -n "$archive_path" ]]
 
 compose ps --format json | project_compose_state > "$work/compose-ps.jsonl"
 sudo find "$base" -maxdepth 3 -printf '%M %u:%g %p\n' | sort > "$work/permissions.txt"

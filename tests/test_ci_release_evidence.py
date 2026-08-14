@@ -397,6 +397,32 @@ def test_release_smoke_expected_upload_rejection_is_fail_closed() -> None:
     assert smoke.startswith("#!/usr/bin/env bash\nset -Eeuo pipefail\n")
 
 
+def test_release_smoke_archive_lookup_is_privileged_and_fail_closed() -> None:
+    smoke = (ROOT / "scripts/release_deployment_smoke.sh").read_text(encoding="utf-8")
+    expected_find = (
+        'sudo find "$base/backups/archives" -maxdepth 1 -type f '
+        "-name 'powermeter-*.dump.gpg' -print -quit"
+    )
+    expected_lookup = (
+        f'archive_path="$({expected_find})"\n'
+        + 'readonly archive_path\n'
+        + '[[ -n "$archive_path" ]]'
+    )
+    archive_offset = smoke.index(expected_lookup)
+    archive_path_reads = [
+        line for line in smoke.splitlines() if '"$base/backups/archives"' in line
+    ]
+
+    assert archive_path_reads == [f'archive_path="$({expected_find})"']
+    assert smoke.count(expected_find) == 1
+    assert '$(find "$base/backups/archives"' not in smoke
+    assert f'readonly archive_path="$({expected_find})"' not in smoke
+    assert f'[[ -n "$({expected_find})" ]]' not in smoke
+    assert smoke.rfind("set -e", 0, archive_offset) > smoke.rfind(
+        "set +e", 0, archive_offset
+    )
+
+
 def test_release_smoke_preserves_redacted_failure_diagnostics() -> None:
     smoke = (ROOT / "scripts/release_deployment_smoke.sh").read_text(encoding="utf-8")
     release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
