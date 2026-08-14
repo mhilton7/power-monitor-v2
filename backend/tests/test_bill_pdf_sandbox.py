@@ -60,6 +60,8 @@ def test_landlock_seccomp_boundary_denies_secret_env_file_and_network(tmp_path: 
     try:
         completed = subprocess.run(  # noqa: S603
             [sys.executable, str(helper), "probe", str(workdir), str(sentinel)],
+            # Even an empty input asks subprocess to provision an anonymous stdin pipe.
+            input=b"",
             check=False,
             capture_output=True,
             timeout=20,

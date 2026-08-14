@@ -93,7 +93,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+      - name: Block HIGH and CRITICAL filesystem findings
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           version: v0.72.0
           scan-type: fs
@@ -102,9 +103,24 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: false
           exit-code: "1"
+          format: table
+      - name: Generate complete filesystem SARIF report
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        if: always()
+        continue-on-error: true
+        with:
+          version: v0.72.0
+          skip-setup-trivy: true
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "0"
           format: sarif
           output: trivy-results.sarif
       - uses: github/codeql-action/upload-sarif@f52b05f4acaaa234e44466e66d29050e135ea9ef # v4.36.0
-        if: always()
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        continue-on-error: true
         with:
           sarif_file: trivy-results.sarif

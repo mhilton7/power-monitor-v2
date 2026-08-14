@@ -276,7 +276,7 @@ jobs:
           test -s release/promotion/stable/postgres-init-roles.sh
           cmp release/promotion/server-candidate/postgres-init-roles.sh \
             release/promotion/stable/postgres-init-roles.sh
-          (cd release/promotion/stable && sha256sum * > SHA256SUMS)
+          (cd release/promotion/stable && sha256sum -- * > SHA256SUMS)
       - uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-checksums: release/promotion/stable/SHA256SUMS
