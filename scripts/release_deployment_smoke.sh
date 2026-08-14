@@ -276,8 +276,9 @@ mapfile -t services < <(compose config --services | sort)
 [[ "${services[*]}" == "api backup frontend gateway migrate postgres worker" ]]
 compose up --detach --wait --wait-timeout 360
 
-curl_common=(--fail --silent --show-error --resolve "${hostname}:8443:127.0.0.1" \
-  --cacert "$work/tls-ca.crt")
+curl_transport_common=(--silent --show-error --connect-timeout 5 --max-time 30 \
+  --resolve "${hostname}:8443:127.0.0.1" --cacert "$work/tls-ca.crt")
+curl_common=(--fail "${curl_transport_common[@]}")
 curl "${curl_common[@]}" "$endpoint/healthz" >/dev/null
 curl "${curl_common[@]}" "$endpoint/health/live" | jq -e '.status == "live"' >/dev/null
 curl "${curl_common[@]}" "$endpoint/health/ready" | jq -e '.status == "ready"' >/dev/null
@@ -320,10 +321,11 @@ grep -Eq '^event: refresh$' "$work/events.txt"
 readonly csrf_token="$(awk '$6 == "pm_csrf" { print $7 }' "$cookie_jar")"
 [[ -n "$csrf_token" ]]
 head -c 10485761 /dev/zero > "$work/oversize.pdf"
-readonly upload_status="$(curl "${curl_common[@]}" --cookie "$cookie_jar" \
+upload_status="$(curl "${curl_transport_common[@]}" --cookie "$cookie_jar" \
   -H "X-CSRF-Token: $csrf_token" -o "$work/upload-response.json" -w '%{http_code}' \
   -F "document=@$work/oversize.pdf;type=application/pdf" \
   "$endpoint/api/v1/bill-rate-imports")"
+readonly upload_status
 [[ "$upload_status" == "422" ]]
 jq -e '.code == "BILL_RATE_IMPORT_REJECTED"' "$work/upload-response.json" >/dev/null
 
