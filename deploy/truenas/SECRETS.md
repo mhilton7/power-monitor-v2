@@ -96,7 +96,8 @@ openssl req -new -sha256 -key tls.key -subj "/CN=$hostname" \
   -addext 'extendedKeyUsage=serverAuth' -out tls.csr
 openssl x509 -req -sha256 -days 397 -in tls.csr -CA tls-ca.crt \
   -CAkey pm-root-ca.key -CAcreateserial -copy_extensions copy -out tls.crt
-openssl verify -CAfile tls-ca.crt -verify_hostname "$hostname" tls.crt
+openssl verify -x509_strict -purpose sslserver -CAfile tls-ca.crt \
+  -verify_hostname "$hostname" tls.crt
 ```
 
 Transfer only `tls.crt`, `tls.key`, and `tls-ca.crt` to the TrueNAS secrets
@@ -127,8 +128,8 @@ base=/mnt/Apps/PowerMeterV2/secrets
 stat -c '%n %u:%g %a %s-bytes' "$base"/*
 getfacl --absolute-names "$base"/*
 openssl x509 -in "$base/tls.crt" -noout -subject -issuer -dates -ext subjectAltName
-openssl verify -CAfile "$base/tls-ca.crt" -verify_hostname power-monitor.home.arpa \
-  "$base/tls.crt"
+openssl verify -x509_strict -purpose sslserver -CAfile "$base/tls-ca.crt" \
+  -verify_hostname power-monitor.home.arpa "$base/tls.crt"
 ```
 
 Stop if the dataset is not POSIX ACL, a secret is a symbolic link, any
