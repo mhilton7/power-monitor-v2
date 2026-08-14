@@ -274,13 +274,12 @@ jobs:
           --tmpfs /run/secrets:rw,noexec,nosuid,nodev,size=1m,uid=10001,gid=10001,mode=0700
           local/power-monitor-v2-api:${{ github.sha }}
           python -m backend.app.bill_rate_import.sandbox_check
-      - name: Block HIGH and CRITICAL API image findings
-        if: matrix.name == 'api'
+      - name: Block HIGH and CRITICAL final-image findings
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         with:
           version: v0.72.0
           scan-type: image
-          image-ref: local/power-monitor-v2-api:${{ github.sha }}
+          image-ref: local/power-monitor-v2-${{ matrix.name }}:${{ github.sha }}
           severity: HIGH,CRITICAL
           ignore-unfixed: false
           exit-code: 1

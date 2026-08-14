@@ -183,12 +183,43 @@ def test_api_image_uses_the_zero_finding_alpine_base_and_pinned_ocr() -> None:
     assert 'Path("/usr/share/tessdata")' in launcher
 
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    image_gate = "Block HIGH and CRITICAL API image findings"
+    image_gate = "Block HIGH and CRITICAL final-image findings"
     assert image_gate in ci
     assert "version: v0.72.0" in ci
-    assert "image-ref: local/power-monitor-v2-api:${{ github.sha }}" in ci
+    assert "image-ref: local/power-monitor-v2-${{ matrix.name }}:${{ github.sha }}" in ci
     assert "ignore-unfixed: false" in ci
     assert ci.index("Prove the API image PDF parser sandbox") < ci.index(image_gate)
+
+
+def test_frontend_uses_clean_runtime_base_and_ci_scans_every_final_image() -> None:
+    dockerfile = (ROOT / "frontend/Dockerfile").read_text(encoding="utf-8")
+    runtime_base = (
+        "nginxinc/nginx-unprivileged:1.30.4-alpine3.24@"
+        "sha256:44e36330f74d4f3a1d4e222acca9e23b401fb87811a7597024502bb759c4dd49"
+    )
+    assert dockerfile.count(f"FROM {runtime_base}") == 1
+    assert "1.28.0-alpine3.21" not in dockerfile
+    assert dockerfile.index(f"FROM {runtime_base}") < dockerfile.index("USER 101")
+
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    container_matrix = ci.split("\n  containers:", maxsplit=1)[1]
+    container_matrix = container_matrix.split("    steps:", maxsplit=1)[0]
+    for image_name in ("api", "frontend", "backup"):
+        assert f"- name: {image_name}" in container_matrix
+
+    gate_name = "Block HIGH and CRITICAL final-image findings"
+    assert ci.count(gate_name) == 1
+    gate = ci.split(f"- name: {gate_name}", maxsplit=1)[1]
+    gate = gate.split("- uses: actions/upload-artifact", maxsplit=1)[0]
+    assert "if:" not in gate
+    assert "uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1" in gate
+    assert "version: v0.72.0" in gate
+    assert "scan-type: image" in gate
+    assert "image-ref: local/power-monitor-v2-${{ matrix.name }}:${{ github.sha }}" in gate
+    assert "severity: HIGH,CRITICAL" in gate
+    assert "ignore-unfixed: false" in gate
+    assert "exit-code: 1" in gate
+    assert "ignorefile:" not in gate
 
 
 def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
