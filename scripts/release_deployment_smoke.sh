@@ -16,6 +16,7 @@ base_owned=false
 hosts_entry_added=false
 readonly endpoint="https://${hostname}:8443"
 readonly hosts_marker="powermeter-v2-release-smoke-${GITHUB_RUN_ID:-unknown}"
+readonly smoke_email="release-smoke@example.com"
 readonly authenticated_evidence="${EVIDENCE_FILE%.json}-authenticated.json"
 readonly compose_ps_evidence="${EVIDENCE_FILE%.json}-compose-ps.jsonl"
 readonly permissions_evidence="${EVIDENCE_FILE%.json}-permissions.txt"
@@ -276,17 +277,18 @@ jq -e \
   "$work/pdf-sandbox.json" >/dev/null
 
 readonly test_password="Release-smoke-only-$(openssl rand -hex 12)Aa1!"
-jq -cn --arg email 'release-smoke@example.invalid' --arg password "$test_password" \
+jq -cn --arg email "$smoke_email" --arg password "$test_password" \
   '{email:$email,display_name:"Release Smoke",password:$password,home_name:"Release Test Home",timezone:"America/Los_Angeles"}' \
   > "$work/bootstrap.json"
 curl "${curl_common[@]}" --cookie-jar "$cookie_jar" \
   -H 'Content-Type: application/json' --data-binary "@$work/bootstrap.json" \
-  "$endpoint/api/v1/auth/bootstrap" | jq -e '.user.email == "release-smoke@example.invalid"' >/dev/null
+  "$endpoint/api/v1/auth/bootstrap" \
+  | jq -e --arg email "$smoke_email" '.user.email == $email' >/dev/null
 printf '127.0.0.1 %s # %s\n' "$hostname" "$hosts_marker" | sudo tee -a /etc/hosts >/dev/null
 hosts_entry_added=true
 python backend/tests/deployment_evidence_probe.py \
   --base-url "$endpoint" --ca-file "$work/tls-ca.crt" \
-  --email release-smoke@example.invalid --password "$test_password" \
+  --email "$smoke_email" --password "$test_password" \
   --output "$authenticated_evidence"
 jq -e \
   '.schema == "pm-deployment-authenticated-evidence/1.0.0" and .status == "passed" and .enrollment == "authenticated" and .heartbeat == "authenticated_pzem" and .reading_sequence == 1 and .usage_source == "authenticated PZEM-004T sensor intervals only" and .rate_source == "reviewed_rate_only_pdf" and (.cost | tonumber) > 0 and .command.delivery == "authenticated" and .command.state == "succeeded"' \

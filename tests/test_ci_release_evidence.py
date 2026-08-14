@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 from backend.app.bill_rate_import.parser import extract_rate_plan_from_pdf
+from backend.app.schemas.api import BootstrapRequest
 from backend.tests.deployment_evidence_probe import _rate_source_pdf
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -309,6 +310,33 @@ def test_gateway_image_removes_unneeded_file_capability_and_is_release_owned() -
     assert 'test -s "$sbom"' in promotion
     assert 'test -s "$security"' in promotion
     assert 'select(.Severity == "HIGH" or .Severity == "CRITICAL")' in promotion
+
+
+def test_release_smoke_bootstrap_identity_is_schema_valid_and_consistent() -> None:
+    smoke = (ROOT / "scripts/release_deployment_smoke.sh").read_text(encoding="utf-8")
+    match = re.search(r'^readonly smoke_email="([^"]+)"$', smoke, flags=re.MULTILINE)
+    assert match is not None
+    smoke_email = match.group(1)
+
+    payload = BootstrapRequest.model_validate(
+        {
+            "email": smoke_email,
+            "display_name": "Release Smoke",
+            "password": "Release-smoke-only-0123456789abcdef01234567Aa1!",
+            "home_name": "Release Test Home",
+            "timezone": "America/Los_Angeles",
+        }
+    )
+    assert str(payload.email) == "release-smoke@example.com"
+    assert not smoke_email.endswith(".invalid")
+    assert smoke.count("release-smoke@example.com") == 1
+    assert "release-smoke@example.invalid" not in smoke
+    for use in (
+        '--arg email "$smoke_email"',
+        "'.user.email == $email'",
+        '--email "$smoke_email"',
+    ):
+        assert use in smoke
 
 
 def test_release_smoke_preserves_redacted_failure_diagnostics() -> None:
