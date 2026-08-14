@@ -118,6 +118,31 @@ def test_release_checksums_only_flat_regular_files_and_publishes_every_asset() -
     assert "files: release/assets/*" in release
 
 
+def test_contract_workflows_install_exact_server_lock_before_validator() -> None:
+    workflows = (
+        (
+            ROOT / ".github/workflows/release.yml",
+            "-r backend/requirements.lock jsonschema==4.25.1",
+            "python scripts/validate_firmware_contract.py",
+        ),
+        (
+            ROOT / ".github/workflows/firmware-contract.yml",
+            "-r server/backend/requirements.lock jsonschema==4.25.1",
+            "python server/scripts/validate_firmware_contract.py",
+        ),
+        (
+            ROOT / ".github/workflows/stable-promotion.yml",
+            "-r backend/requirements.lock jsonschema==4.25.1",
+            "python scripts/validate_firmware_contract.py",
+        ),
+    )
+
+    for path, install, validator in workflows:
+        workflow = path.read_text(encoding="utf-8")
+        assert install in workflow
+        assert workflow.index(install) < workflow.index(validator)
+
+
 def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     installation = (ROOT / "deploy/truenas/INSTALLATION.md").read_text(encoding="utf-8")
     datasets = (ROOT / "deploy/truenas/DATASET_ACLS.md").read_text(encoding="utf-8")
