@@ -1,0 +1,319 @@
+name: Promote a physically certified stable release
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: Existing tested server prerelease tag (for example v0.1.0-rc.1)
+        required: true
+        type: string
+      stable_tag:
+        description: New stable server tag with the same base version (for example v0.1.0)
+        required: true
+        type: string
+      firmware_tag:
+        description: Public stable compatible firmware release tag
+        required: true
+        type: string
+      hardware_certification_sha256:
+        description: SHA-256 of hardware-certification.json from the firmware release
+        required: true
+        type: string
+      confirmation:
+        description: Type PROMOTE-<stable-tag>-WITH-PHYSICAL-EVIDENCE
+        required: true
+        type: string
+
+concurrency:
+  group: stable-promotion
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FIRMWARE_REPOSITORY: mhilton7/power-monitor-sensor-headless
+
+jobs:
+  verify-and-promote:
+    runs-on: ubuntu-24.04
+    environment: stable-release
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Validate explicit promotion inputs
+        shell: bash
+        env:
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
+          FIRMWARE_TAG: ${{ inputs.firmware_tag }}
+          CERTIFICATION_SHA256: ${{ inputs.hardware_certification_sha256 }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]
+          [[ "$STABLE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$FIRMWARE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$CERTIFICATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$CONFIRMATION" == "PROMOTE-${STABLE_TAG}-WITH-PHYSICAL-EVIDENCE" ]]
+          [[ "${CANDIDATE_TAG%%-rc.*}" == "$STABLE_TAG" ]]
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.candidate_tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: candidate
+        name: Verify the immutable public server candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
+        run: |
+          set -Eeuo pipefail
+          git diff --exit-code
+          git diff --cached --exit-code
+          candidate_revision="$(git rev-parse HEAD)"
+          git tag --points-at "$candidate_revision" | grep -Fx "$CANDIDATE_TAG"
+          gh api "repos/${GITHUB_REPOSITORY}" --jq '.visibility == "public"' | grep -Fx true
+          gh release view "$CANDIDATE_TAG" --json tagName,isDraft,isPrerelease,url \
+            > release/candidate-release.json
+          jq -e --arg tag "$CANDIDATE_TAG" \
+            '.tagName == $tag and .isDraft == false and .isPrerelease == true' \
+            release/candidate-release.json >/dev/null
+          if gh release view "$STABLE_TAG" >/dev/null 2>&1; then
+            printf 'stable release already exists: %s\n' "$STABLE_TAG" >&2
+            exit 1
+          fi
+          if git rev-parse --verify --quiet "refs/tags/${STABLE_TAG}" >/dev/null; then
+            printf 'stable tag already exists: %s\n' "$STABLE_TAG" >&2
+            exit 1
+          fi
+          printf 'revision=%s\n' "$candidate_revision" >> "$GITHUB_OUTPUT"
+      - name: Download and verify every server candidate asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p release/promotion/server-candidate
+          gh release download "$CANDIDATE_TAG" --dir release/promotion/server-candidate
+          (cd release/promotion/server-candidate && sha256sum --check --strict SHA256SUMS)
+          gh attestation verify release/promotion/server-candidate/release-manifest.json \
+            --repo "$GITHUB_REPOSITORY"
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
+      - name: Verify candidate manifest and mandatory passing gate reports
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python scripts/verify_release_artifacts.py \
+            --manifest release/promotion/server-candidate/release-manifest.json
+          manifest=release/promotion/server-candidate/release-manifest.json
+          for component in api frontend backup; do
+            image_record="release/promotion/server-candidate/candidate-${component}-image.json"
+            jq -e --arg name "$component" \
+              --arg image "$(jq -er ".images.${component}.name" "$manifest")" \
+              --arg digest "$(jq -er ".images.${component}.digest" "$manifest")" \
+              --arg revision "${{ steps.candidate.outputs.revision }}" \
+              '.schema == "pm-image-release/1.0.0" and .name == $name and .image == $image and .digest == $digest and .revision == $revision' \
+              "$image_record" >/dev/null
+          done
+          for report in test-report security-report migration-report deployment-test-report; do
+            jq -e '.status == "passed"' \
+              "release/promotion/server-candidate/${report}.json" >/dev/null
+          done
+          jq -e '.status == "passed"' \
+            release/promotion/server-candidate/deployment-test-report-authenticated.json \
+            >/dev/null
+          test -s release/promotion/server-candidate/postgres-init-roles.sh
+          cmp deploy/postgres/init-roles.sh \
+            release/promotion/server-candidate/postgres-init-roles.sh
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ env.FIRMWARE_REPOSITORY }}
+          ref: ${{ inputs.firmware_tag }}
+          path: promotion-firmware-source
+          fetch-depth: 0
+          persist-credentials: false
+      - id: firmware
+        name: Verify the public stable firmware release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIRMWARE_TAG: ${{ inputs.firmware_tag }}
+        run: |
+          set -Eeuo pipefail
+          firmware_revision="$(git -C promotion-firmware-source rev-parse HEAD)"
+          git -C promotion-firmware-source tag --points-at "$firmware_revision" | grep -Fx "$FIRMWARE_TAG"
+          gh api "repos/${FIRMWARE_REPOSITORY}" --jq '.visibility == "public"' | grep -Fx true
+          gh release view "$FIRMWARE_TAG" --repo "$FIRMWARE_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease,url > release/firmware-release.json
+          jq -e --arg tag "$FIRMWARE_TAG" \
+            '.tagName == $tag and .isDraft == false and .isPrerelease == false' \
+            release/firmware-release.json >/dev/null
+          printf 'revision=%s\n' "$firmware_revision" >> "$GITHUB_OUTPUT"
+          printf 'release_url=%s\n' \
+            "$(jq -er '.url' release/firmware-release.json)" >> "$GITHUB_OUTPUT"
+      - name: Download and verify every firmware release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIRMWARE_TAG: ${{ inputs.firmware_tag }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p release/promotion/firmware
+          gh release download "$FIRMWARE_TAG" --repo "$FIRMWARE_REPOSITORY" \
+            --dir release/promotion/firmware
+          (cd release/promotion/firmware && sha256sum --check --strict SHA256SUMS)
+          gh attestation verify release/promotion/firmware/firmware.bin \
+            --repo "$FIRMWARE_REPOSITORY"
+      - name: Verify stable firmware/server wire contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python scripts/validate_contracts.py \
+            --firmware-root promotion-firmware-source
+          python scripts/validate_firmware_contract.py --server-root . \
+            --firmware-root promotion-firmware-source
+      - name: Verify schema-valid marked-unit physical certification
+        shell: bash
+        env:
+          EXPECTED_CERTIFICATION_SHA256: ${{ inputs.hardware_certification_sha256 }}
+          FIRMWARE_TAG: ${{ inputs.firmware_tag }}
+          FIRMWARE_REVISION: ${{ steps.firmware.outputs.revision }}
+        run: |
+          set -Eeuo pipefail
+          printf '%s  %s\n' "$EXPECTED_CERTIFICATION_SHA256" \
+            release/promotion/firmware/hardware-certification.json | sha256sum --check --strict
+          python scripts/verify_hardware_certification.py \
+            --evidence release/promotion/firmware/hardware-certification.json \
+            --schema promotion-firmware-source/release/hardware-certification.schema.json \
+            --firmware-bin release/promotion/firmware/firmware.bin \
+            --expected-commit "$FIRMWARE_REVISION" \
+            --expected-version "$FIRMWARE_TAG"
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: images
+        name: Verify immutable candidate digests and prepare stable aliases
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          manifest=release/promotion/server-candidate/release-manifest.json
+          for component in api frontend backup; do
+            image="$(jq -er ".images.${component}.name" "$manifest")"
+            digest="$(jq -er ".images.${component}.digest" "$manifest")"
+            resolved="sha256:$(docker buildx imagetools inspect "${image}@${digest}" --raw | sha256sum | cut -d' ' -f1)"
+            [[ "$resolved" == "$digest" ]]
+            printf '%s_digest=%s\n' "$component" "$digest" >> "$GITHUB_OUTPUT"
+          done
+      - name: Assemble stable release assets and compatibility evidence
+        shell: bash
+        env:
+          STABLE_TAG: ${{ inputs.stable_tag }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          FIRMWARE_TAG: ${{ inputs.firmware_tag }}
+          FIRMWARE_REVISION: ${{ steps.firmware.outputs.revision }}
+          FIRMWARE_RELEASE_URL: ${{ steps.firmware.outputs.release_url }}
+          CERTIFICATION_SHA256: ${{ inputs.hardware_certification_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p release/promotion/stable
+          for source in release/promotion/server-candidate/*; do
+            name="$(basename "$source")"
+            case "$name" in
+              power-monitor-v2-*.yaml|release-manifest.json|SHA256SUMS|RELEASE_NOTES.md|hardware-certification-status.json)
+                continue
+                ;;
+              *)
+                cp "$source" "release/promotion/stable/${name}"
+                ;;
+            esac
+          done
+          cp release/promotion/firmware/hardware-certification.json \
+            release/promotion/stable/hardware-certification.json
+          cp promotion-firmware-source/release/hardware-certification.schema.json \
+            release/promotion/stable/hardware-certification.schema.json
+          cp release/STABLE_RELEASE_NOTES.md release/promotion/stable/RELEASE_NOTES.md
+          firmware_image_sha256="$(sha256sum release/promotion/firmware/firmware.bin | cut -d' ' -f1)"
+          jq -cn --arg protocol 'pm-protocol/1.0.0' \
+            --arg candidate "$CANDIDATE_TAG" --arg firmware_tag "$FIRMWARE_TAG" \
+            --arg firmware_revision "$FIRMWARE_REVISION" \
+            --arg firmware_release_url "$FIRMWARE_RELEASE_URL" \
+            --arg firmware_image_sha256 "$firmware_image_sha256" \
+            --arg hardware_certification_sha256 "$CERTIFICATION_SHA256" \
+            '{schema:"pm-firmware-compatibility/1.0.0",protocol:$protocol,server_candidate:$candidate,firmware_tag:$firmware_tag,firmware_revision:$firmware_revision,firmware_release_url:$firmware_release_url,firmware_image_sha256:$firmware_image_sha256,hardware_certification_sha256:$hardware_certification_sha256,physical_certification:"passed"}' \
+            > release/promotion/stable/firmware-compatibility.json
+          python scripts/render_truenas_release.py \
+            --template deploy/truenas/power-monitor-v2.yaml \
+            --output "release/promotion/stable/power-monitor-v2-${STABLE_TAG}.yaml" \
+            --manifest release/promotion/stable/release-manifest.json \
+            --version "$STABLE_TAG" --revision "${{ steps.candidate.outputs.revision }}" \
+            --api-digest "${{ steps.images.outputs.api_digest }}" \
+            --frontend-digest "${{ steps.images.outputs.frontend_digest }}" \
+            --backup-digest "${{ steps.images.outputs.backup_digest }}" \
+            --release-status stable_physical_certification_passed \
+            --compatible-firmware "${FIRMWARE_REPOSITORY}@${FIRMWARE_REVISION} (${FIRMWARE_TAG})" \
+            --firmware-release-url "$FIRMWARE_RELEASE_URL" \
+            --firmware-tag "$FIRMWARE_TAG" \
+            --firmware-revision "$FIRMWARE_REVISION" \
+            --firmware-image-sha256 "$firmware_image_sha256" \
+            --hardware-certification-sha256 "$CERTIFICATION_SHA256"
+          docker compose -f "release/promotion/stable/power-monitor-v2-${STABLE_TAG}.yaml" config --quiet
+          python scripts/verify_release_artifacts.py \
+            --manifest release/promotion/stable/release-manifest.json
+          test -s release/promotion/stable/postgres-init-roles.sh
+          cmp release/promotion/server-candidate/postgres-init-roles.sh \
+            release/promotion/stable/postgres-init-roles.sh
+          (cd release/promotion/stable && sha256sum * > SHA256SUMS)
+      - uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-checksums: release/promotion/stable/SHA256SUMS
+      - name: Create stable GHCR aliases without rebuilding
+        shell: bash
+        env:
+          STABLE_TAG: ${{ inputs.stable_tag }}
+        run: |
+          set -Eeuo pipefail
+          manifest=release/promotion/stable/release-manifest.json
+          version="${STABLE_TAG#v}"
+          for component in api frontend backup; do
+            image="$(jq -er ".images.${component}.name" "$manifest")"
+            digest="$(jq -er ".images.${component}.digest" "$manifest")"
+            if docker buildx imagetools inspect "${image}:${version}" >/dev/null 2>&1; then
+              existing="sha256:$(docker buildx imagetools inspect "${image}:${version}" --raw | sha256sum | cut -d' ' -f1)"
+              [[ "$existing" == "$digest" ]]
+            else
+              docker buildx imagetools create --tag "${image}:${version}" "${image}@${digest}"
+            fi
+            promoted="sha256:$(docker buildx imagetools inspect "${image}:${version}" --raw | sha256sum | cut -d' ' -f1)"
+            [[ "$promoted" == "$digest" ]]
+          done
+          docker logout ghcr.io >/dev/null
+          for component in api frontend backup; do
+            image="$(jq -er ".images.${component}.name" "$manifest")"
+            digest="$(jq -er ".images.${component}.digest" "$manifest")"
+            docker buildx imagetools inspect "${image}@${digest}" >/dev/null
+          done
+      - uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+        with:
+          tag_name: ${{ inputs.stable_tag }}
+          target_commitish: ${{ steps.candidate.outputs.revision }}
+          name: PowerMeter V2 ${{ inputs.stable_tag }}
+          prerelease: false
+          draft: false
+          generate_release_notes: false
+          body_path: release/STABLE_RELEASE_NOTES.md
+          files: release/promotion/stable/*
+          fail_on_unmatched_files: true

@@ -1,0 +1,468 @@
+# RELEASE TEMPLATE -- INTENTIONALLY NOT DEPLOYABLE.
+# Application image digests are fail-closed sentinels until the signed release
+# workflow replaces them. Never hand-edit a digest; use render_truenas_release.py.
+name: power-meter-v2
+
+services:
+  postgres:
+    image: postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4
+    user: "70:70"
+    environment:
+      POSTGRES_DB: powermeter
+      POSTGRES_USER: pm_bootstrap
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_bootstrap_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: UTC
+    secrets:
+      - source: postgres_bootstrap_password
+        target: postgres_bootstrap_password
+        uid: "70"
+        gid: "70"
+        mode: 0440
+      - source: postgres_migrator_password
+        target: postgres_migrator_password
+        uid: "70"
+        gid: "70"
+        mode: 0440
+      - source: postgres_api_password
+        target: postgres_api_password
+        uid: "70"
+        gid: "70"
+        mode: 0440
+      - source: postgres_worker_password
+        target: postgres_worker_password
+        uid: "70"
+        gid: "70"
+        mode: 0440
+      - source: postgres_backup_password
+        target: postgres_backup_password
+        uid: "70"
+        gid: "70"
+        mode: 0440
+      - source: postgres_restore_password
+        target: postgres_restore_password
+        uid: "70"
+        gid: "70"
+        mode: 0440
+    volumes:
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/postgres
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/config/postgres-init-roles.sh
+        target: /docker-entrypoint-initdb.d/10-powermeter-roles.sh
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [database]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=70,gid=70,mode=1770
+      - /run/postgresql:rw,noexec,nosuid,nodev,size=16m,uid=70,gid=70,mode=0770
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    cpus: 2.0
+    mem_limit: 2g
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -q -U pm_api -d powermeter"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+  migrate:
+    image: ghcr.io/mhilton7/power-monitor-v2-api:0.0.0-unpublished@sha256:UNPUBLISHED_API_DIGEST
+    user: "10001:10001"
+    command: ["python", "-m", "backend.app.migrate"]
+    environment:
+      <<: &common_environment
+        PM_ENV: production
+        PM_DATABASE_HOST: postgres
+        PM_DATABASE_PORT: "5432"
+        PM_DATABASE_NAME: powermeter
+        PM_PUBLIC_ORIGIN: https://${PM_HOSTNAME:-power-monitor.home.arpa}:8443
+        PM_TIMEZONE: ${PM_TIMEZONE:-America/Los_Angeles}
+        PM_LOG_LEVEL: ${PM_LOG_LEVEL:-INFO}
+        PM_LOG_DIR: /data/logs
+        PM_LOG_RETENTION_DAYS: ${PM_LOG_RETENTION_DAYS:-90}
+        PM_BACKUP_STATUS_DIR: /data/backup-status
+        TZ: UTC
+      PM_SERVICE_ROLE: migrate
+      PM_DATABASE_USER: pm_migrator
+      PM_DATABASE_PASSWORD_FILE: /run/secrets/postgres_migrator_password
+    secrets:
+      - source: postgres_migrator_password
+        target: postgres_migrator_password
+        uid: "10001"
+        gid: "10001"
+        mode: 0440
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [database]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,uid=10001,gid=10001,mode=1770
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    cpus: 1.0
+    mem_limit: 512m
+    restart: "no"
+    stop_grace_period: 30s
+
+  api:
+    image: ghcr.io/mhilton7/power-monitor-v2-api:0.0.0-unpublished@sha256:UNPUBLISHED_API_DIGEST
+    user: "10001:10001"
+    environment:
+      <<: *common_environment
+      PM_SERVICE_ROLE: api
+      PM_DATABASE_USER: pm_api
+      PM_DATABASE_PASSWORD_FILE: /run/secrets/postgres_api_password
+      PM_SESSION_SECRET_FILE: /run/secrets/session_secret
+      PM_FIELD_ENCRYPTION_KEY_FILE: /run/secrets/field_encryption_key
+      PM_OTA_MANIFEST_KEY_FILE: /run/secrets/ota_manifest_key
+    secrets:
+      - source: postgres_api_password
+        target: postgres_api_password
+        uid: "10001"
+        gid: "10001"
+        mode: 0440
+      - source: session_secret
+        target: session_secret
+        uid: "10001"
+        gid: "10001"
+        mode: 0440
+      - source: field_encryption_key
+        target: field_encryption_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0440
+      - source: ota_manifest_key
+        target: ota_manifest_key
+        uid: "10001"
+        gid: "10001"
+        mode: 0440
+    volumes:
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/config
+        target: /data/config
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/firmware
+        target: /data/firmware
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/logs/application
+        target: /data/logs
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/rate-source-artifacts
+        target: /data/rate-source-artifacts
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/bill-rate-source-artifacts
+        target: /data/bill-rate-source-artifacts
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/backups/status
+        target: /data/backup-status
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [database, edge, egress]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=1770
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    cpus: 2.0
+    mem_limit: 1g
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+    restart: unless-stopped
+    stop_grace_period: 45s
+
+  worker:
+    image: ghcr.io/mhilton7/power-monitor-v2-api:0.0.0-unpublished@sha256:UNPUBLISHED_API_DIGEST
+    user: "10001:10001"
+    command: ["python", "-m", "worker.app.main"]
+    environment:
+      <<: *common_environment
+      PM_SERVICE_ROLE: worker
+      PM_DATABASE_USER: pm_worker
+      PM_DATABASE_PASSWORD_FILE: /run/secrets/postgres_worker_password
+      PM_WORKER_HEALTH_FILE: /tmp/worker-health.json
+    secrets:
+      - source: postgres_worker_password
+        target: postgres_worker_password
+        uid: "10001"
+        gid: "10001"
+        mode: 0440
+    volumes:
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/config
+        target: /data/config
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/firmware
+        target: /data/firmware
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/logs/application
+        target: /data/logs
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/rate-source-artifacts
+        target: /data/rate-source-artifacts
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/bill-rate-source-artifacts
+        target: /data/bill-rate-source-artifacts
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/backups/status
+        target: /data/backup-status
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [database, egress]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=1770
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    cpus: 2.0
+    mem_limit: 1g
+    healthcheck:
+      test: [CMD, python, -c, "import datetime,json,pathlib; d=json.loads(pathlib.Path('/tmp/worker-health.json').read_text()); t=datetime.datetime.fromisoformat(d['completed_at']); assert d['state']=='healthy' and (datetime.datetime.now(datetime.UTC)-t).total_seconds()<90"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+  frontend:
+    image: ghcr.io/mhilton7/power-monitor-v2-frontend:0.0.0-unpublished@sha256:UNPUBLISHED_FRONTEND_DIGEST
+    user: "101:101"
+    networks: [edge]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,uid=101,gid=101,mode=1770
+      - /var/cache/nginx:rw,noexec,nosuid,nodev,size=32m,uid=101,gid=101,mode=0750
+      - /var/run:rw,noexec,nosuid,nodev,size=8m,uid=101,gid=101,mode=0750
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    cpus: 1.0
+    mem_limit: 256m
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:8080/healthz]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+  gateway:
+    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    user: "1000:1000"
+    environment:
+      PM_HOSTNAME: ${PM_HOSTNAME:-power-monitor.home.arpa}
+      TZ: UTC
+    secrets:
+      - source: tls_cert
+        target: tls_cert
+        uid: "1000"
+        gid: "1000"
+        mode: 0440
+      - source: tls_key
+        target: tls_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0440
+      - source: tls_ca
+        target: tls_ca
+        uid: "1000"
+        gid: "1000"
+        mode: 0440
+    volumes:
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/config/Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/logs/gateway
+        target: /var/log/powermeter
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/caddy-data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/caddy-config
+        target: /config
+        bind:
+          create_host_path: false
+    ports:
+      - name: https
+        target: 8443
+        published: "8443"
+        protocol: tcp
+        app_protocol: https
+    extra_hosts:
+      - "${PM_HOSTNAME:-power-monitor.home.arpa}:127.0.0.1"
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    networks: [edge]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,uid=1000,gid=1000,mode=1770
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    cpus: 1.0
+    mem_limit: 256m
+    healthcheck:
+      test: [CMD-SHELL, "wget -q --spider --ca-certificate=/run/secrets/tls_ca https://$${PM_HOSTNAME}:8443/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  backup:
+    image: ghcr.io/mhilton7/power-monitor-v2-backup:0.0.0-unpublished@sha256:UNPUBLISHED_BACKUP_DIGEST
+    user: "568:568"
+    environment:
+      PM_DATABASE_HOST: postgres
+      PM_DATABASE_PORT: "5432"
+      PM_DATABASE_NAME: powermeter
+      PM_DATABASE_USER: pm_backup
+      PM_DATABASE_PASSWORD_FILE: /run/secrets/postgres_backup_password
+      PM_RESTORE_DATABASE_USER: pm_restore_test
+      PM_RESTORE_DATABASE_PASSWORD_FILE: /run/secrets/postgres_restore_password
+      PM_BACKUP_ENCRYPTION_KEY_FILE: /run/secrets/backup_encryption_key
+      PM_BACKUP_DIR: /backups
+      PM_BACKUP_INTERVAL_SECONDS: ${PM_BACKUP_INTERVAL_SECONDS:-86400}
+      PM_RESTORE_TEST_INTERVAL_SECONDS: ${PM_RESTORE_TEST_INTERVAL_SECONDS:-604800}
+      PM_BACKUP_RETENTION_DAYS: ${PM_BACKUP_RETENTION_DAYS:-35}
+      TZ: UTC
+    secrets:
+      - source: postgres_backup_password
+        target: postgres_backup_password
+        uid: "568"
+        gid: "568"
+        mode: 0440
+      - source: postgres_restore_password
+        target: postgres_restore_password
+        uid: "568"
+        gid: "568"
+        mode: 0440
+      - source: backup_encryption_key
+        target: backup_encryption_key
+        uid: "568"
+        gid: "568"
+        mode: 0440
+    volumes:
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/backups
+        target: /backups
+        bind:
+          create_host_path: false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [database]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=2g,uid=568,gid=568,mode=1770
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    cpus: 2.0
+    mem_limit: 2g
+    healthcheck:
+      test: [CMD, /opt/powermeter/healthcheck.sh]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 2m
+    restart: unless-stopped
+    stop_grace_period: 2m
+
+networks:
+  database:
+    driver: bridge
+    internal: true
+  edge:
+    driver: bridge
+  egress:
+    driver: bridge
+
+secrets:
+  postgres_bootstrap_password:
+    file: /mnt/Apps/PowerMeterV2/secrets/postgres_bootstrap_password
+  postgres_migrator_password:
+    file: /mnt/Apps/PowerMeterV2/secrets/postgres_migrator_password
+  postgres_api_password:
+    file: /mnt/Apps/PowerMeterV2/secrets/postgres_api_password
+  postgres_worker_password:
+    file: /mnt/Apps/PowerMeterV2/secrets/postgres_worker_password
+  postgres_backup_password:
+    file: /mnt/Apps/PowerMeterV2/secrets/postgres_backup_password
+  postgres_restore_password:
+    file: /mnt/Apps/PowerMeterV2/secrets/postgres_restore_password
+  session_secret:
+    file: /mnt/Apps/PowerMeterV2/secrets/session_secret
+  field_encryption_key:
+    file: /mnt/Apps/PowerMeterV2/secrets/field_encryption_key
+  ota_manifest_key:
+    file: /mnt/Apps/PowerMeterV2/secrets/ota_manifest_key
+  backup_encryption_key:
+    file: /mnt/Apps/PowerMeterV2/secrets/backup_encryption_key
+  tls_cert:
+    file: /mnt/Apps/PowerMeterV2/secrets/tls.crt
+  tls_key:
+    file: /mnt/Apps/PowerMeterV2/secrets/tls.key
+  tls_ca:
+    file: /mnt/Apps/PowerMeterV2/secrets/tls-ca.crt

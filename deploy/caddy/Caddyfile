@@ -1,0 +1,134 @@
+{
+	admin off
+	persist_config off
+	auto_https disable_redirects
+	servers {
+		timeouts {
+			read_body 30s
+			read_header 10s
+			write 5m
+			idle 2m
+		}
+	}
+}
+
+https://{$PM_HOSTNAME}:8443 {
+	tls /run/secrets/tls_cert /run/secrets/tls_key
+	encode zstd gzip
+
+	log {
+		output file /var/log/powermeter/gateway-access.json {
+			mode 0640
+			roll_size 25MiB
+			roll_keep 360
+			roll_keep_for 2160h
+		}
+		format json
+	}
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; img-src 'self' data:; font-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+
+	@health path /healthz
+	handle @health {
+		respond 200
+	}
+
+	@deviceSmall {
+		method POST
+		path /api/v1/device/heartbeat /api/v1/device/permanent-loss /api/v1/devices/enroll
+	}
+	handle @deviceSmall {
+		request_body {
+			max_size 64KiB
+		}
+		reverse_proxy api:8000 {
+			flush_interval -1
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+			}
+		}
+	}
+
+	@deviceReadings {
+		method POST
+		path /api/v1/device/readings
+	}
+	handle @deviceReadings {
+		request_body {
+			max_size 1MiB
+		}
+		reverse_proxy api:8000 {
+			flush_interval -1
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+			}
+		}
+	}
+
+	@billUpload {
+		method POST
+		path /api/v1/bill-rate-imports
+	}
+	handle @billUpload {
+		request_body {
+			max_size 11MiB
+		}
+		reverse_proxy api:8000 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+			}
+		}
+	}
+
+	@firmwareUpload {
+		method POST
+		path /api/v1/firmware/releases
+	}
+	handle @firmwareUpload {
+		request_body {
+			max_size 9MiB
+		}
+		reverse_proxy api:8000 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+			}
+		}
+	}
+
+	@api path /api/* /device/* /events/* /openapi.json /health/live /health/ready
+	handle @api {
+		request_body {
+			max_size 1MiB
+		}
+		reverse_proxy api:8000 {
+			flush_interval -1
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy frontend:8080 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+			}
+		}
+	}
+}

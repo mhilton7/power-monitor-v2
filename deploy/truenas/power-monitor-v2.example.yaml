@@ -1,0 +1,23 @@
+# Operator rendering example. This file intentionally fails interpolation until
+# PM_VERSION and all published application digests are supplied.
+name: power-meter-v2
+
+services:
+  postgres:
+    image: postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4
+  migrate:
+    image: ghcr.io/mhilton7/power-monitor-v2-api:${PM_VERSION:?set PM_VERSION}@${PM_API_DIGEST:?set PM_API_DIGEST}
+  api:
+    image: ghcr.io/mhilton7/power-monitor-v2-api:${PM_VERSION:?set PM_VERSION}@${PM_API_DIGEST:?set PM_API_DIGEST}
+  worker:
+    image: ghcr.io/mhilton7/power-monitor-v2-api:${PM_VERSION:?set PM_VERSION}@${PM_API_DIGEST:?set PM_API_DIGEST}
+  frontend:
+    image: ghcr.io/mhilton7/power-monitor-v2-frontend:${PM_VERSION:?set PM_VERSION}@${PM_FRONTEND_DIGEST:?set PM_FRONTEND_DIGEST}
+  gateway:
+    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+  backup:
+    image: ghcr.io/mhilton7/power-monitor-v2-backup:${PM_VERSION:?set PM_VERSION}@${PM_BACKUP_DIGEST:?set PM_BACKUP_DIGEST}
+
+# This compact file documents image resolution only. Use the generated release
+# asset power-monitor-v2-<version>.yaml for an installable configuration; it
+# contains the complete hardening, networks, mounts, health checks, and secrets.

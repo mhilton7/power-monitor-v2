@@ -1,0 +1,80 @@
+name: Firmware compatibility contract
+
+on:
+  workflow_dispatch:
+    inputs:
+      firmware_repository:
+        description: Exact owner/repository for compatible firmware
+        required: true
+        default: mhilton7/power-monitor-sensor-headless
+      firmware_revision:
+        description: Full immutable firmware commit SHA
+        required: true
+      firmware_release_tag:
+        description: Firmware semantic release tag
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate immutable input
+        shell: bash
+        env:
+          FIRMWARE_REPOSITORY: ${{ inputs.firmware_repository }}
+          FIRMWARE_REVISION: ${{ inputs.firmware_revision }}
+          FIRMWARE_TAG: ${{ inputs.firmware_release_tag }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$FIRMWARE_REPOSITORY" == "mhilton7/power-monitor-sensor-headless" ]]
+          [[ "$FIRMWARE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$FIRMWARE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: server
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ inputs.firmware_repository }}
+          ref: ${{ inputs.firmware_revision }}
+          path: firmware
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --disable-pip-version-check jsonschema==4.25.1
+      - name: Verify firmware tag and protocol contracts
+        shell: bash
+        env:
+          FIRMWARE_REVISION: ${{ inputs.firmware_revision }}
+          FIRMWARE_TAG: ${{ inputs.firmware_release_tag }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git -C firmware rev-parse HEAD)" = "$FIRMWARE_REVISION"
+          git -C firmware tag --points-at HEAD | grep -Fx "$FIRMWARE_TAG"
+          python server/scripts/validate_contracts.py --firmware-root firmware
+          python server/scripts/validate_firmware_contract.py --server-root server --firmware-root firmware
+      - name: Run firmware host/fault/release validation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python firmware/tools/run_host_tests.py
+          python firmware/tools/run_validation.py
+      - name: Record compatibility evidence
+        shell: bash
+        run: |
+          jq -cn --arg server_revision "$GITHUB_SHA" \
+            --arg firmware_repository "${{ inputs.firmware_repository }}" \
+            --arg firmware_revision "${{ inputs.firmware_revision }}" \
+            --arg firmware_release "${{ inputs.firmware_release_tag }}" \
+            '{schema:"pm-cross-repository-contract/1.0.0",protocol:"pm-protocol/1.0.0",server_revision:$server_revision,firmware_repository:$firmware_repository,firmware_revision:$firmware_revision,firmware_release:$firmware_release,host_and_contract_status:"passed",physical_certification_status:"reported separately; never inferred"}' \
+            > firmware-contract-report.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: firmware-contract-report
+          path: firmware-contract-report.json
+          if-no-files-found: error
+          retention-days: 90

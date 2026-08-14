@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "power-meter-v2"
+version = "0.1.0rc1"
+description = "Authenticated PZEM-only electrical monitoring server"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "alembic==1.16.5",
+  "argon2-cffi==25.1.0",
+  "asyncpg==0.30.0",
+  "cryptography==50.0.0",
+  "email-validator==2.2.0",
+  "fastapi==0.140.6",
+  "httpx==0.28.1",
+  "orjson==3.11.9",
+  "prometheus-client==0.22.1",
+  "pydantic==2.11.7",
+  "pydantic-settings==2.10.1",
+  "pillow==12.3.0",
+  "pypdf==6.16.0",
+  "pypdfium2==5.13.0",
+  "pytesseract==0.3.13",
+  "pyotp==2.9.0",
+  "python-multipart==0.0.32",
+  "sqlalchemy[asyncio]==2.0.43",
+  "structlog==25.4.0",
+  "tzdata==2025.2",
+  "uvicorn[standard]==0.35.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "aiosqlite==0.21.0",
+  "jsonschema==4.25.1",
+  "mypy==1.17.1",
+  "openapi-spec-validator==0.7.2",
+  "pip-audit==2.9.0",
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+  "pytest-cov==6.2.1",
+  "reportlab==4.4.3",
+  "ruff==0.12.12",
+  "testcontainers[postgres]==4.12.0",
+  "types-PyYAML==6.0.12.20250822",
+  "PyYAML==6.0.2",
+]
+
+[tool.setuptools.packages.find]
+include = ["backend*", "worker*", "simulator*"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers -p no:cacheprovider"
+asyncio_mode = "auto"
+testpaths = ["backend/tests", "worker/tests", "tests"]
+markers = [
+  "integration: requires PostgreSQL or containers",
+  "deployment: requires Docker",
+  "hardware: requires physical ESP32-S3/PZEM hardware",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["backend", "worker", "simulator", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC", "S", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S105", "S106", "S311"]
+"backend/app/routes/*.py" = ["B008"]
+"backend/app/security/auth.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+plugins = ["sqlalchemy.ext.mypy.plugin"]
+exclude = ["backend/alembic/"]

@@ -1,0 +1,62 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "10:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    groups:
+      python-runtime:
+        patterns: ["*"]
+    labels: [dependencies, python]
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "10:15"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    groups:
+      frontend-runtime:
+        patterns: ["*"]
+    labels: [dependencies, frontend]
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "10:30"
+      timezone: America/Los_Angeles
+    labels: [dependencies, containers]
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "10:45"
+      timezone: America/Los_Angeles
+    labels: [dependencies, containers]
+  - package-ecosystem: docker
+    directory: /backup
+    schedule:
+      interval: weekly
+      day: monday
+      time: "11:00"
+      timezone: America/Los_Angeles
+    labels: [dependencies, containers]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "11:15"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    labels: [dependencies, github-actions]
+
+# Dependabot PRs are intentionally not auto-merged. Required CI, security,
+# protocol, migration, and release gates apply before human review/merge.

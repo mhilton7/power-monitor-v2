@@ -1,0 +1,267 @@
+name: Reusable release gates
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  test-security-migration:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4
+        env:
+          POSTGRES_DB: powermeter
+          POSTGRES_USER: pm_bootstrap
+          POSTGRES_PASSWORD: release-ci-only-bootstrap-not-production
+        ports: ["5432/tcp"]
+        options: >-
+          --health-cmd "pg_isready -U pm_bootstrap -d powermeter"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PM_ENV: test
+      PM_REQUIRE_POSTGRES_TESTS: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Initialize the production PostgreSQL role split
+        shell: bash
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -Eeuo pipefail
+          role_secrets="${RUNNER_TEMP}/pm-postgres-role-secrets"
+          install -d -m 0700 "$role_secrets"
+          printf '%s\n' 'release-ci-migrator-not-production' > "$role_secrets/migrator"
+          printf '%s\n' 'release-ci-api-not-production' > "$role_secrets/api"
+          printf '%s\n' 'release-ci-worker-not-production' > "$role_secrets/worker"
+          printf '%s\n' 'release-ci-backup-not-production' > "$role_secrets/backup"
+          printf '%s\n' 'release-ci-restore-not-production' > "$role_secrets/restore"
+          chmod 0600 "$role_secrets"/*
+          docker exec "$POSTGRES_CONTAINER" install -d -o postgres -g postgres -m 0700 /tmp/pm-role-secrets
+          docker cp "$role_secrets/." "$POSTGRES_CONTAINER:/tmp/pm-role-secrets"
+          docker cp deploy/postgres/init-roles.sh "$POSTGRES_CONTAINER:/tmp/init-roles.sh"
+          docker exec "$POSTGRES_CONTAINER" chown -R postgres:postgres /tmp/pm-role-secrets /tmp/init-roles.sh
+          docker exec --user postgres \
+            --env POSTGRES_USER=pm_bootstrap --env POSTGRES_DB=powermeter \
+            --env PGHOST=/var/run/postgresql --env PGPORT=5432 \
+            --env PM_POSTGRES_MIGRATOR_PASSWORD_FILE=/tmp/pm-role-secrets/migrator \
+            --env PM_POSTGRES_API_PASSWORD_FILE=/tmp/pm-role-secrets/api \
+            --env PM_POSTGRES_WORKER_PASSWORD_FILE=/tmp/pm-role-secrets/worker \
+            --env PM_POSTGRES_BACKUP_PASSWORD_FILE=/tmp/pm-role-secrets/backup \
+            --env PM_POSTGRES_RESTORE_PASSWORD_FILE=/tmp/pm-role-secrets/restore \
+            "$POSTGRES_CONTAINER" bash /tmp/init-roles.sh
+      - name: Configure ephemeral database URL
+        shell: bash
+        env:
+          POSTGRES_PORT: ${{ job.services.postgres.ports['5432'] }}
+        run: >-
+          printf '%s\n'
+          "PM_DATABASE_URL=postgresql+asyncpg://pm_api:release-ci-api-not-production@127.0.0.1:${POSTGRES_PORT}/powermeter"
+          "PM_TEST_MIGRATOR_DATABASE_URL=postgresql+asyncpg://pm_migrator:release-ci-migrator-not-production@127.0.0.1:${POSTGRES_PORT}/powermeter"
+          "PM_MIGRATOR_DATABASE_URL=postgresql+asyncpg://pm_migrator:release-ci-migrator-not-production@127.0.0.1:${POSTGRES_PORT}/powermeter"
+          >> "$GITHUB_ENV"
+      - name: Reject dirty or non-tag source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --exit-code
+          git diff --cached --exit-code
+          git tag --points-at "$GITHUB_SHA" | grep -Fx "$GITHUB_REF_NAME"
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]
+      - name: Require a public source repository
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}" --jq '.visibility == "public"' | grep -Fx true
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Record successful secret scan
+        run: >-
+          jq -cn --arg revision "$GITHUB_SHA"
+          '{scanner:"gitleaks",revision:$revision,status:"passed"}'
+          > gitleaks-status.json
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "24.6.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: github/codeql-action/init@f52b05f4acaaa234e44466e66d29050e135ea9ef # v4.36.0
+        with:
+          languages: python,javascript-typescript
+          queries: security-extended
+      - run: python -m pip install --disable-pip-version-check -e '.[dev]'
+      - run: python -m ruff check backend worker tests scripts
+      - run: python -m mypy backend worker
+      - name: Clean database migration as pm_migrator
+        run: PM_DATABASE_URL="$PM_MIGRATOR_DATABASE_URL" python -m alembic -c backend/alembic.ini upgrade head
+      - name: Prove least-privilege production database roles
+        shell: bash
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -Eeuo pipefail
+          expect_denied() {
+            local role="$1" password="$2" statement="$3" evidence="$4"
+            if docker exec --env "PGPASSWORD=${password}" "$POSTGRES_CONTAINER" \
+              psql --host 127.0.0.1 --username "$role" --dbname powermeter \
+              --set ON_ERROR_STOP=1 --command "$statement" > "$evidence" 2>&1; then
+              printf 'forbidden statement unexpectedly succeeded as %s\n' "$role" >&2
+              exit 1
+            fi
+            grep -Eiq 'permission denied|not permitted' "$evidence"
+          }
+          expect_denied pm_api release-ci-api-not-production \
+            'CREATE TABLE release_api_must_not_create(id integer)' \
+            pm-api-ddl-denied.txt
+          expect_denied pm_backup release-ci-backup-not-production \
+            'UPDATE users SET email = email' \
+            pm-backup-write-denied.txt
+          expect_denied pm_bootstrap release-ci-only-bootstrap-not-production \
+            'SELECT 1' pm-bootstrap-login-denied.txt
+      - run: python -m pytest --junitxml=release-tests.xml
+      - run: python scripts/validate_release.py
+      - run: python scripts/validate_contracts.py
+      - run: bash scripts/verify_workflows.sh
+      - run: bash -n backup/*.sh scripts/*.sh
+      - run: python -m pip_audit --format=json --output=python-audit.json
+      - name: Install exact frontend dependencies and Playwright Chromium
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm ci --ignore-scripts
+          npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Frontend checks and dependency audit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm run check 2>&1 | tee ../frontend-check.log
+          npm audit --audit-level=high --json > npm-audit.json
+        working-directory: frontend
+      - name: Production-build Playwright end-to-end gate
+        shell: bash
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: playwright-results.xml
+        run: |
+          set -Eeuo pipefail
+          npm run test:e2e -- --reporter=line,junit 2>&1 | tee ../frontend-e2e.log
+        working-directory: frontend
+      - uses: github/codeql-action/analyze@f52b05f4acaaa234e44466e66d29050e135ea9ef # v4.36.0
+      - name: Record successful CodeQL analysis
+        run: >-
+          jq -cn --arg revision "$GITHUB_SHA"
+          '{scanner:"CodeQL",revision:$revision,status:"passed",queries:"security-extended"}'
+          > codeql-status.json
+      - uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          version: v0.72.0
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+          format: json
+          output: trivy-filesystem.json
+      - name: Verify an upgrade from the preceding V2 release when one exists
+        shell: bash
+        env:
+          POSTGRES_PORT: ${{ job.services.postgres.ports['5432'] }}
+        run: |
+          set -Eeuo pipefail
+          current_major="${GITHUB_REF_NAME#v}"
+          current_major="${current_major%%.*}"
+          previous_tag="$(git tag --list "v${current_major}.*" --sort=-v:refname | grep -Ev "^${GITHUB_REF_NAME}$" | head -n 1 || true)"
+          if [[ -z "$previous_tag" ]]; then
+            jq -cn --arg current "$GITHUB_REF_NAME" \
+              '{clean_install:"passed",prior_v2:"not_applicable_initial_release",current:$current}' \
+              > migration-result.json
+            exit 0
+          fi
+          previous_checkout="$RUNNER_TEMP/powermeter-previous"
+          mkdir -p "$previous_checkout"
+          git archive "$previous_tag" | tar -x -C "$previous_checkout"
+          PGPASSWORD=release-ci-restore-not-production psql \
+            --host 127.0.0.1 --port "$POSTGRES_PORT" --username pm_restore_test \
+            --dbname postgres --set ON_ERROR_STOP=1 \
+            --command 'CREATE DATABASE powermeter_upgrade TEMPLATE template0'
+          PGPASSWORD=release-ci-restore-not-production psql \
+            --host 127.0.0.1 --port "$POSTGRES_PORT" --username pm_restore_test \
+            --dbname powermeter_upgrade --set ON_ERROR_STOP=1 \
+            --command 'REVOKE ALL ON DATABASE powermeter_upgrade FROM PUBLIC' \
+            --command 'GRANT CONNECT ON DATABASE powermeter_upgrade TO pm_migrator' \
+            --command 'REVOKE ALL ON SCHEMA public FROM PUBLIC' \
+            --command 'GRANT USAGE, CREATE ON SCHEMA public TO pm_migrator'
+          upgrade_url="postgresql+asyncpg://pm_migrator:release-ci-migrator-not-production@127.0.0.1:${POSTGRES_PORT}/powermeter_upgrade"
+          (
+            cd "$previous_checkout"
+            PM_ENV=test PM_DATABASE_URL="$upgrade_url" \
+              python -m alembic -c backend/alembic.ini upgrade head
+          )
+          PM_DATABASE_URL="$upgrade_url" python -m alembic -c backend/alembic.ini upgrade head
+          jq -cn --arg previous "$previous_tag" --arg current "$GITHUB_REF_NAME" \
+            '{clean_install:"passed",prior_v2:"passed",previous:$previous,current:$current}' \
+            > migration-result.json
+      - name: Create evidence-backed reports
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python scripts/summarize_junit.py --output test-summary.json release-tests.xml
+          python scripts/generate_release_reports.py --output test-report.json --version "$GITHUB_REF_NAME" --revision "$GITHUB_SHA" --status passed --kind test release-tests.xml test-summary.json frontend-check.log frontend-e2e.log frontend/playwright-results.xml pm-api-ddl-denied.txt pm-backup-write-denied.txt pm-bootstrap-login-denied.txt
+          python scripts/generate_release_reports.py --output security-report.json --version "$GITHUB_REF_NAME" --revision "$GITHUB_SHA" --status passed --kind security python-audit.json frontend/npm-audit.json gitleaks-status.json codeql-status.json trivy-filesystem.json
+          python scripts/generate_release_reports.py --output migration-report.json --version "$GITHUB_REF_NAME" --revision "$GITHUB_SHA" --status passed --kind migration migration-result.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-gate-reports
+          path: |
+            test-report.json
+            security-report.json
+            migration-report.json
+            release-tests.xml
+            test-summary.json
+            frontend-check.log
+            frontend-e2e.log
+            frontend/playwright-results.xml
+            frontend/test-results
+            pm-api-ddl-denied.txt
+            pm-backup-write-denied.txt
+            pm-bootstrap-login-denied.txt
+            python-audit.json
+            frontend/npm-audit.json
+            gitleaks-status.json
+            codeql-status.json
+            trivy-filesystem.json
+          if-no-files-found: error
+          retention-days: 90
+
+  physical-certification-status:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Record honest certification gate
+        shell: bash
+        run: |
+          jq -cn --arg revision "$GITHUB_SHA" --arg protocol "pm-protocol/1.0.0" \
+            '{schema:"pm-hardware-certification-link/1.0.0",revision:$revision,protocol:$protocol,status:"pending",reason:"No actual marked-unit HIL evidence is present in the server repository; prerelease only."}' \
+            > hardware-certification-status.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-gate-hardware-status
+          path: hardware-certification-status.json
+          if-no-files-found: error
+          retention-days: 90

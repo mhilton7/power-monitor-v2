@@ -1,0 +1,151 @@
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+from itertools import pairwise
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+RateDecimal = Annotated[Decimal, Field(ge=0, max_digits=18, decimal_places=8)]
+
+
+class SourceRegion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    page: int = Field(ge=1)
+    x: Decimal | None = Field(default=None, ge=0)
+    y: Decimal | None = Field(default=None, ge=0)
+    width: Decimal | None = Field(default=None, ge=0)
+    height: Decimal | None = Field(default=None, ge=0)
+
+
+class AllowedRateField(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: Literal[
+        "rate_plan_name",
+        "rate_class",
+        "cca_or_direct_access_indicator",
+        "season_definition",
+        "day_type_definition",
+        "tou_period",
+        "tier_threshold",
+        "baseline_allocation_rule",
+        "baseline_credit_rate",
+        "per_kwh_rate",
+        "delivery_rate_component",
+        "generation_rate_component",
+        "recurring_fixed_charge",
+        "recurring_tax_or_surcharge_rule",
+        "recurring_credit_or_adjustment_rule",
+        "tariff_effective_date",
+    ]
+    normalized_value: str = Field(min_length=1, max_length=500)
+    confidence: Decimal = Field(ge=0, le=1)
+    source: SourceRegion
+
+
+class TouPeriodDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    season: Literal["summer", "winter", "all"]
+    day_type: Literal["weekday", "weekend", "holiday", "all"]
+    name: str = Field(min_length=1, max_length=40)
+    start_minute: int = Field(ge=0, lt=1440)
+    end_minute: int = Field(gt=0, le=1440)
+    price_per_kwh: RateDecimal
+    delivery_per_kwh: RateDecimal = Decimal("0")
+    generation_per_kwh: RateDecimal = Decimal("0")
+    tier_start_kwh: Decimal = Field(default=Decimal("0"), ge=0)
+    tier_end_kwh: Decimal | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def ordered(self) -> TouPeriodDraft:
+        if self.end_minute <= self.start_minute:
+            raise ValueError("TOU period must be ordered and may not cross midnight")
+        if self.tier_end_kwh is not None and self.tier_end_kwh <= self.tier_start_kwh:
+            raise ValueError("tier end must exceed tier start")
+        return self
+
+
+class ReusableChargeDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=120)
+    kind: Literal["daily_fixed", "monthly_fixed", "per_kwh", "percentage", "credit"]
+    amount: Decimal
+    unit: Literal["USD/day", "USD/month", "USD/kWh", "percent"]
+
+
+class RatePlanDraft(BaseModel):
+    """Closed rate-only parser output. No arbitrary metadata or consumption fields."""
+
+    model_config = ConfigDict(extra="forbid")
+    utility_name: Literal["Southern California Edison"] = "Southern California Edison"
+    rate_plan_name: str = Field(min_length=1, max_length=120)
+    rate_class: str = Field(min_length=1, max_length=80)
+    cca_or_direct_access_indicator: Literal["sce_generation", "cca", "direct_access", "unknown"]
+    summer_months: tuple[int, ...] = (6, 7, 8, 9)
+    winter_months: tuple[int, ...] = (1, 2, 3, 4, 5, 10, 11, 12)
+    periods: tuple[TouPeriodDraft, ...]
+    baseline_allocation_rule: str | None = Field(default=None, max_length=500)
+    baseline_credit_rate: RateDecimal | None = None
+    reusable_charges: tuple[ReusableChargeDraft, ...] = ()
+    effective_start_candidate: date | None = None
+    effective_end_candidate: date | None = None
+    fields: tuple[AllowedRateField, ...]
+    parser_version: str = Field(min_length=1, max_length=40)
+    source_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    review_required: Literal[True] = True
+
+    @model_validator(mode="after")
+    def validate_period_coverage(self) -> RatePlanDraft:
+        if not self.periods:
+            raise ValueError("at least one reusable rate period is required")
+        months = (*self.summer_months, *self.winter_months)
+        if sorted(months) != list(range(1, 13)):
+            raise ValueError("summer and winter months must partition all twelve months")
+
+        # Validate the schedule that the pricing engine will actually resolve,
+        # including `all` fallbacks, holiday treatment, and tier boundaries.
+        # A group merely being absent must never make an incomplete schedule
+        # appear valid.
+        thresholds = {Decimal("0")}
+        for period in self.periods:
+            thresholds.add(period.tier_start_kwh)
+            if period.tier_end_kwh is not None:
+                thresholds.add(period.tier_end_kwh)
+        ordered_thresholds = sorted(thresholds)
+        tier_samples = set(ordered_thresholds)
+        for left, right in pairwise(ordered_thresholds):
+            tier_samples.add((left + right) / Decimal(2))
+        tier_samples.add(ordered_thresholds[-1] + Decimal("1"))
+
+        for season in ("summer", "winter"):
+            for day_type in ("weekday", "weekend", "holiday"):
+                for minute in range(1440):
+                    for cumulative in tier_samples:
+                        candidates = [
+                            period
+                            for period in self.periods
+                            if period.season in (season, "all")
+                            and period.day_type in (day_type, "all")
+                            and period.start_minute <= minute < period.end_minute
+                            and cumulative >= period.tier_start_kwh
+                            and (period.tier_end_kwh is None or cumulative < period.tier_end_kwh)
+                        ]
+                        if candidates:
+                            specificity = max(
+                                int(period.season == season) + int(period.day_type == day_type)
+                                for period in candidates
+                            )
+                            candidates = [
+                                period
+                                for period in candidates
+                                if int(period.season == season) + int(period.day_type == day_type)
+                                == specificity
+                            ]
+                        if len(candidates) != 1:
+                            raise ValueError(
+                                "rate schedule must resolve exactly once for every "
+                                f"season/day/minute/tier; got {len(candidates)} at "
+                                f"{season}/{day_type}/{minute}/{cumulative}"
+                            )
+        return self
