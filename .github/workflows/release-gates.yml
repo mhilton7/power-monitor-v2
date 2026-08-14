@@ -159,7 +159,7 @@ jobs:
           set -Eeuo pipefail
           npm run test:e2e -- --reporter=line,junit 2>&1 | tee ../frontend-e2e.log
         working-directory: frontend
-      - uses: github/codeql-action/analyze@f52b05f4acaaa234e44466e66d29050e135ea9ef # v4.36.0
+      - uses: github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
       - name: Record successful CodeQL analysis
         run: >-
           jq -cn --arg revision "$GITHUB_SHA"
