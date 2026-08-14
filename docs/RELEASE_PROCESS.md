@@ -34,26 +34,27 @@ and operator-style isolated restores passed; and the firmware candidate at
 63 production-C, 63 sanitizer, and accelerated 120-day simulation gates.
 Exact evidence is recorded in `docs/TESTING.md`.
 
-The API, frontend, and backup Docker values in that report are local image IDs,
-not registry manifest digests. No signed tag, public GitHub Release, public GHCR
-package, anonymous digest resolution, attestation, or generated real-digest
-TrueNAS YAML has been produced. The checked-in YAML therefore retains
-`UNPUBLISHED_*` sentinels. The target GitHub repositories are currently absent,
-`gh` authentication is invalid, and no signing key/tool is registered or
-configured; creating an unsigned tag or hand-substituting local image IDs is not
-an acceptable fallback. Marked-unit identity/electrical, TLS/HMAC, OTA
+The API, frontend, gateway, and backup Docker values in that report are local
+image IDs, not registry manifest digests. Signed candidate workflow attempts
+have published partial public GHCR image records, but no GitHub Release or
+installable release bundle exists because the full digest-pinned deployment
+gate failed. Those partial package records are not installation authority. The
+checked-in YAML therefore retains `UNPUBLISHED_*` sentinels, and creating an
+unsigned tag or hand-substituting local or partial image identities is not an
+acceptable fallback. Marked-unit identity/electrical, TLS/HMAC, OTA
 install/rollback, outage/recovery, physical-cycle, USB, and continuous 72-hour
-soak evidence is also absent. Prerelease publication still requires a signed
-tag and the GitHub build/security/public-package/full seven-service smoke gates.
+soak evidence is also absent. Prerelease publication still requires a
+coordinated signed tag and the GitHub build/security/public-package/full
+seven-service smoke gates.
 Physical evidence does not block an honestly labeled release candidate after
 those nonphysical gates pass, but it independently blocks stable promotion;
 local simulation or Docker evidence cannot substitute for it.
 
 ## Build and publish
 
-The tagged workflow uses `GITHUB_TOKEN` with job-minimal permissions to build API, frontend, and backup images for the declared platforms. OCI labels include source, semantic version, and full revision. It publishes semantic and commit tags, records registry-reported digests, generates SBOMs, and creates GitHub/Sigstore provenance and SBOM attestations. The source repository must be public, and an anonymous digest lookup must succeed for all three GHCR packages before a GitHub prerelease is assembled. For each package's first publication, an owner may need to set package visibility to public in GitHub Packages and rerun the blocked jobs; no workflow treats authenticated-only access as public.
+The tagged workflow uses `GITHUB_TOKEN` with job-minimal permissions to build API, frontend, gateway, and backup images for the declared platforms. OCI labels include source, semantic version, and full revision. It publishes semantic and commit tags, records registry-reported digests, generates SBOMs, and creates GitHub/Sigstore provenance and SBOM attestations. The source repository must be public, and an anonymous digest lookup must succeed for all four GHCR packages before a GitHub prerelease is assembled. For each package's first publication, an owner may need to set package visibility to public in GitHub Packages and rerun the blocked jobs; no workflow treats authenticated-only access as public.
 
-`scripts/render_truenas_release.py` accepts only semantic version, full revision, and three syntactically valid nonzero digests. It replaces every fail-closed sentinel, verifies exactly seven services, digest pinning, network/port/hardening constraints, and emits `power-monitor-v2-<version>.yaml` plus `release-manifest.json`. `scripts/verify_release_artifacts.py` verifies checksum and invariants.
+`scripts/render_truenas_release.py` accepts only semantic version, full revision, and four syntactically valid nonzero digests. It replaces every fail-closed sentinel, verifies exactly seven services, digest pinning, network/port/hardening constraints, and emits `power-monitor-v2-<version>.yaml` plus `release-manifest.json`. `scripts/verify_release_artifacts.py` verifies checksum and invariants.
 
 Release assets include manifest, digest-pinned YAML, SBOMs/attestations, test/security/migration reports, checksums, installation/upgrade/rollback guides, and release notes. The GitHub Release cross-links the compatible firmware release.
 

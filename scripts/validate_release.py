@@ -37,9 +37,10 @@ EXPECTED_DATABASE_ROLES = {
     "backup": ("pm_backup", "postgres_backup_password"),
 }
 APP_IMAGES = {
-    "ghcr.io/mhilton7/power-monitor-v2-api",
-    "ghcr.io/mhilton7/power-monitor-v2-frontend",
-    "ghcr.io/mhilton7/power-monitor-v2-backup",
+    "api": "ghcr.io/mhilton7/power-monitor-v2-api",
+    "frontend": "ghcr.io/mhilton7/power-monitor-v2-frontend",
+    "gateway": "ghcr.io/mhilton7/power-monitor-v2-gateway",
+    "backup": "ghcr.io/mhilton7/power-monitor-v2-backup",
 }
 DIGEST_IMAGE = re.compile(r"^[^\s@]+:[^\s@]+@sha256:[0-9a-f]{64}$")
 SENTINEL_IMAGE = re.compile(r"^[^\s@]+:0\.0\.0-unpublished@sha256:UNPUBLISHED_[A-Z]+_DIGEST$")
@@ -121,11 +122,36 @@ def validate_compose(path: Path) -> list[str]:
                 errors.append(f"{path}: {name} bind mount is outside the V2 dataset root")
             if volume.get("bind", {}).get("create_host_path") is not False:
                 errors.append(f"{path}: {name} bind mount may create an unexpected host path")
+    expected_application_images = {
+        "migrate": "api",
+        "api": "api",
+        "worker": "api",
+        "frontend": "frontend",
+        "gateway": "gateway",
+        "backup": "backup",
+    }
+    for service_name, component in expected_application_images.items():
+        expected_repository = APP_IMAGES[component]
+        expected_sentinel = (
+            f"{expected_repository}:0.0.0-unpublished@"
+            f"sha256:UNPUBLISHED_{component.upper()}_DIGEST"
+        )
+        image = str(services[service_name].get("image", ""))
+        published_pattern = re.compile(
+            rf"^{re.escape(expected_repository)}:[^\s@]+@sha256:[0-9a-f]{{64}}$"
+        )
+        if image != expected_sentinel and not published_pattern.fullmatch(image):
+            errors.append(
+                f"{path}: {service_name} must use the exact {component} image contract"
+            )
     if data.get("networks", {}).get("database", {}).get("internal") is not True:
         errors.append(f"{path}: database network is not internal")
     gateway_ports = services["gateway"].get("ports", [])
     if (
+        not isinstance(gateway_ports, list)
+        or
         len(gateway_ports) != 1
+        or not isinstance(gateway_ports[0], dict)
         or gateway_ports[0].get("target") != 8443
         or str(gateway_ports[0].get("published")) != "8443"
         or gateway_ports[0].get("protocol") != "tcp"

@@ -129,10 +129,24 @@ services:
     restart: unless-stopped
 
   gateway:
-    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    image: ${PM_GATEWAY_IMAGE:-power-meter-v2-gateway:local}
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    user: "1000:1000"
     environment: {PM_HOSTNAME: power-monitor.home.arpa}
     ports: ["8443:8443"]
-    secrets: [tls_cert, tls_key]
+    secrets:
+      - source: tls_cert
+        target: tls_cert
+        uid: "1000"
+        gid: "1000"
+        mode: 0440
+      - source: tls_key
+        target: tls_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0440
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - gateway-logs:/var/log/powermeter

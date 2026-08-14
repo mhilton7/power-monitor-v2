@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
 from backend.app.bill_rate_import.parser import extract_rate_plan_from_pdf
 from backend.tests.deployment_evidence_probe import _rate_source_pdf
 
@@ -194,6 +195,122 @@ def test_api_image_uses_the_zero_finding_alpine_base_and_pinned_ocr() -> None:
     assert ci.index("Prove the API image PDF parser sandbox") < ci.index(image_gate)
 
 
+def test_gateway_image_removes_unneeded_file_capability_and_is_release_owned() -> None:
+    dockerfile = (ROOT / "gateway/Dockerfile").read_text(encoding="utf-8")
+    main_go = (ROOT / "gateway/main.go").read_text(encoding="utf-8")
+    go_mod = (ROOT / "gateway/go.mod").read_text(encoding="utf-8")
+    base = (
+        "caddy:2.11.4-alpine@"
+        "sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648"
+    )
+    builder = (
+        "golang:1.26.6-alpine3.23@"
+        "sha256:5978cc992ad5ef96a7469713c8af849c1433824761ce3be2c56381403cd8d9a3"
+    )
+    assert dockerfile.count(f"FROM {base}") == 1
+    assert dockerfile.count(f"FROM {builder} AS builder") == 1
+    assert "GOTOOLCHAIN=local" in dockerfile
+    assert "go mod download && go mod verify" in dockerfile
+    assert "go mod tidy -diff" in dockerfile
+    assert dockerfile.count("CGO_ENABLED=0 go build -mod=readonly -trimpath") == 2
+    assert dockerfile.count("-tags=nobadger,nomysql,nopgx") == 2
+    assert "cmp -s /out/caddy.first /out/caddy.second" in dockerfile
+    assert "-buildid=" in dockerfile
+    assert "go1.26.6" in dockerfile
+    assert "v2.11.4-pmv2.1" in dockerfile
+    assert "h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0=" in dockerfile
+    for module in (
+        "golang.org/x/net v0.56.0",
+        "golang.org/x/text v0.39.0",
+        "google.golang.org/grpc v1.82.1",
+    ):
+        assert module in go_mod
+        assert module in dockerfile
+    assert go_mod.startswith("module github.com/mhilton7/power-monitor-v2/gateway\n\ngo 1.26.6\n")
+    assert '_ "time/tzdata"' in main_go
+    for package in ("c-ares=1.34.8-r0", "curl=8.20.0-r0", "libcurl=8.20.0-r0"):
+        assert package in dockerfile
+    for license_file in (
+        "CADDY-LICENSE.txt",
+        "X-NET-LICENSE.txt",
+        "X-TEXT-LICENSE.txt",
+        "GRPC-LICENSE.txt",
+        "GO-STDLIB-LICENSE.txt",
+        "POWER-METER-V2-LICENSE.txt",
+    ):
+        assert license_file in dockerfile
+    assert "install -d -o 1000 -g 1000 -m 0750 /var/log/powermeter" in dockerfile
+    assert "chown -R 1000:1000 /data /config" in dockerfile
+    assert "/usr/sbin/setcap -r /usr/bin/caddy" in dockerfile
+    assert 'test -z "$(/usr/sbin/getcap /usr/bin/caddy)"' in dockerfile
+    assert dockerfile.rstrip().endswith("USER 1000:1000")
+
+    truenas = (ROOT / "deploy/truenas/power-monitor-v2.yaml").read_text(encoding="utf-8")
+    gateway = truenas.split("\n  gateway:", maxsplit=1)[1].split("\n  backup:", maxsplit=1)[0]
+    assert (
+        "ghcr.io/mhilton7/power-monitor-v2-gateway:0.0.0-unpublished@"
+        "sha256:UNPUBLISHED_GATEWAY_DIGEST"
+    ) in gateway
+    assert "cap_drop: [ALL]" in gateway
+    assert "security_opt: [no-new-privileges:true]" in gateway
+    assert 'user: "1000:1000"' in gateway
+    assert "cap_add:" not in gateway
+    assert "curl --fail --silent --show-error --cacert /run/secrets/tls_ca" in gateway
+    assert "wget -q --spider --ca-certificate" not in gateway
+
+    local_compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    local_gateway = local_compose["services"]["gateway"]
+    assert local_gateway["image"] == "${PM_GATEWAY_IMAGE:-power-meter-v2-gateway:local}"
+    assert local_gateway["build"] == {"context": ".", "dockerfile": "gateway/Dockerfile"}
+    assert local_gateway["user"] == "1000:1000"
+    for secret in local_gateway["secrets"]:
+        assert secret["uid"] == "1000"
+        assert secret["gid"] == "1000"
+        assert secret["mode"] == 0o440
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "Compose file-backed secrets do not remap host" in readme
+    assert "never world-readable" in readme
+
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    runtime = ci.split("- name: Prove the gateway image under release restrictions", maxsplit=1)[1]
+    runtime = runtime.split("- name: Block HIGH and CRITICAL final-image findings", maxsplit=1)[0]
+    for value in (
+        "--read-only",
+        "--user 1000:1000",
+        "--cap-drop ALL",
+        "--security-opt no-new-privileges:true",
+        "caddy version",
+        "caddy list-modules --skip-standard",
+        "caddy validate",
+        "v2.11.4-pmv2.1 v2.11.4 h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0=",
+    ):
+        assert value in runtime
+
+    dependabot = yaml.safe_load((ROOT / ".github/dependabot.yml").read_text(encoding="utf-8"))
+    gateway_ecosystems = {
+        update["package-ecosystem"]
+        for update in dependabot["updates"]
+        if update["directory"] == "/gateway"
+    }
+    assert gateway_ecosystems == {"docker", "gomod"}
+
+    release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    promotion = (ROOT / ".github/workflows/stable-promotion.yml").read_text(encoding="utf-8")
+    assert "image: ghcr.io/mhilton7/power-monitor-v2-gateway" in release
+    assert "dockerfile: gateway/Dockerfile" in release
+    assert release.count("for component in api frontend gateway backup; do") == 4
+    assert promotion.count("for component in api frontend gateway backup; do") == 4
+    for asset in (
+        "gateway.spdx.json",
+        "gateway-security.json",
+        "candidate-gateway-image.json",
+    ):
+        assert asset in release
+    assert 'test -s "$sbom"' in promotion
+    assert 'test -s "$security"' in promotion
+    assert 'select(.Severity == "HIGH" or .Severity == "CRITICAL")' in promotion
+
+
 def test_release_smoke_preserves_redacted_failure_diagnostics() -> None:
     smoke = (ROOT / "scripts/release_deployment_smoke.sh").read_text(encoding="utf-8")
     release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -261,7 +378,7 @@ def test_frontend_uses_clean_runtime_base_and_ci_scans_every_final_image() -> No
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     container_matrix = ci.split("\n  containers:", maxsplit=1)[1]
     container_matrix = container_matrix.split("    steps:", maxsplit=1)[0]
-    for image_name in ("api", "frontend", "backup"):
+    for image_name in ("api", "frontend", "gateway", "backup"):
         assert f"- name: {image_name}" in container_matrix
 
     gate_name = "Block HIGH and CRITICAL final-image findings"
@@ -334,6 +451,7 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     assert "getfacl -cpn" in preflight
     assert "UNPUBLISHED_API_DIGEST" in template
     assert "UNPUBLISHED_FRONTEND_DIGEST" in template
+    assert "UNPUBLISHED_GATEWAY_DIGEST" in template
     assert "UNPUBLISHED_BACKUP_DIGEST" in template
 
 

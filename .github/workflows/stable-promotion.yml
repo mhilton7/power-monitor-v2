@@ -124,8 +124,16 @@ jobs:
           python scripts/verify_release_artifacts.py \
             --manifest release/promotion/server-candidate/release-manifest.json
           manifest=release/promotion/server-candidate/release-manifest.json
-          for component in api frontend backup; do
+          for component in api frontend gateway backup; do
             image_record="release/promotion/server-candidate/candidate-${component}-image.json"
+            sbom="release/promotion/server-candidate/${component}.spdx.json"
+            security="release/promotion/server-candidate/${component}-security.json"
+            test -s "$sbom"
+            test -s "$security"
+            jq -e '.spdxVersion | startswith("SPDX-")' "$sbom" >/dev/null
+            jq -e \
+              '.SchemaVersion == 2 and (.Results | type == "array") and ([.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH" or .Severity == "CRITICAL")] | length == 0)' \
+              "$security" >/dev/null
             jq -e --arg name "$component" \
               --arg image "$(jq -er ".images.${component}.name" "$manifest")" \
               --arg digest "$(jq -er ".images.${component}.digest" "$manifest")" \
@@ -218,7 +226,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           manifest=release/promotion/server-candidate/release-manifest.json
-          for component in api frontend backup; do
+          for component in api frontend gateway backup; do
             image="$(jq -er ".images.${component}.name" "$manifest")"
             digest="$(jq -er ".images.${component}.digest" "$manifest")"
             resolved="sha256:$(docker buildx imagetools inspect "${image}@${digest}" --raw | sha256sum | cut -d' ' -f1)"
@@ -269,6 +277,7 @@ jobs:
             --version "$STABLE_TAG" --revision "${{ steps.candidate.outputs.revision }}" \
             --api-digest "${{ steps.images.outputs.api_digest }}" \
             --frontend-digest "${{ steps.images.outputs.frontend_digest }}" \
+            --gateway-digest "${{ steps.images.outputs.gateway_digest }}" \
             --backup-digest "${{ steps.images.outputs.backup_digest }}" \
             --release-status stable_physical_certification_passed \
             --compatible-firmware "${FIRMWARE_REPOSITORY}@${FIRMWARE_REVISION} (${FIRMWARE_TAG})" \
@@ -295,7 +304,7 @@ jobs:
           set -Eeuo pipefail
           manifest=release/promotion/stable/release-manifest.json
           version="${STABLE_TAG#v}"
-          for component in api frontend backup; do
+          for component in api frontend gateway backup; do
             image="$(jq -er ".images.${component}.name" "$manifest")"
             digest="$(jq -er ".images.${component}.digest" "$manifest")"
             if docker buildx imagetools inspect "${image}:${version}" >/dev/null 2>&1; then
@@ -308,7 +317,7 @@ jobs:
             [[ "$promoted" == "$digest" ]]
           done
           docker logout ghcr.io >/dev/null
-          for component in api frontend backup; do
+          for component in api frontend gateway backup; do
             image="$(jq -er ".images.${component}.name" "$manifest")"
             digest="$(jq -er ".images.${component}.digest" "$manifest")"
             docker buildx imagetools inspect "${image}@${digest}" >/dev/null

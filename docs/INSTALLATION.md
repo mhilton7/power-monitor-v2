@@ -11,7 +11,7 @@ copies those operator files and `prepare-host.sh` beside its generated YAML.
 A repository checkout is deliberately not deployable. Local Docker image IDs in
 `docs/TESTING.md` are host-local build identities and must not be substituted
 into production YAML. Install only when one actually published release provides
-the manifest, three application-image digests, checksums and attestations,
+the manifest, four application-image digests, checksums and attestations,
 compatible firmware identity, generated YAML, and operator bundle. The checked-
 in `UNPUBLISHED_*` template must continue to fail at pull time.
 

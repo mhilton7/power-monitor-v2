@@ -17,9 +17,11 @@ import yaml
 SENTINELS = {
     "api": ("0.0.0-unpublished", "UNPUBLISHED_API_DIGEST"),
     "frontend": ("0.0.0-unpublished", "UNPUBLISHED_FRONTEND_DIGEST"),
+    "gateway": ("0.0.0-unpublished", "UNPUBLISHED_GATEWAY_DIGEST"),
     "backup": ("0.0.0-unpublished", "UNPUBLISHED_BACKUP_DIGEST"),
 }
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+IMAGE_REFERENCE_RE = re.compile(r"^[^\s@]+:[^\s@]+@sha256:[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$")
 EXPECTED_SERVICES = {"postgres", "migrate", "api", "worker", "frontend", "gateway", "backup"}
 EXPECTED_DATABASE_ROLES = {
@@ -57,7 +59,7 @@ def validate_compose(compose: dict[str, Any], *, published: bool) -> None:
     if published:
         for name, service in services.items():
             image = service.get("image") if isinstance(service, dict) else None
-            if not isinstance(image, str) or "@sha256:" not in image:
+            if not isinstance(image, str) or not IMAGE_REFERENCE_RE.fullmatch(image):
                 raise ReleaseError(f"service {name} is not digest pinned")
             if "UNPUBLISHED" in image or "latest" in image:
                 raise ReleaseError(f"service {name} contains an unpublished or floating image")
@@ -70,8 +72,17 @@ def validate_compose(compose: dict[str, Any], *, published: bool) -> None:
             raise ReleaseError(f"service {name} must not mount the Docker socket")
         if name in service.get("depends_on", {}):
             raise ReleaseError(f"service {name} must not depend on itself")
-    if not services["gateway"].get("ports", []):
-        raise ReleaseError("gateway must publish HTTPS")
+    gateway_ports = services["gateway"].get("ports", [])
+    if (
+        not isinstance(gateway_ports, list)
+        or len(gateway_ports) != 1
+        or not isinstance(gateway_ports[0], dict)
+        or gateway_ports[0].get("target") != 8443
+        or str(gateway_ports[0].get("published")) != "8443"
+        or gateway_ports[0].get("protocol") != "tcp"
+        or gateway_ports[0].get("app_protocol") != "https"
+    ):
+        raise ReleaseError("gateway must publish only TCP 8443 as HTTPS")
     for name, service in services.items():
         if name != "gateway" and service.get("ports"):
             raise ReleaseError(f"only gateway may publish a port, found {name}")
@@ -98,17 +109,24 @@ def validate_compose(compose: dict[str, Any], *, published: bool) -> None:
 
 
 def render(
-    template: str, version: str, api_digest: str, frontend_digest: str, backup_digest: str
+    template: str,
+    version: str,
+    api_digest: str,
+    frontend_digest: str,
+    gateway_digest: str,
+    backup_digest: str,
 ) -> str:
     prefix = "ghcr.io/mhilton7/power-monitor-v2"
     unpublished = "0.0.0-unpublished"
     api_sentinel = f"{prefix}-api:{unpublished}@sha256:" + "UNPUBLISHED_API_DIGEST"
     frontend_sentinel = f"{prefix}-frontend:{unpublished}@sha256:"
     frontend_sentinel += "UNPUBLISHED_FRONTEND_DIGEST"
+    gateway_sentinel = f"{prefix}-gateway:{unpublished}@sha256:" + "UNPUBLISHED_GATEWAY_DIGEST"
     backup_sentinel = f"{prefix}-backup:{unpublished}@sha256:" + "UNPUBLISHED_BACKUP_DIGEST"
     replacements = {
         api_sentinel: f"{prefix}-api:{version}@{api_digest}",
         frontend_sentinel: f"{prefix}-frontend:{version}@{frontend_digest}",
+        gateway_sentinel: f"{prefix}-gateway:{version}@{gateway_digest}",
         backup_sentinel: f"{prefix}-backup:{version}@{backup_digest}",
     }
     text = template
@@ -137,6 +155,7 @@ def main() -> int:
     parser.add_argument("--revision", required=True)
     parser.add_argument("--api-digest", required=True)
     parser.add_argument("--frontend-digest", required=True)
+    parser.add_argument("--gateway-digest", required=True)
     parser.add_argument("--backup-digest", required=True)
     parser.add_argument(
         "--release-status",
@@ -164,6 +183,7 @@ def main() -> int:
         raise ReleaseError("revision must be a full Git object ID")
     api_digest = parse_digest(args.api_digest, "api digest")
     frontend_digest = parse_digest(args.frontend_digest, "frontend digest")
+    gateway_digest = parse_digest(args.gateway_digest, "gateway digest")
     backup_digest = parse_digest(args.backup_digest, "backup digest")
     if args.release_status == "stable_physical_certification_passed":
         if not args.firmware_release_url or not re.fullmatch(
@@ -198,7 +218,14 @@ def main() -> int:
 
     template = args.template.read_text(encoding="utf-8")
     validate_compose(load_yaml(template), published=False)
-    output = render(template, version, api_digest, frontend_digest, backup_digest)
+    output = render(
+        template,
+        version,
+        api_digest,
+        frontend_digest,
+        gateway_digest,
+        backup_digest,
+    )
     validate_compose(load_yaml(output), published=True)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -216,6 +243,10 @@ def main() -> int:
             "frontend": {
                 "name": "ghcr.io/mhilton7/power-monitor-v2-frontend",
                 "digest": frontend_digest,
+            },
+            "gateway": {
+                "name": "ghcr.io/mhilton7/power-monitor-v2-gateway",
+                "digest": gateway_digest,
             },
             "backup": {"name": "ghcr.io/mhilton7/power-monitor-v2-backup", "digest": backup_digest},
         },

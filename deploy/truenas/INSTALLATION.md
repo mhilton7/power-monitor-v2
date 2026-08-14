@@ -61,6 +61,12 @@ attested manifest:
 jq -e --arg version "${tag#v}" \
   '.schema == "pm-server-release/1.0.0" and
    .protocol == "pm-protocol/1.0.0" and .version == $version and
+   (.images | keys | sort) == ["api","backup","frontend","gateway"] and
+   .images.api.name == "ghcr.io/mhilton7/power-monitor-v2-api" and
+   .images.frontend.name == "ghcr.io/mhilton7/power-monitor-v2-frontend" and
+   .images.gateway.name == "ghcr.io/mhilton7/power-monitor-v2-gateway" and
+   .images.backup.name == "ghcr.io/mhilton7/power-monitor-v2-backup" and
+   ([.images[].digest] | all(test("^sha256:[0-9a-f]{64}$"))) and
    (.release_status == "candidate_physical_certification_pending" or
     .release_status == "stable_physical_certification_passed")' \
   release-manifest.json

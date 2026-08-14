@@ -14,7 +14,7 @@ services:
   frontend:
     image: ghcr.io/mhilton7/power-monitor-v2-frontend:${PM_VERSION:?set PM_VERSION}@${PM_FRONTEND_DIGEST:?set PM_FRONTEND_DIGEST}
   gateway:
-    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    image: ghcr.io/mhilton7/power-monitor-v2-gateway:${PM_VERSION:?set PM_VERSION}@${PM_GATEWAY_DIGEST:?set PM_GATEWAY_DIGEST}
   backup:
     image: ghcr.io/mhilton7/power-monitor-v2-backup:${PM_VERSION:?set PM_VERSION}@${PM_BACKUP_DIGEST:?set PM_BACKUP_DIGEST}
 

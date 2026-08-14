@@ -48,12 +48,28 @@ updates:
       time: "11:00"
       timezone: America/Los_Angeles
     labels: [dependencies, containers]
+  - package-ecosystem: docker
+    directory: /gateway
+    schedule:
+      interval: weekly
+      day: monday
+      time: "11:15"
+      timezone: America/Los_Angeles
+    labels: [dependencies, containers]
+  - package-ecosystem: gomod
+    directory: /gateway
+    schedule:
+      interval: weekly
+      day: monday
+      time: "11:20"
+      timezone: America/Los_Angeles
+    labels: [dependencies, go]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
       day: monday
-      time: "11:15"
+      time: "11:30"
       timezone: America/Los_Angeles
     open-pull-requests-limit: 5
     labels: [dependencies, github-actions]
