@@ -161,6 +161,36 @@ def test_backup_image_removes_unused_inherited_privilege_helper() -> None:
     assert ci.index(runtime_check) < ci.index("Prove the API image PDF parser sandbox")
 
 
+def test_api_image_uses_the_zero_finding_alpine_base_and_pinned_ocr() -> None:
+    dockerfile = (ROOT / "backend/Dockerfile").read_text(encoding="utf-8")
+    base = (
+        "python:3.13.14-alpine3.23@"
+        "sha256:9fdbf2e3e82628351513560b121e2ee6ce31cac212be9e070c5a5e2769fb5e76"
+    )
+    assert dockerfile.count(f"FROM {base}") == 2
+    assert "slim-bookworm" not in dockerfile
+    assert "/sbin/apk add --no-cache" in dockerfile
+    assert "tesseract-ocr=5.5.1-r0" in dockerfile
+    assert "tesseract-ocr-data-eng=5.5.1-r0" in dockerfile
+    assert "font-dejavu=2.37-r6" in dockerfile
+
+    launcher = (
+        ROOT / "backend/app/bill_rate_import/sandbox_launcher.py"
+    ).read_text(encoding="utf-8")
+    assert '"x86_64": Path("/lib/ld-musl-x86_64.so.1")' in launcher
+    assert '"aarch64": Path("/lib/ld-musl-aarch64.so.1")' in launcher
+    assert '"TESSDATA_PREFIX": "/usr/share/tessdata"' in launcher
+    assert 'Path("/usr/share/tessdata")' in launcher
+
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    image_gate = "Block HIGH and CRITICAL API image findings"
+    assert image_gate in ci
+    assert "version: v0.72.0" in ci
+    assert "image-ref: local/power-monitor-v2-api:${{ github.sha }}" in ci
+    assert "ignore-unfixed: false" in ci
+    assert ci.index("Prove the API image PDF parser sandbox") < ci.index(image_gate)
+
+
 def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     installation = (ROOT / "deploy/truenas/INSTALLATION.md").read_text(encoding="utf-8")
     datasets = (ROOT / "deploy/truenas/DATASET_ACLS.md").read_text(encoding="utf-8")

@@ -444,8 +444,8 @@ def _close_inherited_file_descriptors() -> None:
 
 def _production_read_paths() -> tuple[tuple[Path, int], ...]:
     loader_by_architecture = {
-        "x86_64": Path("/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"),
-        "aarch64": Path("/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"),
+        "x86_64": Path("/lib/ld-musl-x86_64.so.1"),
+        "aarch64": Path("/lib/ld-musl-aarch64.so.1"),
     }
     dynamic_loader = loader_by_architecture.get(platform.machine().lower())
     if dynamic_loader is None:
@@ -455,10 +455,9 @@ def _production_read_paths() -> tuple[tuple[Path, int], ...]:
         (dynamic_loader, _LANDLOCK_READ_FILE | _LANDLOCK_ACCESS_FS_EXECUTE),
         (Path("/usr/bin/tesseract"), _LANDLOCK_READ_FILE | _LANDLOCK_ACCESS_FS_EXECUTE),
         (Path("/usr/lib"), _LANDLOCK_READ_DIRECTORY),
-        (Path("/usr/share/tesseract-ocr"), _LANDLOCK_READ_DIRECTORY),
+        (Path("/usr/share/tessdata"), _LANDLOCK_READ_DIRECTORY),
         (Path("/usr/share/fonts"), _LANDLOCK_READ_DIRECTORY),
         (Path("/etc/fonts"), _LANDLOCK_READ_DIRECTORY),
-        (Path("/etc/ld.so.cache"), _LANDLOCK_READ_FILE),
         (Path("/dev/null"), _LANDLOCK_READ_WRITE_FILE),
         (Path("/dev/urandom"), _LANDLOCK_READ_FILE),
     )
@@ -487,7 +486,7 @@ def _fixed_environment(workdir: Path) -> dict[str, str]:
         "PATH": "/usr/bin:/bin",
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONHOME": str(SANDBOX_ROOT / "runtime/usr/local"),
-        "TESSDATA_PREFIX": "/usr/share/tesseract-ocr/5/tessdata",
+        "TESSDATA_PREFIX": "/usr/share/tessdata",
         "TMPDIR": str(workdir),
         "XDG_CACHE_HOME": str(workdir),
     }
