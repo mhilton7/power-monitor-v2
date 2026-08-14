@@ -16,6 +16,8 @@ RUN apk add --no-cache \
       gnupg=2.4.9-r0 \
       jq=1.8.1-r0 \
       tzdata=2026c-r0 \
+    && rm -f /usr/local/bin/gosu \
+    && test ! -e /usr/local/bin/gosu \
     && addgroup -g 568 powermeter \
     && adduser -D -H -u 568 -G powermeter -s /sbin/nologin powermeter \
     && install -d -o 568 -g 568 -m 0750 \

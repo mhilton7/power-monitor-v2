@@ -143,6 +143,24 @@ def test_contract_workflows_install_exact_server_lock_before_validator() -> None
         assert workflow.index(install) < workflow.index(validator)
 
 
+def test_backup_image_removes_unused_inherited_privilege_helper() -> None:
+    dockerfile = (ROOT / "backup/Dockerfile").read_text(encoding="utf-8")
+    removal = "rm -f /usr/local/bin/gosu"
+    assert removal in dockerfile
+    assert "test ! -e /usr/local/bin/gosu" in dockerfile
+    assert dockerfile.index(removal) < dockerfile.index("USER 568:568")
+    assert 'ENTRYPOINT ["/opt/powermeter/entrypoint.sh"]' in dockerfile
+
+    for script in (ROOT / "backup").glob("*.sh"):
+        assert "gosu" not in script.read_text(encoding="utf-8")
+
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    runtime_check = "Reject the unused inherited backup privilege helper"
+    assert runtime_check in ci
+    assert "test ! -e /usr/local/bin/gosu" in ci
+    assert ci.index(runtime_check) < ci.index("Prove the API image PDF parser sandbox")
+
+
 def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     installation = (ROOT / "deploy/truenas/INSTALLATION.md").read_text(encoding="utf-8")
     datasets = (ROOT / "deploy/truenas/DATASET_ACLS.md").read_text(encoding="utf-8")

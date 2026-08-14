@@ -259,6 +259,12 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
       - name: Inspect non-root/read-only-compatible image metadata
         run: docker image inspect local/power-monitor-v2-${{ matrix.name }}:${{ github.sha }} > ${{ matrix.name }}-inspect.json
+      - name: Reject the unused inherited backup privilege helper
+        if: matrix.name == 'backup'
+        run: >-
+          docker run --rm --entrypoint /bin/sh
+          local/power-monitor-v2-backup:${{ github.sha }}
+          -ec 'test ! -e /usr/local/bin/gosu && test "$(id -u):$(id -g)" = "568:568"'
       - name: Prove the API image PDF parser sandbox
         if: matrix.name == 'api'
         run: >-
