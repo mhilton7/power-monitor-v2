@@ -48,8 +48,11 @@ development secrets on TrueNAS; follow the production generation and ACL guide.
 
 ## Installation and safety
 
-Begin with [docs/INSTALLATION.md](docs/INSTALLATION.md) and the
-[TrueNAS guide](deploy/truenas/INSTALLATION.md). This product does not switch
+For a production install, follow the single end-to-end
+[TrueNAS guide](deploy/truenas/INSTALLATION.md); the matching GitHub release
+also includes that guide, its dataset/secret companions, and the checked host
+preparation script. [docs/INSTALLATION.md](docs/INSTALLATION.md) separates this
+release path from local development. This product does not switch
 loads. Mains wiring and CT installation must be performed de-energized and by
 a qualified person in accordance with the equipment instructions and local
 code. The current release candidate is not physically certified; see
@@ -59,8 +62,8 @@ code. The current release candidate is not physically certified; see
 
 The initial version is `0.1.0-rc.1`. Stable release is fail-closed until the
 hardware identity, electrical interface, TLS, OTA rollback, outage recovery,
-and 72-hour soak gates have machine-readable evidence. The local server,
-frontend, PostgreSQL-role, backup/restore, PDF-sandbox, contract, and firmware
-simulation/build gates are recorded in [docs/TESTING.md](docs/TESTING.md), but
-no signed tag, public GHCR digests, generated real-digest TrueNAS YAML, target
-TrueNAS run, or marked-unit certification exists in that snapshot.
+and 72-hour soak gates have machine-readable evidence. A source checkout is
+never an install artifact: only an actually published GitHub release can supply
+the attested GHCR digests and generated TrueNAS YAML. Local and CI evidence is
+recorded in [docs/TESTING.md](docs/TESTING.md); target-TrueNAS and marked-unit
+results remain distinct external evidence.

@@ -11,8 +11,8 @@ every checksum, require the `firmware.bin` attestation, and validate its manifes
 compatibility record, host/fault/simulation report, and explicit pending physical
 status.
 
-No such public firmware tag exists in the current local snapshot. The target
-GitHub repositories are absent, `gh` authentication is invalid, and no signing
-key/tool is configured. Do not set the variable to a local path, create an
-unsigned tag, treat local Docker image IDs as GHCR digests, or replace the
-intentional `UNPUBLISHED_*` sentinels by hand.
+A source checkout intentionally has no generated release digests. Do not set
+the compatibility variable to a local path, create an unsigned tag, treat local
+Docker image IDs as GHCR digests, or replace the intentional `UNPUBLISHED_*`
+sentinels by hand. The tagged workflows and the resulting public evidence are
+the authority for whether a release exists.

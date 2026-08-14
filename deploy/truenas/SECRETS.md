@@ -1,82 +1,137 @@
 # Secrets and local TLS
 
-Create secrets on TrueNAS; never put their values in Compose YAML, `.env`, screenshots, shell history, Git, diagnostics, or ordinary backups. Store one value per file without trailing commentary.
+Create secrets on TrueNAS; never put their values in Compose YAML, `.env`,
+screenshots, command arguments, shell output, Git, diagnostics, or ordinary
+backups. Each file contains one value. Keep the `secrets` dataset encrypted and
+unshared.
 
-Required files in `/mnt/Apps/PowerMeterV2/secrets`:
+## Required files
 
-| File | Minimum | Named read ACL | Purpose |
+All files live in `/mnt/Apps/PowerMeterV2/secrets`, have owner `root:root`, no
+owning-group or other access, and only the listed POSIX named readers.
+
+| File | Required value | Named read ACL | Purpose |
 |---|---|---|---|
-| `postgres_bootstrap_password` | 32 random bytes encoded as 64 hex characters | UID `70` | empty-cluster bootstrap only; role becomes `NOLOGIN` |
-| `postgres_migrator_password` | 32 random bytes encoded as 64 hex characters | UIDs `70`, `10001` | schema ownership and Alembic only |
-| `postgres_api_password` | 32 random bytes encoded as 64 hex characters | UIDs `70`, `10001` | API runtime DML only |
-| `postgres_worker_password` | 32 random bytes encoded as 64 hex characters | UIDs `70`, `10001` | worker runtime DML only |
-| `postgres_backup_password` | 32 random bytes encoded as 64 hex characters | UIDs `70`, `568` | read-only logical backup |
-| `postgres_restore_password` | 32 random bytes encoded as 64 hex characters | UIDs `70`, `568` | isolated restore-test database creation only |
-| `session_secret` | 32 random bytes encoded as Base64 | UID `10001` | server-side session authentication |
-| `field_encryption_key` | exactly 32 random bytes encoded as Base64 | UID `10001` | encrypted device credentials |
-| `ota_manifest_key` | 32 random bytes encoded as Base64 | UID `10001` | device-specific OTA manifest authentication |
-| `backup_encryption_key` | six or more Diceware words or 32 random Base64 bytes | UID `568` | OpenPGP symmetric backup encryption |
-| `tls.crt` | PEM leaf plus intermediates | UID `1000` | HTTPS certificate |
-| `tls.key` | PEM private key | UID `1000` | HTTPS key |
-| `tls-ca.crt` | PEM local root | UID `1000` | gateway health check and sensor provisioning |
+| `postgres_bootstrap_password` | 32 random bytes as 64 lowercase hex characters | UID `70` | empty-cluster bootstrap only; role becomes `NOLOGIN` |
+| `postgres_migrator_password` | same | UIDs `70`, `10001` | schema ownership and Alembic only |
+| `postgres_api_password` | same | UIDs `70`, `10001` | API runtime DML only |
+| `postgres_worker_password` | same | UIDs `70`, `10001` | worker runtime DML only |
+| `postgres_backup_password` | same | UIDs `70`, `568` | read-only logical backup |
+| `postgres_restore_password` | same | UIDs `70`, `568` | isolated restore database creation only |
+| `session_secret` | exactly 32 random bytes as Base64 | UID `10001` | server-side session authentication |
+| `field_encryption_key` | exactly 32 random bytes as Base64 | UID `10001` | encrypted device credentials |
+| `ota_manifest_key` | exactly 32 random bytes as Base64 | UID `10001` | device-specific OTA manifest authentication |
+| `backup_encryption_key` | 32 or more random bytes as Base64, or six or more Diceware words | UID `568` | OpenPGP symmetric backup encryption |
+| `tls.crt` | PEM leaf certificate (plus intermediates when applicable) | UID `1000` | HTTPS certificate |
+| `tls.key` | matching PEM private key | UID `1000` | HTTPS key |
+| `tls-ca.crt` | PEM trust anchor | UID `1000` | gateway health check and sensor/browser provisioning |
 
-Every file has baseline owner `root:root`, mode `0400`, plus only the named
-read ACL entries above. Docker Compose implements local file secrets as bind
-mounts and may not implement the `uid`, `gid`, and `mode` attributes in long
-secret syntax. The host ACL is therefore authoritative; the Compose attributes
-are defense-in-depth metadata, not the permission boundary.
+Docker Compose local-file secrets are bind mounts. The host ACL is the actual
+permission boundary; Compose `uid`, `gid`, and `mode` fields are additional
+metadata and must not be treated as a substitute.
 
-Generate application secrets on a trusted administrative machine. These PowerShell commands write directly to files without displaying the value:
+## Generate the application secrets
 
-```powershell
-$secretRoot = 'C:\Secure\PowerMeterV2'
-New-Item -ItemType Directory -Force -Path $secretRoot | Out-Null
-$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-function Write-RandomBase64([string]$Path) {
-  $bytes = New-Object byte[] 32
-  $rng.GetBytes($bytes)
-  [IO.File]::WriteAllText($Path, [Convert]::ToBase64String($bytes), [Text.UTF8Encoding]::new($false))
+The shortest safe path is to generate them directly in the unlocked TrueNAS
+dataset. From **System > Shell**, become root, confirm the path, and run this
+block once. It refuses to overwrite any existing secret:
+
+```sh
+sudo -i
+base=/mnt/Apps/PowerMeterV2/secrets
+test "$(realpath "$base")" = /mnt/Apps/PowerMeterV2/secrets
+umask 077
+write_new() {
+  target=$1
+  shift
+  test ! -e "$target" || { printf 'refusing to overwrite %s\n' "$target" >&2; return 1; }
+  "$@" >"$target"
 }
-Write-RandomBase64 "$secretRoot\session_secret"
-Write-RandomBase64 "$secretRoot\field_encryption_key"
-Write-RandomBase64 "$secretRoot\ota_manifest_key"
-Write-RandomBase64 "$secretRoot\backup_encryption_key"
-foreach ($name in @('postgres_bootstrap_password', 'postgres_migrator_password', 'postgres_api_password', 'postgres_worker_password', 'postgres_backup_password', 'postgres_restore_password')) {
-  $bytes = New-Object byte[] 32
-  $rng.GetBytes($bytes)
-  [IO.File]::WriteAllText("$secretRoot\$name", [Convert]::ToHexString($bytes).ToLowerInvariant(), [Text.UTF8Encoding]::new($false))
-}
-$rng.Dispose()
+for name in bootstrap migrator api worker backup restore; do
+  write_new "$base/postgres_${name}_password" openssl rand -hex 32
+done
+for name in session_secret field_encryption_key ota_manifest_key backup_encryption_key; do
+  write_new "$base/$name" openssl rand -base64 32
+done
+exit
 ```
 
-Transfer the files through an authenticated administrative channel, set the ownership/modes above, then securely remove the transfer copy. Keep an offline encrypted copy of `backup_encryption_key`; without it, backups cannot be restored. Rotating that key does not re-encrypt old archives, so retain old keys under documented key IDs until associated archives expire.
+The commands place no secret value in shell history or terminal output. Copy
+`backup_encryption_key` to an offline encrypted password vault through an
+authenticated administrative channel. Loss of that key makes all corresponding
+backups unrecoverable. Rotating it does not re-encrypt old archives; retain old
+key versions until their archives expire.
 
-Apply and verify POSIX named ACLs after transferring the files. Stop if the
-dataset is configured for an incompatible ACL type; convert it through the
-TrueNAS dataset ACL editor rather than weakening file modes.
+If secrets are generated on another workstation instead, transfer them without
+opening an SMB/NFS share on the application datasets, securely remove the
+transfer copy, and do not reuse development values.
+
+## Create or obtain the HTTPS certificate
+
+Use an existing internal CA when available. The certificate SAN must contain
+the exact configured hostname (default `power-monitor.home.arpa`), and every
+browser and sensor must trust the corresponding CA. Caddy has no automatic
+public-ACME path for this LAN deployment.
+
+This OpenSSL example creates a private root and a directly signed LAN leaf on a
+trusted administrative workstation. Protect `pm-root-ca.key` offline and never
+copy it to TrueNAS:
+
+```sh
+mkdir powermeter-private-ca
+chmod 0700 powermeter-private-ca
+cd powermeter-private-ca
+umask 077
+hostname=power-monitor.home.arpa
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out pm-root-ca.key
+openssl req -x509 -new -sha256 -days 3650 -key pm-root-ca.key \
+  -subj '/CN=PowerMeter V2 Private Root CA' \
+  -addext 'basicConstraints=critical,CA:TRUE,pathlen:0' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -out tls-ca.crt
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out tls.key
+openssl req -new -sha256 -key tls.key -subj "/CN=$hostname" \
+  -addext "subjectAltName=DNS:$hostname" \
+  -addext 'keyUsage=critical,digitalSignature,keyEncipherment' \
+  -addext 'extendedKeyUsage=serverAuth' -out tls.csr
+openssl x509 -req -sha256 -days 397 -in tls.csr -CA tls-ca.crt \
+  -CAkey pm-root-ca.key -CAcreateserial -copy_extensions copy -out tls.crt
+openssl verify -CAfile tls-ca.crt -verify_hostname "$hostname" tls.crt
+```
+
+Transfer only `tls.crt`, `tls.key`, and `tls-ca.crt` to the TrueNAS secrets
+directory. Delete `tls.csr` after issuance; retain the CA certificate and root
+key according to the CA's backup policy. Install `tls-ca.crt` into each
+administrative workstation's trust store only after independently comparing
+its SHA-256 fingerprint. Provision the same CA certificate to firmware through
+the documented USB flow; never disable chain or hostname verification.
+
+Do not use an IP address with a hostname-only certificate. If the deployment
+hostname changes, issue a new leaf, update DNS, rerender/redeploy the supported
+configuration, and reprovision affected sensors.
+
+## Apply and verify access
+
+Run the release asset `prepare-host.sh` after all 13 files exist. It verifies
+formats, certificate hostname/expiry/chain/key match, asset checksums, and exact
+named ACLs before reporting success:
+
+```sh
+sudo bash ./prepare-host.sh --assets "$PWD" --hostname power-monitor.home.arpa
+```
+
+For a read-only audit that does not print values:
 
 ```sh
 base=/mnt/Apps/PowerMeterV2/secrets
-chown root:root "$base"/*
-chmod 0400 "$base"/*
-setfacl -b "$base"/*
-setfacl -m u:70:r "$base/postgres_bootstrap_password"
-setfacl -m u:70:r,u:10001:r "$base/postgres_migrator_password" "$base/postgres_api_password" "$base/postgres_worker_password"
-setfacl -m u:70:r,u:568:r "$base/postgres_backup_password" "$base/postgres_restore_password"
-setfacl -m u:10001:r "$base/session_secret" "$base/field_encryption_key" "$base/ota_manifest_key"
-setfacl -m u:568:r "$base/backup_encryption_key"
-setfacl -m u:1000:r "$base/tls.crt" "$base/tls.key" "$base/tls-ca.crt"
-getfacl --absolute-names "$base"/*
-```
-
-Use a locally trusted CA for `power-monitor.home.arpa`. The certificate SAN must contain the exact hostname, all browsers and sensors must trust the CA, and the DNS name must resolve to the TrueNAS host. Do not disable hostname or chain verification and do not use an IP address with a hostname-only certificate. Caddy intentionally has no automatic public ACME path in this LAN deployment.
-
-Verify metadata without printing contents:
-
-```sh
-base=/mnt/Apps/PowerMeterV2/secrets
-stat -c '%n %U:%G %a %s bytes' "$base"/*
+stat -c '%n %u:%g %a %s-bytes' "$base"/*
 getfacl --absolute-names "$base"/*
 openssl x509 -in "$base/tls.crt" -noout -subject -issuer -dates -ext subjectAltName
-openssl verify -CAfile "$base/tls-ca.crt" "$base/tls.crt"
+openssl verify -CAfile "$base/tls-ca.crt" -verify_hostname power-monitor.home.arpa \
+  "$base/tls.crt"
 ```
+
+Stop if the dataset is not POSIX ACL, a secret is a symbolic link, any
+unlisted identity can read a file, or certificate validation fails. Fix the
+dataset through the TrueNAS ACL editor; never compensate with `0777`, a shared
+database password, inline secrets, or disabled TLS verification.

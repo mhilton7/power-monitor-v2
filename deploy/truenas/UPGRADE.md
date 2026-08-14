@@ -1,13 +1,72 @@
-# TrueNAS upgrade
+# Upgrade PowerMeter V2 on TrueNAS
 
-Never edit only the image tag. Upgrade by replacing the entire old generated YAML with the new signed, digest-pinned release asset.
+Upgrade by replacing the complete verified YAML. Never edit only an image tag,
+accept a generic image-update suggestion, use a floating tag, or combine assets
+from two releases.
 
-1. Read both server and compatible firmware release notes. Confirm `pm-protocol/1.0.0` compatibility and migration direction.
-2. Verify the new release manifest, Compose checksum, SBOMs, and provenance. Record the current app version and all current digests from the old manifest.
-3. Trigger a fresh encrypted backup and an isolated restore test. Stop if either evidence status is not `verified`.
-4. Take ZFS snapshots of the V2 datasets as an additional recovery point. Do not snapshot or copy unencrypted secret material into a less protected dataset.
-5. Paste the new complete YAML into TrueNAS **Edit > YAML** and save. The one-shot `migrate` service runs before application services.
-6. Confirm every health check, then test owner login, SSE live updates, committed History, a duplicate ingestion retry, a rate calculation fixture, command queue delivery, firmware inventory, backup status, and diagnostics redaction.
-7. Run a new backup and restore test under the new version. Retain the old release manifest and image digests for the rollback window.
+## Before the maintenance window
 
-Database migrations must be forward-safe and tested from both a clean database and the immediately previous V2 version. There is no supported in-place upgrade from the legacy `power-monitor` database; see `docs/MIGRATION.md`.
+1. Download the new server release into a new empty directory and repeat every
+   attestation, `SHA256SUMS`, manifest, protocol, and sentinel check in
+   `INSTALLATION.md`.
+2. Read the server release notes, migration report, security report, and the
+   compatible firmware identity. Confirm the current server/firmware pairing
+   still uses `pm-protocol/1.0.0`.
+3. Retain the previous release directory, attested manifest, generated YAML,
+   `Caddyfile`, PostgreSQL role script, and all exact image digests. Record the
+   current application version and database migration revision.
+4. Run a fresh encrypted backup and isolated restore test using the commands in
+   `INSTALLATION.md`. Stop if either final status is not `verified`; record both
+   run IDs and the archive hash.
+5. In **Data Protection > Periodic Snapshot Tasks** (or **Storage > Datasets >
+   Snapshots** for a one-time snapshot), create a recursive snapshot of
+   `Apps/PowerMeterV2` named for the UTC time and old version. Ensure it remains
+   inside equally protected encrypted storage. A snapshot supplements, but
+   does not replace, the verified logical backup.
+
+## Apply the upgrade
+
+1. Schedule downtime and stop `power-meter-v2` from **Apps > Installed**.
+2. Transfer the complete new verified release directory to a temporary TrueNAS
+   path. Run its host preparation script while the app is stopped:
+
+   ```sh
+   cd /tmp/powermeter-vNEW_VERSION
+   sudo bash ./prepare-host.sh --assets "$PWD" --hostname power-monitor.home.arpa
+   ```
+
+   This atomically installs the release's Caddy configuration and role script
+   and rechecks the existing datasets, secrets, TLS, ownership, and ACLs. The
+   role script initializes only an empty PostgreSQL cluster; migrations, not
+   edits to that script, update existing clusters.
+3. In **Apps > Installed**, select `power-meter-v2`, choose **Edit**, replace the
+   entire **Custom Config** with the new generated YAML, and save. If the UI
+   keeps the app stopped after editing, start it once.
+4. Watch the service order. `postgres` must become healthy and the one-shot
+   `migrate` container must exit 0 before the other services start. Preserve
+   logs and stop the procedure if migration fails; do not repeatedly redeploy.
+
+## Prove the upgraded instance
+
+Repeat the installation health checks and require:
+
+- verified TLS chain/hostname, `/healthz`, liveness, readiness, database, and
+  PDF sandbox;
+- owner login and permission enforcement;
+- an authenticated PZEM heartbeat, SSE live update, committed History interval,
+  and idempotent retry of an already accepted sequence;
+- unchanged historical cost provenance across the upgrade and a current exact
+  rate fixture;
+- command delivery and firmware inventory;
+- redacted diagnostics;
+- successful restart of each long-running service and one full app stop/start;
+- a new encrypted backup and isolated restore test under the new version.
+
+Record the old/new tags, revisions, image digests, migration revisions, snapshot
+name, test time, backup/restore run IDs, and operator. Keep the prior release
+assets, snapshot, logical archive, and old backup key for the documented
+rollback window.
+
+Server upgrade does not authorize an automatic firmware change. Deploy OTA only
+when the server release manifest identifies a compatible signed firmware
+release and the firmware's protocol/config/storage compatibility permits it.

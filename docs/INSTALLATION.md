@@ -1,16 +1,19 @@
 # Installation
 
-Production installation uses the generated digest-pinned TrueNAS release asset. Follow `deploy/truenas/INSTALLATION.md`; it contains the exact dataset, ACL, secret, DNS, TLS, install, and health-verification sequence.
+Production installation uses the generated digest-pinned TrueNAS release asset.
+Follow `deploy/truenas/INSTALLATION.md`; it contains the exact release
+authentication, dataset creation, UID/GID and ACL, secret, DNS, TLS, Custom App
+UI, first-boot, backup/restore, upgrade, and rollback sequence. Each release
+copies those operator files and `prepare-host.sh` beside its generated YAML.
 
 ## Production availability gate
 
-As of the 2026-08-14 local candidate snapshot, no signed GitHub release, public
-GHCR manifest digest, or generated real-digest TrueNAS asset exists. The local
-Docker image IDs in `docs/TESTING.md` are host-local build identities and must
-not be substituted into production YAML. Do not install until one release
-provides the signed manifest, three public application-image digests, checksum
-and attestation set, compatible firmware release, and generated YAML. The
-checked-in `UNPUBLISHED_*` template must continue to fail at pull time.
+A repository checkout is deliberately not deployable. Local Docker image IDs in
+`docs/TESTING.md` are host-local build identities and must not be substituted
+into production YAML. Install only when one actually published release provides
+the manifest, three application-image digests, checksums and attestations,
+compatible firmware identity, generated YAML, and operator bundle. The checked-
+in `UNPUBLISHED_*` template must continue to fail at pull time.
 
 For local development only:
 
@@ -36,10 +39,14 @@ Required production facts:
 - A bill PDF is a rate-source artifact only; it can create no History or usage record.
 - The API host kernel exposes Landlock ABI 3 or newer and seccomp filter mode. API `/tmp` is a `nodev,noexec,nosuid` tmpfs; otherwise readiness and bill parsing fail closed.
 
-After the API starts, force the parser-boundary self-test and require exit zero:
+For local development Compose only, force the parser-boundary self-test and
+require exit zero:
 
 ```sh
 docker compose exec api python -m backend.app.bill_rate_import.sandbox_check
 ```
+
+On TrueNAS, use the UID-scoped `docker exec` command in the release
+`INSTALLATION.md`; do not create a second Compose project from a host shell.
 
 Do not deploy the repository template `deploy/truenas/power-monitor-v2.yaml`; explicit `UNPUBLISHED_*` sentinels make it non-deployable until the release workflow substitutes actual registry digests.

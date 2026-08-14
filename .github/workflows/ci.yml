@@ -197,7 +197,7 @@ jobs:
       - run: python -m pip install PyYAML==6.0.3
       - run: python scripts/validate_release.py
       - run: bash scripts/verify_workflows.sh
-      - run: bash -n backup/*.sh scripts/*.sh
+      - run: bash -n backup/*.sh deploy/truenas/*.sh scripts/*.sh
       - name: Parse gateway configuration with the pinned production image
         run: |
           set -Eeuo pipefail

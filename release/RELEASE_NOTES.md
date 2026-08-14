@@ -1,25 +1,53 @@
-# PowerMeter V2 release-candidate notes
+# PowerMeter V2 v0.1.0-rc.1
 
-PowerMeter V2 is a greenfield central server coordinated with the independent `power-monitor-sensor-headless` firmware repository through `pm-protocol/1.0.0`.
+PowerMeter V2 is a greenfield central server coordinated with the independent
+[`power-monitor-sensor-headless`](https://github.com/mhilton7/power-monitor-sensor-headless)
+firmware repository through `pm-protocol/1.0.0`. Authenticated PZEM-004T sensor
+evidence is the only source of live measurements, History, energy, forecasts,
+completeness, and usage-based cost. Utility-bill PDFs are rate-source documents
+only.
 
-This source state is not a published release. GHCR digests, attestations, release URLs, migration evidence from a real previous V2 release, clean/upgrade/rollback deployment results, and hardware-in-loop certification do not exist until the corresponding workflows complete. The production Compose template therefore contains intentional `UNPUBLISHED_*` sentinels and cannot be deployed accidentally.
+This file is the release-body input in source control; its presence alone does
+not prove a release workflow ran. The public prerelease and its attached
+evidence are authoritative. The tagged workflow publishes `v0.1.0-rc.1` only
+after all required nonphysical gates pass, the coordinated public firmware
+prerelease and contracts verify, every GHCR digest resolves anonymously, and
+the complete release artifact set is checksum-valid and attested.
 
-The target server and firmware repositories do not yet exist on GitHub. Their
-visibility must be verified as public, matching the verified public reference
-repository, before publication is allowed. Current `gh` authentication is
-invalid, and no signing key/tool is registered or configured, so repository
-creation, signed tags, GHCR publication, attestations, and releases are blocked.
-No unsigned substitute is permitted. The server release workflow also requires
-anonymous access to each exact GHCR image digest.
+A successfully published candidate includes:
 
-The 2026-08-14 local candidate passed the feasible server, PostgreSQL-role,
-frontend/browser, PDF-sandbox, contract, backup/restore, firmware host/fault/C,
-sanitizer, reproducible-build, and 120-day simulation gates recorded in
-`docs/TESTING.md`. Its three application Docker IDs are local-only and are not
-publishable registry identities. The earliest permissible publication remains
-prerelease `v0.1.0-rc.1` after authentication/signing and every nonphysical
-release gate, including the public digest-pinned seven-service smoke, passes.
-Stable status is independently blocked pending marked-hardware TLS, OTA
-success/rollback, physical fault/recovery, and >=72-hour soak evidence.
+- immutable multi-architecture API, frontend, and backup images in GHCR, each
+  referenced by registry-reported SHA-256 digest;
+- a complete generated `power-monitor-v2-v0.1.0-rc.1.yaml` suitable for TrueNAS
+  **Apps > Install via YAML**;
+- `release-manifest.json`, per-image records, SPDX SBOMs, security results,
+  test/migration/deployment reports, checksums, and GitHub attestations;
+- `Caddyfile`, `postgres-init-roles.sh`, the checked `prepare-host.sh`, and
+  complete install, dataset/ACL, secret/TLS, first-run, backup/restore, upgrade,
+  and rollback guides;
+- compatible firmware identity and explicit hardware-certification status.
 
-Release scope and gates are defined in `docs/RELEASE_PROCESS.md`. The legacy `mhilton7/power-monitor` application is not a supported import source; see `docs/MIGRATION.md`.
+The release workflow's nonphysical deployment smoke covers the exact seven
+services, immutable image startup, database migration and role separation, TLS
+chain/hostname, API readiness and PDF sandbox, authenticated enrollment/PZEM
+ingestion, PZEM-only History and cost, commands, SSE, upload limits, dataset
+permissions, per-service and full-stack restart, encrypted backup, and isolated
+restore. For this initial V2 release there is no previous V2 schema to upgrade
+or roll back from; legacy `power-monitor` code/database import is unsupported.
+
+This is a release candidate, not a stable or physically certified product.
+`hardware-certification-status.json` remains `pending`. Marked-unit electrical
+interface verification, certificate/hostname behavior on hardware, OTA success
+and rollback, physical fault/recovery, and a measured soak of at least 72 hours
+must produce schema-valid machine evidence before stable promotion can open.
+Simulation, host tests, a successful ESP-IDF build, or publication of this
+prerelease cannot substitute for those physical results.
+
+Review `release-manifest.json`, `RELEASE_NOTES.md`,
+`hardware-certification-status.json`, and `SHA256SUMS`, then follow the attached
+`INSTALLATION.md`. Never install the repository template containing
+`UNPUBLISHED_*`, substitute a floating image tag/local Docker ID, bypass TLS or
+PDF-sandbox readiness, or treat a utility bill as usage evidence.
+
+Release scope and gates are defined in `docs/RELEASE_PROCESS.md`; migration
+boundaries are in `docs/MIGRATION.md`.

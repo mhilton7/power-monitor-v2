@@ -43,7 +43,12 @@ def test_release_preserves_role_initializer_and_smoke_uses_role_scoped_secrets()
     promotion = (ROOT / ".github/workflows/stable-promotion.yml").read_text(encoding="utf-8")
     smoke = (ROOT / "scripts/release_deployment_smoke.sh").read_text(encoding="utf-8")
     assert "cp deploy/postgres/init-roles.sh release/assets/postgres-init-roles.sh" in release
+    assert "cp deploy/truenas/prepare-host.sh release/assets/prepare-host.sh" in release
+    assert "cp docs/FIRST_RUN.md release/assets/FIRST_RUN.md" in release
+    assert "cp docs/BACKUPS_AND_RESTORE.md release/assets/BACKUPS_AND_RESTORE.md" in release
     assert "postgres-init-roles.sh INSTALLATION.md" in release
+    assert "prepare-host.sh DATASET_ACLS.md SECRETS.md" in release
+    assert 'done < release/promotion/server-candidate/SHA256SUMS' in promotion
     assert "server-candidate/postgres-init-roles.sh" in promotion
     assert "stable/postgres-init-roles.sh" in promotion
 
@@ -70,3 +75,72 @@ def test_release_preserves_role_initializer_and_smoke_uses_role_scoped_secrets()
     assert '"$work/postgres_password"' not in smoke
     assert "backend/tests/deployment_evidence_probe.py" in smoke
     assert "backend.app.bill_rate_import.sandbox_check" in smoke
+
+
+def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
+    installation = (ROOT / "deploy/truenas/INSTALLATION.md").read_text(encoding="utf-8")
+    datasets = (ROOT / "deploy/truenas/DATASET_ACLS.md").read_text(encoding="utf-8")
+    secrets = (ROOT / "deploy/truenas/SECRETS.md").read_text(encoding="utf-8")
+    preflight = (ROOT / "deploy/truenas/prepare-host.sh").read_text(encoding="utf-8")
+    template = (ROOT / "deploy/truenas/power-monitor-v2.yaml").read_text(encoding="utf-8")
+
+    assert "Install via YAML" in installation
+    assert "gh attestation verify" in installation
+    assert "sha256sum --check --strict SHA256SUMS" in installation
+    assert "scripts/verify_release_artifacts.py" not in installation
+    assert "docker exec --user 568:568" in installation
+    assert "pm-protocol/1.0.0" in installation
+    assert "authenticated PZEM-004T readings" in installation
+
+    for dataset in (
+        "postgres",
+        "config",
+        "firmware",
+        "backups",
+        "logs",
+        "rate-source-artifacts",
+        "bill-rate-source-artifacts",
+        "caddy-data",
+        "caddy-config",
+        "secrets",
+    ):
+        assert f"Apps/PowerMeterV2/{dataset}" in datasets
+    assert "Generic/POSIX" in datasets
+    assert "0777" not in datasets
+
+    for secret in (
+        "postgres_bootstrap_password",
+        "postgres_migrator_password",
+        "postgres_api_password",
+        "postgres_worker_password",
+        "postgres_backup_password",
+        "postgres_restore_password",
+        "session_secret",
+        "field_encryption_key",
+        "ota_manifest_key",
+        "backup_encryption_key",
+        "tls.crt",
+        "tls.key",
+        "tls-ca.crt",
+    ):
+        assert secret in secrets
+        assert secret in preflight
+
+    assert 'readonly base="/mnt/Apps/PowerMeterV2"' in preflight
+    assert "sha256sum --check --strict SHA256SUMS" in preflight
+    assert "must be the mount point of its own ZFS dataset" in preflight
+    assert "getfacl -cpn" in preflight
+    assert "UNPUBLISHED_API_DIGEST" in template
+    assert "UNPUBLISHED_FRONTEND_DIGEST" in template
+    assert "UNPUBLISHED_BACKUP_DIGEST" in template
+
+
+def test_candidate_notes_describe_workflow_output_without_claiming_source_publication() -> None:
+    notes = (ROOT / "release/RELEASE_NOTES.md").read_text(encoding="utf-8")
+    normalized = " ".join(notes.split())
+    assert "presence alone does not prove a release workflow ran" in normalized
+    assert "power-monitor-v2-v0.1.0-rc.1.yaml" in normalized
+    assert "hardware-certification-status.json` remains `pending`" in normalized
+    assert "at least 72 hours" in normalized
+    assert "repositories do not yet exist" not in normalized
+    assert "Current `gh` authentication is invalid" not in normalized

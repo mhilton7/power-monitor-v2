@@ -135,7 +135,7 @@ jobs:
       - run: python scripts/validate_release.py
       - run: python scripts/validate_contracts.py
       - run: bash scripts/verify_workflows.sh
-      - run: bash -n backup/*.sh scripts/*.sh
+      - run: bash -n backup/*.sh deploy/truenas/*.sh scripts/*.sh
       - run: python -m pip_audit --format=json --output=python-audit.json
       - name: Install exact frontend dependencies and Playwright Chromium
         shell: bash

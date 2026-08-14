@@ -104,8 +104,12 @@ jobs:
           mkdir -p release/promotion/server-candidate
           gh release download "$CANDIDATE_TAG" --dir release/promotion/server-candidate
           (cd release/promotion/server-candidate && sha256sum --check --strict SHA256SUMS)
-          gh attestation verify release/promotion/server-candidate/release-manifest.json \
-            --repo "$GITHUB_REPOSITORY"
+          while read -r _ asset; do
+            asset="${asset#\*}"
+            test -f "release/promotion/server-candidate/${asset}"
+            gh attestation verify "release/promotion/server-candidate/${asset}" \
+              --repo "$GITHUB_REPOSITORY"
+          done < release/promotion/server-candidate/SHA256SUMS
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.13"

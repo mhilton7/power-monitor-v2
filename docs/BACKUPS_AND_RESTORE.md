@@ -18,7 +18,11 @@ Backup and restore-test failures generate debounced alerts.
 
 ## Manual commands
 
-Inside the backup container:
+Run scripts as the configured backup identity (`568:568`). On TrueNAS, use the
+host-shell `docker exec --user 568:568` procedure in the release
+`INSTALLATION.md`; the Apps container-shell UI can open as root and must not be
+allowed to create root-owned archive/status files. Inside an already-correct
+backup-identity shell, the commands are:
 
 ```sh
 /opt/powermeter/backup.sh
@@ -34,7 +38,13 @@ An operator-directed restore must target a new database and repeat its name in t
   --confirm RESTORE-powermeter_recovery_20260813
 ```
 
-In-place restore over the production database is refused. Validate the isolated database and cut over during a documented maintenance window. Keep the encryption key offline; loss makes archives unrecoverable. Ordinary backups contain database configuration/audit metadata but no raw secret files or retained customer bill PDFs. TrueNAS encrypted snapshots/replication are complementary, not a substitute.
+In-place restore over the production database is refused. Validate the isolated
+database, but do not repoint or hand-edit the signed production YAML. A
+schema-incompatible release must provide a tested recovery/cutover procedure;
+see `deploy/truenas/ROLLBACK.md`. Keep the encryption key offline; loss makes
+archives unrecoverable. Ordinary backups contain database configuration/audit
+metadata but no raw secret files or retained customer bill PDFs. TrueNAS
+encrypted snapshots/replication are complementary, not a substitute.
 
 Default logical retention is 35 days and is configurable. Never delete the only known-good archive during an incident.
 
