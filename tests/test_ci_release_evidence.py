@@ -339,6 +339,32 @@ def test_release_smoke_bootstrap_identity_is_schema_valid_and_consistent() -> No
         assert use in smoke
 
 
+def test_release_smoke_and_operator_tls_validation_are_strict() -> None:
+    smoke = (ROOT / "scripts/release_deployment_smoke.sh").read_text(encoding="utf-8")
+    preflight = (ROOT / "deploy/truenas/prepare-host.sh").read_text(encoding="utf-8")
+    secrets = (ROOT / "deploy/truenas/SECRETS.md").read_text(encoding="utf-8")
+
+    extension_counts = {
+        "-addext 'basicConstraints=critical,CA:TRUE,pathlen:0'": 1,
+        "-addext 'keyUsage=critical,keyCertSign,cRLSign'": 1,
+        "'basicConstraints=critical,CA:FALSE'": 1,
+        "'keyUsage=critical,digitalSignature,keyEncipherment'": 1,
+        "'extendedKeyUsage=serverAuth'": 1,
+        '"subjectAltName=DNS:${hostname}"': 1,
+        "'subjectKeyIdentifier=hash'": 2,
+        "'authorityKeyIdentifier=keyid:always'": 1,
+    }
+    for extension, expected_count in extension_counts.items():
+        assert smoke.count(extension) == expected_count
+
+    strict_smoke_verify = (
+        'openssl verify -x509_strict -purpose sslserver -CAfile "$work/tls-ca.crt"'
+    )
+    assert smoke.count(strict_smoke_verify) == 1
+    assert preflight.count("openssl verify -x509_strict -purpose sslserver") == 2
+    assert secrets.count("openssl verify -x509_strict -purpose sslserver") == 2
+
+
 def test_release_smoke_preserves_redacted_failure_diagnostics() -> None:
     smoke = (ROOT / "scripts/release_deployment_smoke.sh").read_text(encoding="utf-8")
     release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")

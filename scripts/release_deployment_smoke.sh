@@ -231,14 +231,25 @@ openssl rand -base64 32 > "$work/ota_manifest_key"
 openssl rand -base64 48 > "$work/backup_encryption_key"
 openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 2 \
   -subj '/CN=PowerMeter V2 Release Test Root' \
+  -addext 'basicConstraints=critical,CA:TRUE,pathlen:0' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -addext 'subjectKeyIdentifier=hash' \
   -keyout "$work/tls-ca.key" -out "$work/tls-ca.crt"
 openssl req -newkey rsa:3072 -sha256 -nodes -subj "/CN=${hostname}" \
   -keyout "$work/tls.key" -out "$work/tls.csr"
-printf 'subjectAltName=DNS:%s\nextendedKeyUsage=serverAuth\n' "$hostname" > "$work/tls.ext"
+printf '%s\n' \
+  'basicConstraints=critical,CA:FALSE' \
+  'keyUsage=critical,digitalSignature,keyEncipherment' \
+  'extendedKeyUsage=serverAuth' \
+  "subjectAltName=DNS:${hostname}" \
+  'subjectKeyIdentifier=hash' \
+  'authorityKeyIdentifier=keyid:always' \
+  > "$work/tls.ext"
 openssl x509 -req -sha256 -days 2 -in "$work/tls.csr" \
   -CA "$work/tls-ca.crt" -CAkey "$work/tls-ca.key" -CAcreateserial \
   -extfile "$work/tls.ext" -out "$work/tls.crt"
-openssl verify -CAfile "$work/tls-ca.crt" -verify_hostname "$hostname" "$work/tls.crt"
+openssl verify -x509_strict -purpose sslserver -CAfile "$work/tls-ca.crt" \
+  -verify_hostname "$hostname" "$work/tls.crt"
 
 for name in postgres_bootstrap_password postgres_migrator_password \
   postgres_api_password postgres_worker_password postgres_backup_password \

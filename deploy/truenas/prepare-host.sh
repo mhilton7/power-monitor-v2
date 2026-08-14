@@ -249,11 +249,14 @@ awk '
   certificate_count >= 2 { print }
 ' "$base/secrets/tls.crt" >"$chain_file"
 if [[ -s "$chain_file" ]]; then
-  openssl verify -CAfile "$base/secrets/tls-ca.crt" -untrusted "$chain_file" \
-    "$base/secrets/tls.crt" >/dev/null ||
+  openssl verify -x509_strict -purpose sslserver \
+    -CAfile "$base/secrets/tls-ca.crt" \
+    -untrusted "$chain_file" "$base/secrets/tls.crt" >/dev/null ||
     fail "TLS certificate chain does not verify against tls-ca.crt"
 else
-  openssl verify -CAfile "$base/secrets/tls-ca.crt" "$base/secrets/tls.crt" >/dev/null ||
+  openssl verify -x509_strict -purpose sslserver \
+    -CAfile "$base/secrets/tls-ca.crt" \
+    "$base/secrets/tls.crt" >/dev/null ||
     fail "TLS certificate does not verify against tls-ca.crt"
 fi
 rm -f -- "$chain_file"
