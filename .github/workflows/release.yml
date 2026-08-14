@@ -1,0 +1,446 @@
+name: Build and publish release candidate
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/mhilton7/power-monitor-v2-api
+  FRONTEND_IMAGE: ghcr.io/mhilton7/power-monitor-v2-frontend
+  BACKUP_IMAGE: ghcr.io/mhilton7/power-monitor-v2-backup
+
+jobs:
+  release-gates:
+    name: Mandatory release gates
+    uses: ./.github/workflows/release-gates.yml
+    permissions:
+      contents: read
+      security-events: write
+
+  firmware-compatibility:
+    name: Verify immutable compatible firmware release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Require the coordinated immutable firmware tag
+        shell: bash
+        env:
+          FIRMWARE_TAG: ${{ vars.COMPATIBLE_FIRMWARE_TAG }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$FIRMWARE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]
+          [[ "$FIRMWARE_TAG" == "$GITHUB_REF_NAME" ]]
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: mhilton7/power-monitor-sensor-headless
+          ref: ${{ vars.COMPATIBLE_FIRMWARE_TAG }}
+          path: firmware
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --disable-pip-version-check jsonschema==4.25.1
+      - id: firmware
+        name: Verify public tag and prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIRMWARE_TAG: ${{ vars.COMPATIBLE_FIRMWARE_TAG }}
+        run: |
+          set -Eeuo pipefail
+          revision="$(git -C firmware rev-parse HEAD)"
+          git -C firmware tag --points-at "$revision" | grep -Fx "$FIRMWARE_TAG"
+          gh api repos/mhilton7/power-monitor-sensor-headless \
+            --jq '.visibility == "public"' | grep -Fx true
+          gh release view "$FIRMWARE_TAG" \
+            --repo mhilton7/power-monitor-sensor-headless \
+            --json tagName,isDraft,isPrerelease,url > firmware-release.json
+          jq -e --arg tag "$FIRMWARE_TAG" \
+            '.tagName == $tag and .isDraft == false and .isPrerelease == true' \
+            firmware-release.json >/dev/null
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+          printf 'url=%s\n' "$(jq -er '.url' firmware-release.json)" >> "$GITHUB_OUTPUT"
+      - name: Download and checksum every firmware asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIRMWARE_TAG: ${{ vars.COMPATIBLE_FIRMWARE_TAG }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p firmware-assets
+          gh release download "$FIRMWARE_TAG" \
+            --repo mhilton7/power-monitor-sensor-headless --dir firmware-assets
+          (cd firmware-assets && sha256sum --check --strict SHA256SUMS)
+          gh attestation verify firmware-assets/firmware.bin \
+            --repo mhilton7/power-monitor-sensor-headless
+      - name: Validate firmware manifest, contracts, tests, and pending physical status
+        shell: bash
+        env:
+          FIRMWARE_TAG: ${{ vars.COMPATIBLE_FIRMWARE_TAG }}
+          FIRMWARE_REVISION: ${{ steps.firmware.outputs.revision }}
+        run: |
+          set -Eeuo pipefail
+          version="${FIRMWARE_TAG#v}"
+          image_sha256="$(sha256sum firmware-assets/firmware.bin | cut -d' ' -f1)"
+          jq -e --arg version "$version" --arg revision "$FIRMWARE_REVISION" \
+            --arg image_sha256 "$image_sha256" \
+            '.schema == "pm-firmware-release/1.0.0" and .version == $version and .git_commit == $revision and .image_sha256 == $image_sha256 and .project_name == "power-monitor-sensor-headless" and .target_chip == "esp32s3" and .board_profile == "esp32-s3-devkitc-n16r8-reference/1" and .minimum_protocol == "pm-protocol/1.0.0" and .minimum_config_version == 1 and .ota_authentication.mode == "per-device-hmac-sha256" and .hardware_certification == "pending"' \
+            firmware-assets/manifest.json >/dev/null
+          jq -e --arg tag "$FIRMWARE_TAG" --arg revision "$FIRMWARE_REVISION" \
+            --arg image_sha256 "$image_sha256" --arg server_tag "$GITHUB_REF_NAME" \
+            '.schema == "pm-release-compatibility/1.0.0" and .firmware.repository == "https://github.com/mhilton7/power-monitor-sensor-headless" and .firmware.tag == $tag and .firmware.commit == $revision and .firmware.image_sha256 == $image_sha256 and .firmware.project_name == "power-monitor-sensor-headless" and .firmware.target == "esp32s3" and .firmware.board_profile == "esp32-s3-devkitc-n16r8-reference/1" and .server.repository == "https://github.com/mhilton7/power-monitor-v2" and .server.tag == $server_tag and .contracts.device_protocol == "pm-protocol/1.0.0" and .contracts.com_protocol == "pm-com/1.0.0" and .contracts.config_schema == 1' \
+            firmware-assets/compatibility.json >/dev/null
+          jq -e '.schema == "pm-test-report/1.0.0" and .host.unit_tests > 0 and .host.unit_failures == 0 and .host.unit_errors == 0 and .host.subprocess_failures == 0 and .hardware == "pending"' \
+            firmware-assets/test-report.json >/dev/null
+          jq -e '.schema == "pm-hardware-certification-status/1.0.0" and .status == "pending" and .production_gate == "closed" and (.blockers | length > 0)' \
+            firmware-assets/hardware-certification-status.json >/dev/null
+          python scripts/validate_firmware_contract.py --server-root . --firmware-root firmware
+          jq -cn --arg firmware_tag "$FIRMWARE_TAG" \
+            --arg firmware_revision "$FIRMWARE_REVISION" \
+            --arg firmware_release_url "${{ steps.firmware.outputs.url }}" \
+            --arg firmware_image_sha256 "$image_sha256" \
+            '{schema:"pm-cross-repository-contract/1.0.0",protocol:"pm-protocol/1.0.0",firmware_tag:$firmware_tag,firmware_revision:$firmware_revision,firmware_release_url:$firmware_release_url,firmware_image_sha256:$firmware_image_sha256,host_and_contract_status:"passed",physical_certification_status:"pending"}' \
+            > firmware-compatibility-report.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-gate-firmware-compatibility
+          path: |
+            firmware-compatibility-report.json
+            firmware-release.json
+          if-no-files-found: error
+          retention-days: 90
+
+  build-images:
+    name: Publish ${{ matrix.name }} image
+    needs: [release-gates, firmware-compatibility]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: api
+            image: ghcr.io/mhilton7/power-monitor-v2-api
+            context: .
+            dockerfile: backend/Dockerfile
+          - name: frontend
+            image: ghcr.io/mhilton7/power-monitor-v2-frontend
+            context: frontend
+            dockerfile: frontend/Dockerfile
+          - name: backup
+            image: ghcr.io/mhilton7/power-monitor-v2-backup
+            context: .
+            dockerfile: backup/Dockerfile
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: meta
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
+        with:
+          images: ${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,format=long,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=PowerMeter V2 ${{ matrix.name }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - id: collect
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_NAME: ${{ matrix.name }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf '%s_digest=%s\n' "$IMAGE_NAME" "$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+          jq -cn --arg name "$IMAGE_NAME" --arg image "${{ matrix.image }}" \
+            --arg version "${GITHUB_REF_NAME#v}" --arg revision "$GITHUB_SHA" --arg digest "$IMAGE_DIGEST" \
+            '{schema:"pm-image-release/1.0.0",name:$name,image:$image,version:$version,revision:$revision,digest:$digest}' \
+            > "${IMAGE_NAME}-image.json"
+      - uses: anchore/sbom-action@28d71544de8eaf1b958d335707167c5f783590ad # v0.22.2
+        with:
+          image: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: ${{ matrix.name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: ${{ matrix.name }}.spdx.json
+          push-to-registry: true
+      - uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          version: v0.72.0
+          image-ref: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+          format: json
+          output: ${{ matrix.name }}-security.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-image-${{ matrix.name }}
+          path: |
+            ${{ matrix.name }}-image.json
+            ${{ matrix.name }}.spdx.json
+            ${{ matrix.name }}-security.json
+          if-no-files-found: error
+          retention-days: 90
+
+  deployment-smoke:
+    name: Digest-pinned deployment smoke
+    needs: [release-gates, build-images]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Install exact deployment-probe dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          -e . PyYAML==6.0.3 reportlab==4.4.3
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          pattern: release-image-*
+          path: release/smoke
+          merge-multiple: true
+      - id: digests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for component in api frontend backup; do
+            digest="$(jq -er '.digest' "release/smoke/${component}-image.json")"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            printf '%s_digest=%s\n' "$component" "$digest" >> "$GITHUB_OUTPUT"
+          done
+      - name: Render the exact deployment under test
+        run: >-
+          python scripts/render_truenas_release.py
+          --template deploy/truenas/power-monitor-v2.yaml
+          --output release/smoke/power-monitor-v2-${{ github.ref_name }}.yaml
+          --manifest release/smoke/release-manifest.json
+          --version ${{ github.ref_name }}
+          --revision ${{ github.sha }}
+          --api-digest ${{ steps.digests.outputs.api_digest }}
+          --frontend-digest ${{ steps.digests.outputs.frontend_digest }}
+          --backup-digest ${{ steps.digests.outputs.backup_digest }}
+      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Run authenticated sensor, cost, command, sandbox, and recovery checks
+        shell: bash
+        env:
+          COMPOSE_FILE: release/smoke/power-monitor-v2-${{ github.ref_name }}.yaml
+          EVIDENCE_FILE: release/smoke/deployment-test-report.json
+        run: bash scripts/release_deployment_smoke.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-gate-deployment
+          path: |
+            release/smoke/deployment-test-report.json
+            release/smoke/deployment-test-report-authenticated.json
+            release/smoke/deployment-test-report-compose-ps.jsonl
+            release/smoke/deployment-test-report-permissions.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  public-distribution:
+    name: Verify anonymous GHCR access
+    needs: build-images
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          pattern: release-image-*
+          path: release/public-check
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+      - name: Resolve every digest without registry credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          for component in api frontend backup; do
+            image="$(jq -er '.image' "release/public-check/${component}-image.json")"
+            digest="$(jq -er '.digest' "release/public-check/${component}-image.json")"
+            docker buildx imagetools inspect "${image}@${digest}" >/dev/null
+          done
+
+  assemble:
+    name: Assemble immutable release assets
+    needs: [release-gates, build-images, deployment-smoke, public-distribution]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install PyYAML==6.0.3
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          pattern: release-image-*
+          path: release/assets
+          merge-multiple: true
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          pattern: release-gate-*
+          path: release/assets
+          merge-multiple: true
+      - id: digests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for component in api frontend backup; do
+            digest="$(jq -er '.digest' "release/assets/${component}-image.json")"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            printf '%s_digest=%s\n' "$component" "$digest" >> "$GITHUB_OUTPUT"
+          done
+      - name: Preserve candidate image records for stable promotion
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for component in api frontend backup; do
+            mv "release/assets/${component}-image.json" \
+              "release/assets/candidate-${component}-image.json"
+          done
+      - name: Generate digest-pinned TrueNAS YAML and manifest
+        run: >-
+          python scripts/render_truenas_release.py
+          --template deploy/truenas/power-monitor-v2.yaml
+          --output release/assets/power-monitor-v2-${{ github.ref_name }}.yaml
+          --manifest release/assets/release-manifest.json
+          --version ${{ github.ref_name }}
+          --revision ${{ github.sha }}
+          --api-digest ${{ steps.digests.outputs.api_digest }}
+          --frontend-digest ${{ steps.digests.outputs.frontend_digest }}
+          --backup-digest ${{ steps.digests.outputs.backup_digest }}
+      - run: docker compose -f release/assets/power-monitor-v2-${{ github.ref_name }}.yaml config --quiet
+      - run: python scripts/verify_release_artifacts.py --manifest release/assets/release-manifest.json
+      - name: Refuse stale generated release files from source control
+        shell: bash
+        run: |
+          test ! -e release/assets/SHA256SUMS
+          test ! -e release/assets/RELEASE_NOTES.md
+      - name: Copy operator guides and notes
+        run: |
+          cp deploy/caddy/Caddyfile release/assets/Caddyfile
+          cp deploy/postgres/init-roles.sh release/assets/postgres-init-roles.sh
+          cp deploy/truenas/prepare-host.sh release/assets/prepare-host.sh
+          cp deploy/truenas/INSTALLATION.md release/assets/INSTALLATION.md
+          cp deploy/truenas/DATASET_ACLS.md release/assets/DATASET_ACLS.md
+          cp deploy/truenas/SECRETS.md release/assets/SECRETS.md
+          cp deploy/truenas/UPGRADE.md release/assets/UPGRADE.md
+          cp deploy/truenas/ROLLBACK.md release/assets/ROLLBACK.md
+          cp docs/FIRST_RUN.md release/assets/FIRST_RUN.md
+          cp docs/BACKUPS_AND_RESTORE.md release/assets/BACKUPS_AND_RESTORE.md
+          cp release/RELEASE_NOTES.md release/assets/RELEASE_NOTES.md
+          (cd release/assets && sha256sum -- * > SHA256SUMS)
+      - name: Require the complete release artifact set
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for file in \
+            release-manifest.json "power-monitor-v2-${GITHUB_REF_NAME}.yaml" \
+            api.spdx.json frontend.spdx.json backup.spdx.json \
+            api-security.json frontend-security.json backup-security.json \
+            candidate-api-image.json candidate-frontend-image.json candidate-backup-image.json \
+            test-report.json security-report.json migration-report.json \
+            deployment-test-report.json deployment-test-report-authenticated.json \
+            firmware-compatibility-report.json \
+            hardware-certification-status.json Caddyfile postgres-init-roles.sh INSTALLATION.md \
+            prepare-host.sh DATASET_ACLS.md SECRETS.md UPGRADE.md ROLLBACK.md \
+            FIRST_RUN.md BACKUPS_AND_RESTORE.md RELEASE_NOTES.md SHA256SUMS; do
+            test -s "release/assets/$file"
+          done
+          jq -e '.status == "passed"' release/assets/test-report.json >/dev/null
+          jq -e '.status == "passed"' release/assets/security-report.json >/dev/null
+          jq -e '.status == "passed"' release/assets/migration-report.json >/dev/null
+          jq -e '.status == "passed"' release/assets/deployment-test-report.json >/dev/null
+          jq -e '.status == "passed"' \
+            release/assets/deployment-test-report-authenticated.json >/dev/null
+          jq -e '.host_and_contract_status == "passed" and .physical_certification_status == "pending"' \
+            release/assets/firmware-compatibility-report.json >/dev/null
+          jq -e '.status == "pending"' release/assets/hardware-certification-status.json >/dev/null
+      - uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-checksums: release/assets/SHA256SUMS
+      - uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+        with:
+          prerelease: true
+          draft: false
+          generate_release_notes: false
+          body_path: release/RELEASE_NOTES.md
+          files: release/assets/*
+          fail_on_unmatched_files: true
+
+# Stable promotion is a separate manual, authorized workflow and must verify a
+# real hardware-certification evidence manifest. Tag builds remain prereleases.

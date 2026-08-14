@@ -1,0 +1,275 @@
+name: Server CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, "codex/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "24.6.0"
+
+jobs:
+  backend:
+    name: Backend, integration and migrations
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4
+        env:
+          POSTGRES_DB: powermeter
+          POSTGRES_USER: pm_bootstrap
+          POSTGRES_PASSWORD: ci-only-bootstrap-not-a-production-secret
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U pm_bootstrap -d powermeter"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PM_ENV: test
+      PM_REQUIRE_POSTGRES_TESTS: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Initialize the production PostgreSQL role split
+        shell: bash
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -Eeuo pipefail
+          role_secrets="${RUNNER_TEMP}/pm-postgres-role-secrets"
+          install -d -m 0700 "$role_secrets"
+          printf '%s\n' 'ci-only-migrator-not-production' > "$role_secrets/migrator"
+          printf '%s\n' 'ci-only-api-not-production' > "$role_secrets/api"
+          printf '%s\n' 'ci-only-worker-not-production' > "$role_secrets/worker"
+          printf '%s\n' 'ci-only-backup-not-production' > "$role_secrets/backup"
+          printf '%s\n' 'ci-only-restore-not-production' > "$role_secrets/restore"
+          chmod 0600 "$role_secrets"/*
+          docker exec "$POSTGRES_CONTAINER" install -d -o postgres -g postgres -m 0700 /tmp/pm-role-secrets
+          docker cp "$role_secrets/." "$POSTGRES_CONTAINER:/tmp/pm-role-secrets"
+          docker cp deploy/postgres/init-roles.sh "$POSTGRES_CONTAINER:/tmp/init-roles.sh"
+          docker exec "$POSTGRES_CONTAINER" chown -R postgres:postgres /tmp/pm-role-secrets /tmp/init-roles.sh
+          docker exec --user postgres \
+            --env POSTGRES_USER=pm_bootstrap --env POSTGRES_DB=powermeter \
+            --env PGHOST=/var/run/postgresql --env PGPORT=5432 \
+            --env PM_POSTGRES_MIGRATOR_PASSWORD_FILE=/tmp/pm-role-secrets/migrator \
+            --env PM_POSTGRES_API_PASSWORD_FILE=/tmp/pm-role-secrets/api \
+            --env PM_POSTGRES_WORKER_PASSWORD_FILE=/tmp/pm-role-secrets/worker \
+            --env PM_POSTGRES_BACKUP_PASSWORD_FILE=/tmp/pm-role-secrets/backup \
+            --env PM_POSTGRES_RESTORE_PASSWORD_FILE=/tmp/pm-role-secrets/restore \
+            "$POSTGRES_CONTAINER" bash /tmp/init-roles.sh
+      - name: Configure ephemeral database URL
+        shell: bash
+        env:
+          POSTGRES_PORT: ${{ job.services.postgres.ports['5432'] }}
+        run: >-
+          printf '%s\n'
+          "PM_DATABASE_URL=postgresql+asyncpg://pm_api:ci-only-api-not-production@127.0.0.1:${POSTGRES_PORT}/powermeter"
+          "PM_TEST_MIGRATOR_DATABASE_URL=postgresql+asyncpg://pm_migrator:ci-only-migrator-not-production@127.0.0.1:${POSTGRES_PORT}/powermeter"
+          "PM_MIGRATOR_DATABASE_URL=postgresql+asyncpg://pm_migrator:ci-only-migrator-not-production@127.0.0.1:${POSTGRES_PORT}/powermeter"
+          >> "$GITHUB_ENV"
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install exact Python project dependencies
+        run: python -m pip install --disable-pip-version-check -e '.[dev]'
+      - name: Lint
+        run: python -m ruff check backend worker tests scripts
+      - name: Type check
+        run: python -m mypy backend worker
+      - name: Clean database migration
+        run: PM_DATABASE_URL="$PM_MIGRATOR_DATABASE_URL" python -m alembic -c backend/alembic.ini upgrade head
+      - name: Prove least-privilege production database roles
+        shell: bash
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -Eeuo pipefail
+          expect_denied() {
+            local role="$1" password="$2" statement="$3" evidence="$4"
+            if docker exec --env "PGPASSWORD=${password}" "$POSTGRES_CONTAINER" \
+              psql --host 127.0.0.1 --username "$role" --dbname powermeter \
+              --set ON_ERROR_STOP=1 --command "$statement" > "$evidence" 2>&1; then
+              printf 'forbidden statement unexpectedly succeeded as %s\n' "$role" >&2
+              exit 1
+            fi
+            grep -Eiq 'permission denied|not permitted' "$evidence"
+          }
+          expect_denied pm_api ci-only-api-not-production \
+            'CREATE TABLE ci_api_must_not_create(id integer)' \
+            pm-api-ddl-denied.txt
+          expect_denied pm_backup ci-only-backup-not-production \
+            'UPDATE users SET email = email' \
+            pm-backup-write-denied.txt
+          expect_denied pm_bootstrap ci-only-bootstrap-not-a-production-secret \
+            'SELECT 1' pm-bootstrap-login-denied.txt
+      - name: Backend and integration tests
+        run: python -m pytest --junitxml=backend-test-results.xml
+      - name: Static deployment/release validation
+        run: python scripts/validate_release.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: backend-test-results
+          path: |
+            backend-test-results.xml
+            pm-api-ddl-denied.txt
+            pm-backup-write-denied.txt
+            pm-bootstrap-login-denied.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  frontend:
+    name: Frontend CI
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm run test -- --reporter=junit --outputFile=frontend-test-results.xml
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - name: Install Playwright Chromium runtime
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Production-build browser end-to-end tests
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: playwright-results.xml
+        run: npm run test:e2e -- --reporter=line,junit
+        working-directory: frontend
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: frontend-test-results
+          path: |
+            frontend/frontend-test-results.xml
+            frontend/playwright-results.xml
+            frontend/test-results
+          if-no-files-found: error
+          retention-days: 30
+
+  protocol-contract:
+    name: Shared protocol contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Validate protocol identifier, schemas and vectors
+        run: python scripts/validate_contracts.py
+
+  compose:
+    name: Compose and TrueNAS validation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: python -m pip install PyYAML==6.0.3
+      - run: python scripts/validate_release.py
+      - run: bash scripts/verify_workflows.sh
+      - run: bash -n backup/*.sh deploy/truenas/*.sh scripts/*.sh
+      - name: Parse gateway configuration with the pinned production image
+        run: |
+          set -Eeuo pipefail
+          install -d -m 0700 "${RUNNER_TEMP}/caddy-config-test"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj "/CN=power-monitor.home.arpa" \
+            -keyout "${RUNNER_TEMP}/caddy-config-test/tls.key" \
+            -out "${RUNNER_TEMP}/caddy-config-test/tls.crt" >/dev/null 2>&1
+          docker run --rm --env PM_HOSTNAME=power-monitor.home.arpa \
+            --volume "${{ github.workspace }}/deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            --volume "${RUNNER_TEMP}/caddy-config-test/tls.crt:/run/secrets/tls_cert:ro" \
+            --volume "${RUNNER_TEMP}/caddy-config-test/tls.key:/run/secrets/tls_key:ro" \
+            caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 \
+            caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate
+      - name: Verify fail-closed release renderer
+        run: >-
+          python scripts/render_truenas_release.py
+          --template deploy/truenas/power-monitor-v2.yaml
+          --output release/power-monitor-v2-ci.yaml
+          --manifest release/release-manifest-ci.json
+          --version 0.1.0-rc.1
+          --revision ${{ github.sha }}
+          --api-digest sha256:1111111111111111111111111111111111111111111111111111111111111111
+          --frontend-digest sha256:2222222222222222222222222222222222222222222222222222222222222222
+          --backup-digest sha256:3333333333333333333333333333333333333333333333333333333333333333
+      - run: docker compose -f release/power-monitor-v2-ci.yaml config --quiet
+      - run: python scripts/verify_release_artifacts.py --manifest release/release-manifest-ci.json
+
+  containers:
+    name: Container build (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: .
+            dockerfile: backend/Dockerfile
+          - name: frontend
+            context: frontend
+            dockerfile: frontend/Dockerfile
+          - name: backup
+            context: .
+            dockerfile: backup/Dockerfile
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: false
+          load: true
+          tags: local/power-monitor-v2-${{ matrix.name }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Inspect non-root/read-only-compatible image metadata
+        run: docker image inspect local/power-monitor-v2-${{ matrix.name }}:${{ github.sha }} > ${{ matrix.name }}-inspect.json
+      - name: Prove the API image PDF parser sandbox
+        if: matrix.name == 'api'
+        run: >-
+          docker run --rm --read-only --user 10001:10001 --cap-drop ALL
+          --security-opt no-new-privileges:true --pids-limit 64 --memory 1g
+          --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=1770
+          --tmpfs /run/secrets:rw,noexec,nosuid,nodev,size=1m,uid=10001,gid=10001,mode=0700
+          local/power-monitor-v2-api:${{ github.sha }}
+          python -m backend.app.bill_rate_import.sandbox_check
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.name }}-image-inspect
+          path: ${{ matrix.name }}-inspect.json
+          retention-days: 30

@@ -1,0 +1,27 @@
+services:
+  postgres:
+    ports: ["127.0.0.1:55432:5432"]
+
+  migrate:
+    environment:
+      PM_ENV: development
+      PM_PUBLIC_ORIGIN: http://localhost:5173
+
+  api:
+    environment:
+      PM_ENV: development
+      PM_PUBLIC_ORIGIN: http://localhost:5173
+    ports: ["127.0.0.1:8000:8000"]
+
+  worker:
+    environment:
+      PM_ENV: development
+
+  frontend:
+    ports: ["127.0.0.1:5173:8080"]
+
+  gateway:
+    profiles: [gateway]
+
+  backup:
+    profiles: [backup]

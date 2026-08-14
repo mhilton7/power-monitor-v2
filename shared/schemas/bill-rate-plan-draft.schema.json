@@ -1,0 +1,477 @@
+{
+  "$defs": {
+    "AllowedRateField": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Confidence"
+        },
+        "name": {
+          "enum": [
+            "rate_plan_name",
+            "rate_class",
+            "cca_or_direct_access_indicator",
+            "season_definition",
+            "day_type_definition",
+            "tou_period",
+            "tier_threshold",
+            "baseline_allocation_rule",
+            "baseline_credit_rate",
+            "per_kwh_rate",
+            "delivery_rate_component",
+            "generation_rate_component",
+            "recurring_fixed_charge",
+            "recurring_tax_or_surcharge_rule",
+            "recurring_credit_or_adjustment_rule",
+            "tariff_effective_date"
+          ],
+          "title": "Name",
+          "type": "string"
+        },
+        "normalized_value": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Normalized Value",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceRegion"
+        }
+      },
+      "required": [
+        "name",
+        "normalized_value",
+        "confidence",
+        "source"
+      ],
+      "title": "AllowedRateField",
+      "type": "object"
+    },
+    "ReusableChargeDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Amount"
+        },
+        "kind": {
+          "enum": [
+            "daily_fixed",
+            "monthly_fixed",
+            "per_kwh",
+            "percentage",
+            "credit"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "unit": {
+          "enum": [
+            "USD/day",
+            "USD/month",
+            "USD/kWh",
+            "percent"
+          ],
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "amount",
+        "unit"
+      ],
+      "title": "ReusableChargeDraft",
+      "type": "object"
+    },
+    "SourceRegion": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Height"
+        },
+        "page": {
+          "minimum": 1,
+          "title": "Page",
+          "type": "integer"
+        },
+        "width": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Width"
+        },
+        "x": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "X"
+        },
+        "y": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Y"
+        }
+      },
+      "required": [
+        "page"
+      ],
+      "title": "SourceRegion",
+      "type": "object"
+    },
+    "TouPeriodDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "day_type": {
+          "enum": [
+            "weekday",
+            "weekend",
+            "holiday",
+            "all"
+          ],
+          "title": "Day Type",
+          "type": "string"
+        },
+        "delivery_per_kwh": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "default": "0",
+          "title": "Delivery Per Kwh"
+        },
+        "end_minute": {
+          "exclusiveMinimum": 0,
+          "maximum": 1440,
+          "title": "End Minute",
+          "type": "integer"
+        },
+        "generation_per_kwh": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "default": "0",
+          "title": "Generation Per Kwh"
+        },
+        "name": {
+          "maxLength": 40,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "price_per_kwh": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Price Per Kwh"
+        },
+        "season": {
+          "enum": [
+            "summer",
+            "winter",
+            "all"
+          ],
+          "title": "Season",
+          "type": "string"
+        },
+        "start_minute": {
+          "exclusiveMaximum": 1440,
+          "minimum": 0,
+          "title": "Start Minute",
+          "type": "integer"
+        },
+        "tier_end_kwh": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tier End Kwh"
+        },
+        "tier_start_kwh": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "default": "0",
+          "title": "Tier Start Kwh"
+        }
+      },
+      "required": [
+        "season",
+        "day_type",
+        "name",
+        "start_minute",
+        "end_minute",
+        "price_per_kwh"
+      ],
+      "title": "TouPeriodDraft",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Closed rate-only parser output. No arbitrary metadata or consumption fields.",
+  "properties": {
+    "baseline_allocation_rule": {
+      "anyOf": [
+        {
+          "maxLength": 500,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Baseline Allocation Rule"
+    },
+    "baseline_credit_rate": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Baseline Credit Rate"
+    },
+    "cca_or_direct_access_indicator": {
+      "enum": [
+        "sce_generation",
+        "cca",
+        "direct_access",
+        "unknown"
+      ],
+      "title": "Cca Or Direct Access Indicator",
+      "type": "string"
+    },
+    "effective_end_candidate": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Effective End Candidate"
+    },
+    "effective_start_candidate": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Effective Start Candidate"
+    },
+    "fields": {
+      "items": {
+        "$ref": "#/$defs/AllowedRateField"
+      },
+      "title": "Fields",
+      "type": "array"
+    },
+    "parser_version": {
+      "maxLength": 40,
+      "minLength": 1,
+      "title": "Parser Version",
+      "type": "string"
+    },
+    "periods": {
+      "items": {
+        "$ref": "#/$defs/TouPeriodDraft"
+      },
+      "title": "Periods",
+      "type": "array"
+    },
+    "rate_class": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Rate Class",
+      "type": "string"
+    },
+    "rate_plan_name": {
+      "maxLength": 120,
+      "minLength": 1,
+      "title": "Rate Plan Name",
+      "type": "string"
+    },
+    "reusable_charges": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ReusableChargeDraft"
+      },
+      "title": "Reusable Charges",
+      "type": "array"
+    },
+    "review_required": {
+      "const": true,
+      "default": true,
+      "title": "Review Required",
+      "type": "boolean"
+    },
+    "source_artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Artifact Sha256",
+      "type": "string"
+    },
+    "summer_months": {
+      "default": [
+        6,
+        7,
+        8,
+        9
+      ],
+      "items": {
+        "type": "integer"
+      },
+      "title": "Summer Months",
+      "type": "array"
+    },
+    "utility_name": {
+      "const": "Southern California Edison",
+      "default": "Southern California Edison",
+      "title": "Utility Name",
+      "type": "string"
+    },
+    "winter_months": {
+      "default": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        10,
+        11,
+        12
+      ],
+      "items": {
+        "type": "integer"
+      },
+      "title": "Winter Months",
+      "type": "array"
+    }
+  },
+  "required": [
+    "rate_plan_name",
+    "rate_class",
+    "cca_or_direct_access_indicator",
+    "periods",
+    "fields",
+    "parser_version",
+    "source_artifact_sha256"
+  ],
+  "title": "RatePlanDraft",
+  "type": "object"
+}

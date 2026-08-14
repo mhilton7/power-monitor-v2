@@ -1,0 +1,18 @@
+title = "PowerMeter V2 Gitleaks policy"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Allow only the two published deterministic PM-HMAC-SHA256-V1 derived-key vectors"
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^shared/auth-test-vectors/hmac-sha256-v1\.json$''',
+]
+regexes = [
+  '''^(?:8c7c04e1e3615e5e9f53e30d7087e10b00c9a7a1fe1ad59289b20c6f16901a37|a85d515e3aec04f1109f32576283aafadcb57d06f90841149c0ddabc9e0397bf)$''',
+]
