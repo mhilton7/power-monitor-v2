@@ -223,6 +223,15 @@ jobs:
           python scripts/generate_release_reports.py --output test-report.json --version "$GITHUB_REF_NAME" --revision "$GITHUB_SHA" --status passed --kind test release-tests.xml test-summary.json frontend-check.log frontend-e2e.log frontend/playwright-results.xml pm-api-ddl-denied.txt pm-backup-write-denied.txt pm-bootstrap-login-denied.txt
           python scripts/generate_release_reports.py --output security-report.json --version "$GITHUB_REF_NAME" --revision "$GITHUB_SHA" --status passed --kind security python-audit.json frontend/npm-audit.json gitleaks-status.json codeql-status.json trivy-filesystem.json
           python scripts/generate_release_reports.py --output migration-report.json --version "$GITHUB_REF_NAME" --revision "$GITHUB_SHA" --status passed --kind migration migration-result.json
+      - name: Stage frontend evidence as flat release files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          install -m 0644 frontend/playwright-results.xml frontend-playwright-results.xml
+          install -m 0644 frontend/npm-audit.json frontend-npm-audit.json
+          install -d -m 0755 frontend/test-results
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -czf frontend-test-results.tar.gz -C frontend test-results
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-gate-reports
@@ -234,13 +243,13 @@ jobs:
             test-summary.json
             frontend-check.log
             frontend-e2e.log
-            frontend/playwright-results.xml
-            frontend/test-results
+            frontend-playwright-results.xml
+            frontend-npm-audit.json
+            frontend-test-results.tar.gz
             pm-api-ddl-denied.txt
             pm-backup-write-denied.txt
             pm-bootstrap-login-denied.txt
             python-audit.json
-            frontend/npm-audit.json
             gitleaks-status.json
             codeql-status.json
             trivy-filesystem.json

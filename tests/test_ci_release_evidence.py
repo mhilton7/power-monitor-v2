@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from backend.app.bill_rate_import.parser import extract_rate_plan_from_pdf
@@ -75,6 +76,46 @@ def test_release_preserves_role_initializer_and_smoke_uses_role_scoped_secrets()
     assert '"$work/postgres_password"' not in smoke
     assert "backend/tests/deployment_evidence_probe.py" in smoke
     assert "backend.app.bill_rate_import.sandbox_check" in smoke
+
+
+def test_release_gate_stages_only_flat_frontend_evidence_files() -> None:
+    gates = (ROOT / ".github/workflows/release-gates.yml").read_text(encoding="utf-8")
+    assert (
+        "install -m 0644 frontend/playwright-results.xml frontend-playwright-results.xml"
+        in gates
+    )
+    assert "install -m 0644 frontend/npm-audit.json frontend-npm-audit.json" in gates
+    assert "install -d -m 0755 frontend/test-results" in gates
+    assert "-czf frontend-test-results.tar.gz -C frontend test-results" in gates
+
+    upload = gates.split("name: release-gate-reports", maxsplit=1)[1]
+    upload = upload.split("if-no-files-found: error", maxsplit=1)[0]
+    uploaded_paths = [
+        line.strip()
+        for line in upload.splitlines()
+        if line.startswith("            ") and line.strip()
+    ]
+    assert "frontend-playwright-results.xml" in uploaded_paths
+    assert "frontend-npm-audit.json" in uploaded_paths
+    assert "frontend-test-results.tar.gz" in uploaded_paths
+    assert all(
+        re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", path) for path in uploaded_paths
+    )
+
+
+def test_release_checksums_only_flat_regular_files_and_publishes_every_asset() -> None:
+    release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "sha256sum -- *" not in release
+    assert "find . -mindepth 1 -maxdepth 1 ! -type f -print -quit" in release
+    assert '[[ "$asset" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]' in release
+    assert 'sha256sum -- "${release_assets[@]}" > SHA256SUMS' in release
+    assert "sha256sum --check --strict SHA256SUMS" in release
+    assert (
+        "frontend-playwright-results.xml frontend-npm-audit.json "
+        "frontend-test-results.tar.gz"
+        in release
+    )
+    assert "files: release/assets/*" in release
 
 
 def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:

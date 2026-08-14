@@ -392,6 +392,7 @@ jobs:
           test ! -e release/assets/RELEASE_NOTES.md
       - name: Copy operator guides and notes
         run: |
+          set -Eeuo pipefail
           cp deploy/caddy/Caddyfile release/assets/Caddyfile
           cp deploy/postgres/init-roles.sh release/assets/postgres-init-roles.sh
           cp deploy/truenas/prepare-host.sh release/assets/prepare-host.sh
@@ -403,7 +404,28 @@ jobs:
           cp docs/FIRST_RUN.md release/assets/FIRST_RUN.md
           cp docs/BACKUPS_AND_RESTORE.md release/assets/BACKUPS_AND_RESTORE.md
           cp release/RELEASE_NOTES.md release/assets/RELEASE_NOTES.md
-          (cd release/assets && sha256sum -- * > SHA256SUMS)
+      - name: Checksum only the exact flat regular release assets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd release/assets
+          unexpected="$(find . -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+          if [[ -n "$unexpected" ]]; then
+            printf 'release asset must be a top-level regular file: %s\n' "$unexpected" >&2
+            exit 1
+          fi
+          mapfile -t release_assets < <(
+            find . -mindepth 1 -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' |
+              LC_ALL=C sort
+          )
+          [[ "${#release_assets[@]}" -gt 0 ]]
+          for asset in "${release_assets[@]}"; do
+            [[ "$asset" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+            [[ -s "$asset" ]]
+          done
+          sha256sum -- "${release_assets[@]}" > SHA256SUMS
+          [[ "$(wc -l < SHA256SUMS)" -eq "${#release_assets[@]}" ]]
+          sha256sum --check --strict SHA256SUMS
       - name: Require the complete release artifact set
         shell: bash
         run: |
@@ -414,6 +436,7 @@ jobs:
             api-security.json frontend-security.json backup-security.json \
             candidate-api-image.json candidate-frontend-image.json candidate-backup-image.json \
             test-report.json security-report.json migration-report.json \
+            frontend-playwright-results.xml frontend-npm-audit.json frontend-test-results.tar.gz \
             deployment-test-report.json deployment-test-report-authenticated.json \
             firmware-compatibility-report.json \
             hardware-certification-status.json Caddyfile postgres-init-roles.sh INSTALLATION.md \
