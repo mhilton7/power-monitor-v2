@@ -34,7 +34,7 @@ On the administrative workstation, set the exact published tag and download
 all assets into a new empty directory. Do not mix files from different tags:
 
 ```sh
-tag=v0.1.0-rc.1
+tag=v0.1.0-rc.2
 release_dir="powermeter-${tag}"
 test ! -e "$release_dir"
 mkdir "$release_dir"
@@ -105,7 +105,8 @@ Do not open an SMB/NFS share on the PowerMeter datasets just to transfer these
 public assets. In **System > Shell**, prepare and verify the host:
 
 ```sh
-cd "/tmp/powermeter-v0.1.0-rc.1"
+tag=v0.1.0-rc.2
+cd "/tmp/powermeter-${tag}"
 sudo bash ./prepare-host.sh --assets "$PWD" --hostname power-monitor.home.arpa
 sudo ss -H -ltn 'sport = :8443'
 ```

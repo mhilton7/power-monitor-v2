@@ -1,8 +1,10 @@
 # Roll back PowerMeter V2 on TrueNAS
 
-Rollback is release-specific. Read the failed release's migration report before
-changing the app. An old image is safe only when that report explicitly says
-the previous application supports the current database schema.
+Rollback is release-specific and must be proved independently of forward
+migration. A migration report that starts from the previous release and reaches
+the current release proves only that forward upgrade path. It does not run old
+binaries against the post-upgrade database, prove backward schema
+compatibility, or authorize replacing the current YAML with old images.
 
 ## Preserve evidence first
 
@@ -15,22 +17,35 @@ the previous application supports the current database schema.
 4. Record the failed and previous release tags, revisions, manifests, image
    digests, migration revisions, ZFS snapshot, backup run IDs, and UTC times.
 
-## Backward-compatible application rollback
+## Restored rollback only
 
-When the migration report explicitly permits the previous app on the current
-schema:
+A direct application-only rollback is not authorized for v0.1.0-rc.2. The
+previous YAML and images may be used only after an explicit, release-specific
+recovery test validates an isolated clone or restore of the matching
+pre-upgrade database snapshot or verified encrypted backup. The tested
+procedure must bind that restored database revision to the previous release
+tag, revision, complete YAML, and exact image digests. It must never attach old
+binaries to the current post-upgrade database.
+
+After that restore/cutover procedure has produced passing evidence:
 
 1. Stop `power-meter-v2` in **Apps > Installed**.
 2. Reverify the retained previous release's attestations and `SHA256SUMS`.
-3. Run the previous release's `prepare-host.sh` against its complete asset
-   directory while the app is stopped. This restores its exact Caddy
-   configuration and revalidates permissions without changing secret values.
-4. Choose **Edit**, replace the complete Custom Config with the previous
-   generated digest-pinned YAML, save, and start once if necessary.
-5. Require PostgreSQL health, migration exit 0, HTTPS readiness, login, signed
+3. Preserve the current production database and datasets unchanged. Clone the
+   recorded pre-upgrade ZFS snapshot into an isolated recovery target or
+   restore the matching verified encrypted backup there; never roll the live
+   dataset backward in place.
+4. Validate the restored schema revision, table counts, authentication, device
+   cursors, History, cost provenance, and secret/permission bindings before it
+   accepts sensor traffic.
+5. Run the previous release's `prepare-host.sh` against its complete asset
+   directory while the app is stopped, then use the release-specific procedure
+   to bind the complete previous digest-pinned YAML to the validated restored
+   database target.
+6. Require PostgreSQL health, migration exit 0, HTTPS readiness, login, signed
    PZEM heartbeat, SSE, committed History, idempotent retry, cost provenance,
    commands, alerts, diagnostics redaction, and backup/restore evidence.
-6. Re-enable ingestion only after confirming server acknowledgements did not
+7. Re-enable ingestion only after confirming server acknowledgements did not
    regress. Document the result and retain failed-version evidence.
 
 ## Schema-incompatible recovery
@@ -57,9 +72,15 @@ Until then:
 5. Perform a reviewed maintenance-window cutover only under that release's
    tested recovery procedure.
 
-For the initial release candidate there is no prior V2 version to roll back to;
-reinstalling legacy `power-monitor` code or importing its database wholesale is
-not supported.
+For v0.1.0-rc.2, v0.1.0-rc.1 is the prior V2 candidate. Rc.2 adds no Alembic
+migration and retains `pm-protocol/1.0.0`, but those facts do not prove that
+rc.1 binaries support a database touched by rc.2. The rc.1-to-rc.2 release gate
+proves only forward upgrade. Rollback compatibility remains unproven, and no
+rc.1 image/YAML rollback is authorized without the separately validated,
+matching pre-upgrade database restore described above. The GitHub-hosted rc.2
+clean-deployment smoke records `not_exercised_github_hosted_smoke`; do not call
+rollback passed without that separate execution evidence. Reinstalling legacy
+`power-monitor` code or importing its database wholesale remains unsupported.
 
 Do not roll firmware back solely to match a server. Its signed manifest must
 declare compatible protocol, configuration, storage, bootloader, and partition
