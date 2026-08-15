@@ -80,7 +80,7 @@ physical-hardware gates.
 | A-09 | High | Immutable rc.3 normal installation required privileged TrueNAS shell preparation, contrary to the requested UI/SMB workflow. | `deploy/truenas/*`, production YAML, API image, renderer/validators, release workflow/smoke, deployment tests/docs | Repaired in source; external validation pending. The next candidate uses nine UI-created POSIX datasets, an exact 13-file temporary authenticated SMB stage, a network-isolated one-shot initializer, then migration and six long-running services. No normal install step requires SSH, shell, or a container console. | No current target-TrueNAS clean install/upgrade/restart/restore execution exists. Source YAML contains deliberate `UNPUBLISHED_*` image sentinels and is not installable. |
 | A-10 | High | The first audit runner inherited arbitrary `PM_*` endpoints and Docker context and started a disposable migration flow without an explicit integration choice. That could target a live database or remote Docker daemon. | `scripts/Invoke-PowerMeterFullAudit.ps1`, runner tests | Repaired and exercised locally. The runner removes inherited `PM_*`, supplies runner-owned test values, proves a local Docker named pipe/socket, and requires `-RunDisposableIntegration` before image builds, Compose startup, or migration. Default execution is read-only except explicit `-ApplySafeFixes`. Retained strict run `20260815T123259Z-f983565e` passed the explicit disposable path and removed its exact resources. | The retained run is local evidence; remote CI and target deployment safety remain separate gates. |
 | A-11 | Medium | Release smoke pre-created initializer-owned subdirectories and used certificates shorter than the initializer's seven-day horizon, so it could neither prove first-run ownership repair nor pass its own TLS policy. The Windows stager could also leave files moved by a failed invocation. | `scripts/release_deployment_smoke.sh`, `initialize_host.py`, `Stage-PowerMeterTrueNAS.ps1`, deployment tests | Repaired in source. Smoke creates only dataset roots; initializer creates children. Test certificates use 30 days. Leaf and full chain are checked now and seven days ahead. Stager failure removes only files moved by that invocation. The disposable application stack also completed locally. | Full release-specific smoke and real SMB/TrueNAS execution are pending. |
-| A-12 | Medium | Local Compose parsed an unquoted flow-style `tmpfs` value incorrectly, and production log subdirectories did not align cleanly with image/runtime ownership. | `compose.yaml`, `compose.dev.yaml`, gateway/API Dockerfiles, Caddy config, deployment tests | Repaired and exercised locally. Both local and TrueNAS Compose configurations validated; backend, frontend, gateway, and backup completed cache-only builds; the disposable API, database, PDF sandbox, worker, and frontend became healthy before exact cleanup. | Signed candidate images/YAML and target TrueNAS runtime remain pending. |
+| A-12 | Medium | Local Compose parsed an unquoted flow-style `tmpfs` value incorrectly, and production log subdirectories did not align cleanly with image/runtime ownership. | `compose.yaml`, `compose.dev.yaml`, gateway/API Dockerfiles, Caddy config, deployment tests | Repaired and exercised locally. Both local and TrueNAS Compose configurations validated; backend, frontend, gateway, and backup completed cache-only builds; the disposable API, database, PDF sandbox, worker, and frontend became healthy before exact cleanup. | Tagged candidate images/YAML and target TrueNAS runtime remain pending. |
 | A-13 | Medium | Current workflows did not format/type-check the new Linux initializer or parse the Windows stager; the secret-scan action was on its older Node runtime generation. | `.github/workflows/*.yml`, `pyproject.toml`, workflow/dependency tests | Repaired in source. CI adds initializer Ruff/format/Linux-mypy, PowerShell parse, asset comparison, and immutable gitleaks v3 pin; PyYAML moves from 6.0.2 to 6.0.3. Local dependency and strict scan/diff-integrity gates passed. | No GitHub Actions run exists for the uncommitted repair branch; remote CodeQL, container scanning, SBOM, provenance, and release gates remain pending. |
 | A-14 | External | Firmware simulation and prior prerelease evidence cannot certify the actual marked ESP32-S3/PZEM/SD unit. | Nested firmware tests, HIL schema, `.gitattributes`, firmware/release docs | No runtime protocol change was made; `pm-protocol/1.0.0` remains fixed. Added LF text normalization and corrected the documented host-test count from 55 to 59. | Marked-unit identity, electrical, outage, TLS/HMAC, SD/power-loss, OTA rollback, USB recovery, and continuous 72-hour soak evidence are absent; stable promotion remains blocked. |
 
@@ -135,10 +135,35 @@ PowerShell AST parsing, actionlint, and Bash syntax were also green. These are
 subsystem results, not one combined whole-repository test count. Historical
 rc.3 CI/release/backup evidence remains valid only for rc.3.
 
-The following gates are deliberately **not** marked passed here: the tagged
+At the audit snapshot, the following gates were deliberately **not** marked
+passed here: the tagged
 public-rc.3 forward upgrade; remote GitHub CI/security/release workflows; signed
 rc.4 image and installable-YAML publication; target TrueNAS/ZFS execution;
 release-specific rollback restore; complete live SCE evidence; Firefox, WebKit,
 and real assistive-technology coverage; and marked-unit hardware-in-loop
 certification. The local disposable run is not full signed-release smoke. See
 `VALIDATION_MATRIX.md` and `KNOWN_LIMITATIONS.md`.
+
+## Post-audit rc.4 outcome and rc.5 recovery boundary
+
+The audited server branch was merged, and the valid signed server
+`v0.1.0-rc.4` tag remains immutable. Tagged workflow run
+[`31893354667`](https://github.com/mhilton7/power-monitor-v2/actions/runs/31893354667)
+passed the workflow's named `Mandatory release gates` job, published all four
+multi-architecture images, and
+passed anonymous GHCR access. Its digest-pinned deployment smoke failed
+deterministically when `docker compose start` traversed dependencies and
+restarted the completed initializer. Release assembly was skipped; rc.4 has no
+server GitHub Release or generated YAML and is not an installation authority.
+Public server rc.3 remains the install authority and migration predecessor.
+
+The rc.5 recovery source changes no application behavior, protocol, or
+migration. It restarts only the six exact captured runtime container IDs,
+proves each ID and health state remain stable, and preserves the initializer's
+ID, successful exit, and completion time. A fixed allowlisted assertion ID is
+added to redacted failure evidence. Runtime/package/image identities advance to
+rc.5, and the official generator produces OpenAPI SHA-256
+`66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591`
+under unchanged `pm-protocol/1.0.0` and migration head `20260815_0011`.
+Public firmware rc.4 is historical; a distinct coordinated firmware rc.5
+target remains required before a server rc.5 tag.

@@ -34,7 +34,7 @@ DIGEST_C = "sha256:" + "3" * 64
 DIGEST_D = "sha256:" + "4" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
-VERSION = "0.1.0-rc.4"
+VERSION = "0.1.0-rc.5"
 
 
 @pytest.fixture
@@ -213,6 +213,7 @@ def _write_failure_evidence(prefix: Path) -> None:
         "completed_at": "2026-08-14T12:00:00Z",
         "status": "failed",
         "exit_code": 1,
+        "failed_assertion": "outside_instrumented_recovery",
         "diagnostics": FAILURE_DIAGNOSTICS,
     }
     _write(
@@ -312,6 +313,15 @@ def test_deployment_evidence_validator_accepts_only_complete_exact_sets(
             expected_version=VERSION,
             expected_revision="b" * 40,
         )
+
+    unsafe_assertion = evidence_dir / "unsafe-assertion-report"
+    _write_failure_evidence(unsafe_assertion)
+    unsafe_assertion_path = unsafe_assertion.with_name(unsafe_assertion.name + "-failure.json")
+    unsafe_report = json.loads(unsafe_assertion_path.read_text(encoding="utf-8"))
+    unsafe_report["failed_assertion"] = "password=arbitrary diagnostic text"
+    _write(unsafe_assertion_path, json.dumps(unsafe_report))
+    with pytest.raises(EvidenceError, match="fixed allowlist"):
+        _validate(unsafe_assertion, outcome="failure")
 
 
 @pytest.mark.parametrize("mutation", ["unsafe_extra", "duplicate", "blank"])

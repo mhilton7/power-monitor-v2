@@ -24,15 +24,18 @@ readonly failure_evidence="${EVIDENCE_FILE%.json}-failure.json"
 readonly failure_compose_ps="${EVIDENCE_FILE%.json}-failure-compose-ps.jsonl"
 readonly failure_health="${EVIDENCE_FILE%.json}-failure-health.jsonl"
 readonly failure_logs="${EVIDENCE_FILE%.json}-failure-log-events.jsonl"
+readonly -a runtime_service_names=(postgres api worker frontend gateway backup)
+failed_assertion="outside_instrumented_recovery"
 
 compose() {
   PM_HOSTNAME="$hostname" docker compose -f "$COMPOSE_FILE" "$@"
 }
 
 wait_healthy() {
-  local service="$1" container_id attempt
+  local service="$1" expected_container_id="${2:-}" container_id attempt
   container_id="$(compose ps --quiet "$service")"
   [[ "$container_id" =~ ^[0-9a-f]{64}$ ]]
+  [[ -z "$expected_container_id" || "$container_id" == "$expected_container_id" ]]
   for attempt in {1..72}; do
     if docker inspect "$container_id" | jq -e \
       '.[0].State.Running == true and .[0].State.Health.Status == "healthy"' >/dev/null; then
@@ -168,6 +171,7 @@ Path(sys.argv[1]).write_text(
             "completed_at": sys.argv[4],
             "status": "failed",
             "exit_code": int(sys.argv[5]),
+            "failed_assertion": sys.argv[6],
             "diagnostics": [
                 "allowlisted service log event timeline",
                 "Compose service state",
@@ -180,7 +184,7 @@ Path(sys.argv[1]).write_text(
     encoding="utf-8",
 )
 ' "$failure_evidence" "${GITHUB_REF_NAME:-unknown}" "${GITHUB_SHA:-unknown}" \
-    "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$exit_code"
+    "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$exit_code" "$failed_assertion"
 }
 
 cleanup() {
@@ -342,15 +346,39 @@ docker inspect "$initializer_id" | jq -e \
 compose run --rm --no-deps migrate
 [[ "$(compose ps --all --quiet initialize)" == "$initializer_id" ]]
 [[ "$(docker inspect --format '{{.State.FinishedAt}}' "$initializer_id")" == "$initializer_finished_at" ]]
-compose stop postgres api worker frontend gateway backup
-compose start postgres api worker frontend gateway backup
-for service in postgres api worker frontend gateway backup; do
-  wait_healthy "$service"
+declare -A runtime_container_ids=()
+failed_assertion="capture_runtime_container_id"
+for service in "${runtime_service_names[@]}"; do
+  container_id="$(compose ps --quiet "$service")"
+  [[ "$container_id" =~ ^[0-9a-f]{64}$ ]]
+  runtime_container_ids["$service"]="$container_id"
 done
+[[ "${#runtime_container_ids[@]}" -eq "${#runtime_service_names[@]}" ]]
+failed_assertion="runtime_container_stop"
+compose stop "${runtime_service_names[@]}"
+for service in "${runtime_service_names[@]}"; do
+  expected_container_id="${runtime_container_ids[$service]}"
+  failed_assertion="runtime_container_stopped"
+  [[ "$(compose ps --all --quiet "$service")" == "$expected_container_id" ]]
+  docker inspect "$expected_container_id" | jq -e \
+    '.[0].State.Status == "exited" and .[0].State.Running == false' >/dev/null
+  failed_assertion="runtime_container_identity_before_direct_start"
+  [[ "$(compose ps --all --quiet "$service")" == "$expected_container_id" ]]
+  failed_assertion="runtime_container_direct_start"
+  docker start "$expected_container_id" >/dev/null
+  failed_assertion="runtime_container_identity_after_direct_start"
+  [[ "$(compose ps --all --quiet "$service")" == "$expected_container_id" ]]
+  failed_assertion="runtime_container_healthy_after_direct_start"
+  wait_healthy "$service" "$expected_container_id"
+done
+failed_assertion="initializer_id_unchanged_after_runtime_restart"
 [[ "$(compose ps --all --quiet initialize)" == "$initializer_id" ]]
+failed_assertion="initializer_exited_zero_after_runtime_restart"
 docker inspect "$initializer_id" | jq -e \
   '.[0].State.Status == "exited" and .[0].State.ExitCode == 0' >/dev/null
+failed_assertion="initializer_finished_at_unchanged_after_runtime_restart"
 [[ "$(docker inspect --format '{{.State.FinishedAt}}' "$initializer_id")" == "$initializer_finished_at" ]]
+failed_assertion="outside_instrumented_recovery"
 
 curl "${curl_common[@]}" "$endpoint/healthz" >/dev/null
 for evidence in last-backup-attempt last-successful-backup \

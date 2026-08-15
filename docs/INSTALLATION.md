@@ -6,8 +6,9 @@ authentication, dataset creation, UID/GID and ACL, secret, DNS, TLS, Custom App
 UI, first-boot, backup/restore, upgrade, and rollback sequence. Each release
 copies those operator files, the Windows SMB staging helper, and the auditable
 one-shot initializer source beside its generated YAML. The no-shell initializer
-model begins with the complete signed v0.1.0-rc.4 release asset set; do not
-combine it with rc.3 assets or any other release.
+model begins with a complete signed v0.1.0-rc.5 release asset set; do not
+combine it with rc.3 assets or any other release. The signed server rc.4 tag
+has no GitHub Release or YAML and is not an installation source.
 
 ## Production availability gate
 

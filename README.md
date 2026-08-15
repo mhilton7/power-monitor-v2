@@ -60,8 +60,8 @@ For a production install, follow the single end-to-end
 [TrueNAS guide](deploy/truenas/INSTALLATION.md); the matching GitHub release
 also includes that guide, its dataset/secret companions, the tracked Windows
 SMB staging helper, and the auditable image-embedded initializer source.
-The no-shell flow is the coordinated rc.4 release contract; never combine its
-source-tree docs with rc.3 assets. [docs/INSTALLATION.md](docs/INSTALLATION.md)
+The no-shell flow is the coordinated post-rc.3 release contract; never combine
+its source-tree docs with rc.3 assets. [docs/INSTALLATION.md](docs/INSTALLATION.md)
 separates this release path from local development. This product does not switch
 loads. Mains wiring and CT installation must be performed de-energized and by
 a qualified person in accordance with the equipment instructions and local
@@ -70,10 +70,14 @@ code. The current release candidate is not physically certified; see
 
 ## Release state
 
-The latest prior published candidate is
+The current public server installation authority is
 [`v0.1.0-rc.3`](https://github.com/mhilton7/power-monitor-v2/releases/tag/v0.1.0-rc.3).
-The audited source candidate is `v0.1.0-rc.4`; it is installable only if its
-signed tagged workflow publishes the complete matching asset set.
+The valid signed server `v0.1.0-rc.4` tag is historical, but its deterministic
+deployment-smoke failure skipped release assembly; it has no server GitHub
+Release or generated YAML and is not installable. The audited source candidate
+is now `v0.1.0-rc.5`; it is installable only if its signed tagged workflow
+publishes the complete matching asset set after coordinated firmware rc.5 is
+public and verified.
 Stable release remains fail-closed until the hardware identity, electrical
 interface, TLS, OTA rollback, outage recovery, and 72-hour soak gates have
 machine-readable evidence. A source checkout is never an install artifact:

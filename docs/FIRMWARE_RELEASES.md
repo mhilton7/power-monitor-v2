@@ -37,7 +37,7 @@ dependency, memory, stack, test, migration, and release reports. These preserved
 local values are historical test evidence, not substitutes for the public
 rc.1 release's attached `SHA256SUMS`, attestations, or downloadable assets.
 
-## Historical rc.2 failure and coordinated public rc.3
+## Historical rc.2 failure and coordinated public rc.3/rc.4 firmware
 
 The signed, public firmware
 [`v0.1.0-rc.2`](https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.2)
@@ -55,13 +55,24 @@ The distinct coordinated public firmware rc.3 release names server
 It retains `pm-protocol/1.0.0`; the server rc.3 release gate verified its public
 contracts, checksums, attestations, and cross-links before publication.
 
-Candidate firmware rc.4 is a release-identity and traceability update for the
-audited server rc.4 source. It must name server `v0.1.0-rc.4` and declare the
-exact generated OpenAPI SHA-256
+The signed, public firmware
+[`v0.1.0-rc.4`](https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.4)
+is immutable historical evidence for the server rc.4 attempt. It names server
+`v0.1.0-rc.4` and declares the exact generated OpenAPI SHA-256
 `f9b936468f5a696a0bee3e04edda021c12ab81dddc091cbb307face0be1de7b1`.
 Firmware runtime behavior and `pm-protocol/1.0.0` remain unchanged. Firmware
-rc.4 must be signed, published, and independently verified before the matching
-server tag is created; neither public rc.3 release may be rewritten.
+rc.4 was signed, published, and independently verified before the matching
+server tag was created. The server rc.4 run later failed deterministic
+deployment smoke, skipped assembly, and produced no server Release or YAML;
+that outcome does not invalidate or relabel the firmware release.
+
+Candidate firmware rc.5 is the required release-identity and traceability
+update for server rc.5. It must name server `v0.1.0-rc.5` and declare generated
+OpenAPI SHA-256
+`66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591`.
+It must be signed, published, and independently verified before the server rc.5
+tag is created. Neither the public rc.3 nor rc.4 firmware release may be moved,
+rewritten, or substituted for rc.5.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

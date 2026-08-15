@@ -8,11 +8,13 @@ Repository visibility is **public**, matching the verified public reference repo
 
 Server tags use semantic `vMAJOR.MINOR.PATCH` (prerelease suffix allowed). Breaking device changes require a coordinated protocol bump in both repositories; otherwise the manifest remains `pm-protocol/1.0.0` and names compatible firmware.
 
-`v0.1.0-rc.3` is the current immutable public server prerelease and migration
-predecessor. `v0.1.0-rc.4` is the coordinated source candidate for the audited
-repairs, migration head `20260815_0011`, and eight-service no-shell initializer. It
-may be published only after every automated gate passes and the exact matching
-firmware rc.4 release is public and verified.
+`v0.1.0-rc.3` is the current immutable public server installation authority and
+migration predecessor. The valid signed server `v0.1.0-rc.4` tag is historical
+failed prepublication evidence, not a Release. `v0.1.0-rc.5` is the coordinated
+source candidate for the audited repairs, migration head `20260815_0011`, and
+eight-service no-shell initializer. It may be tagged only after the exact
+matching firmware rc.5 release is public and verified, and it may be published
+only after every automated gate passes.
 Stable publication remains blocked until physical hardware, TLS,
 OTA-install/rollback, and soak certification from the actual marked unit
 passes.
@@ -51,12 +53,28 @@ It was published only after the distinct coordinated public firmware rc.3
 release declared that exact hash and named server rc.3. Public rc.1 and
 firmware rc.2 remain historical; rc.2 server publication never occurred.
 
-Candidate rc.4 source adds the no-shell eight-service initializer/stager,
+The signed server rc.4 tag targets the exact audited merge and remains
+immutable. Tagged run
+[`31893354667`](https://github.com/mhilton7/power-monitor-v2/actions/runs/31893354667)
+passed the workflow's named `Mandatory release gates` job, all four
+multi-architecture image jobs, and the
+anonymous GHCR access gate. Its digest-pinned deployment smoke failed
+deterministically when `docker compose start` traversed dependencies and
+restarted the completed one-shot initializer. Release assembly was skipped;
+there is no server rc.4 GitHub Release, generated rc.4 YAML, or install
+authority. Public firmware rc.4 is valid historical evidence for that attempt,
+but it cannot be relabeled as the coordinated rc.5 target.
+
+Candidate rc.5 source carries forward the no-shell eight-service initializer/stager,
 home-isolated APIs and UI, rate-source durability, bill-document non-retention,
-and migration chain through `20260815_0011`. The generated rc.4 OpenAPI SHA-256 is
-`f9b936468f5a696a0bee3e04edda021c12ab81dddc091cbb307face0be1de7b1`.
+and migration chain through `20260815_0011`. It repairs only the deterministic
+recovery check by restarting the exact captured runtime container IDs without
+Compose dependency traversal and by recording a fixed allowlisted failure
+assertion. The generated rc.5 OpenAPI SHA-256 is
+`66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591`;
+the shared protocol remains `pm-protocol/1.0.0`.
 The checked-in YAML retains `UNPUBLISHED_*` sentinels until its tagged workflow
-supplies exact registry digests. Rc.4 must pass clean
+supplies exact registry digests. Rc.5 must pass clean
 dependency/backend/PostgreSQL gates, security scans, public package
 verification, first-run plus idempotent initializer smoke, checksums, and
 attestations. Its explicit migration chain advances to `20260815_0011`; the
@@ -72,8 +90,9 @@ published non-draft same-major public Release other than the current tag, then
 requires that selected tag to be semantically older and to have verified
 signed-tag ancestry. It fails closed if publication-date ordering selects a
 same-major tag that is not older; it does not search past it for a
-`latest lower same-major non-draft public release`. For rc.4, the public metadata
-therefore selects rc.3: the predecessor is public rc.3, never failed rc.2.
+`latest lower same-major non-draft public release`. For rc.5, the public metadata
+therefore selects rc.3: the predecessor is public rc.3, never failed rc.2 or
+non-released rc.4.
 Historical rc.3 evidence proved only forward rc.1-to-rc.3 upgrade. Rollback
 remains separately unproven and its
 smoke record is `not_exercised_github_hosted_smoke`.
@@ -95,7 +114,7 @@ The tagged workflow uses `GITHUB_TOKEN` with job-minimal permissions to build AP
 
 `scripts/render_truenas_release.py` accepts only semantic version, full revision, and four syntactically valid nonzero digests. It replaces every fail-closed sentinel, verifies exactly eight services, exact initializer host mounts/capabilities/no-network gating, runtime secret-directory isolation, digest pinning, network/port/hardening constraints, and emits `power-monitor-v2-<version>.yaml` plus `release-manifest.json`. `scripts/verify_release_artifacts.py` verifies checksum and invariants.
 
-Release assets include manifest, digest-pinned YAML, SBOMs/attestations, test/security/migration reports, checksums, installation/upgrade/rollback guides, the tracked Windows SMB staging helper, the auditable initializer source embedded in the API image, and release notes. The GitHub Release cross-links the compatible firmware release. This eight-service/no-shell model is post-rc.3 source work and must ship under a new immutable coordinated tag; public rc.3 remains historical and is never rewritten.
+Release assets include manifest, digest-pinned YAML, SBOMs/attestations, test/security/migration reports, checksums, installation/upgrade/rollback guides, the tracked Windows SMB staging helper, the auditable initializer source embedded in the API image, and release notes. The GitHub Release cross-links the compatible firmware release. This eight-service/no-shell model is post-rc.3 source work and must ship under a new immutable coordinated rc.5 tag; public rc.3 and failed rc.4 remain historical and are never rewritten.
 
 ## Stable prohibition and promotion
 

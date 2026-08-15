@@ -1,7 +1,8 @@
 # Known limitations
 
-These limitations are active at the time of the 2026-08-15 audit. Historical
-rc.3 evidence is not used to close a post-rc.3 limitation.
+These limitations are active for rc.5 preparation after the 2026-08-15 audit.
+Historical rc.3 evidence and the failed-publication rc.4 run are not used to
+close an rc.5 limitation.
 
 ## 1. The repaired checkout is not an installable release
 
@@ -10,26 +11,29 @@ rc.3 evidence is not used to close a post-rc.3 limitation.
   immutable and does not contain the no-shell initializer or Windows stager.
 - **Reason:** A release YAML is valid only after four images are built, scanned,
   published, attested, and substituted by the coordinated release workflow.
-  The regenerated server OpenAPI hash also differs from immutable rc.3
-  compatibility metadata and requires the firmware-first coordinated rc.4
-  freeze; rc.3 metadata cannot be rewritten.
+  Server rc.4 completed the image and anonymous-access gates, but deterministic
+  deployment smoke failed and assembly was skipped, so those images have no
+  Release/YAML authority. The rc.5 OpenAPI hash requires a distinct
+  firmware-first coordinated rc.5 freeze; rc.3 or rc.4 metadata cannot be
+  rewritten.
 - **User impact:** Pasting the source-tree YAML cannot install this repair.
 - **Workaround:** Continue using rc.3 only with its attached rc.3 assets and
   instructions; do not mix rc.3 with current source files.
 - **Recommended next repair:** Finish all local gates, coordinate the unchanged
   `pm-protocol/1.0.0` metadata with firmware, and publish a new signed candidate
-  (planned rc.4) without moving or replacing rc.3.
+  (planned rc.5) without moving or replacing rc.3 or rc.4.
 
-## 2. Tagged predecessor and target PostgreSQL gates are pending
+## 2. Rc.5 tagged predecessor and target PostgreSQL gates are pending
 
 - **Exact limitation:** Local PostgreSQL 17 evidence now proves the migration
   chain through `20260815_0011`, an 0011-to-0010-to-head exercise, all 20
   rate-workflow concurrency/direct-SQL cases, and the full backend suite at 135
-  passed with 3 expected skips. It is not the tagged release gate from the
-  exact public rc.3 database artifact and is not target-TrueNAS execution.
+  passed with 3 expected skips. Server rc.4's exact tagged public-rc.3
+  forward-upgrade gate also passed, but that is rc.4-only evidence. Neither is
+  an rc.5 tagged gate or target-TrueNAS execution.
 - **Reason:** A local disposable PostgreSQL run cannot create signed tagged
   workflow evidence or prove the target host's storage, roles, and cutover.
-- **User impact:** Database guards are locally executed, but an rc.4 upgrade
+- **User impact:** Database guards are locally executed, but an rc.5 upgrade
   must not be represented as released or target-proven.
 - **Workaround:** Do not deploy this checkout. Preserve a verified encrypted
   backup and ZFS snapshot before any eventual candidate upgrade.
@@ -69,19 +73,21 @@ rc.3 evidence is not used to close a post-rc.3 limitation.
   that verifies backup/authority, removes prohibited originals and database
   references safely, and records only non-sensitive completion evidence.
 
-## 5. Signed release images and release-specific deployment smoke are pending
+## 5. Rc.5 release images and release-specific deployment smoke are pending
 
 - **Exact limitation:** The retained strict local audit passed cache-only builds
   of backend, frontend, gateway, and backup, both Compose validations, and a
   disposable runtime with API, database, PDF sandbox, worker, and frontend
-  healthy followed by exact resource cleanup. It did not publish signed rc.4
-  images or run the full production-digest release smoke, encrypted backup, or
-  isolated restore.
+  healthy followed by exact resource cleanup. Rc.4 later published four signed
+  multi-architecture images and ran the full production-digest smoke, encrypted
+  backup, and isolated restore, but its deterministic runtime-recovery check
+  restarted the initializer dependency and failed before assembly. Rc.5 has no
+  published images or release-specific deployment smoke yet.
 - **Reason:** Cache-only local builds and the disposable application stack do
   not produce signed digests, SBOMs, provenance, attestations, or
   release-specific recovery evidence.
 - **User impact:** Local image construction and service interaction have
-  retained evidence, but there is no installable next candidate or release
+  retained evidence, but rc.4 is not installable and rc.5 has no release
   recovery proof.
 - **Workaround:** Use no current-source image or local Docker ID in production;
   use only immutable published release digests.
@@ -109,7 +115,7 @@ rc.3 evidence is not used to close a post-rc.3 limitation.
 
 - **Exact limitation:** Forward migration evidence never proves that old
   binaries can read a database touched by a newer migration. No current
-  release-specific restored rc.4-to-rc.3 rollback exists; rc.3 has no
+  release-specific restored rc.5-to-rc.3 rollback exists; rc.3 has no
   initializer and uses its own attached seven-service preparation contract.
 - **Reason:** Attaching old binaries to the upgraded production database risks
   corruption or data loss.
@@ -171,17 +177,19 @@ rc.3 evidence is not used to close a post-rc.3 limitation.
   disposable PostgreSQL/containers, preserving bounded redacted network and
   runtime artifacts.
 
-## 11. Current remote CI, security, and release workflows have not run
+## 11. Rc.5 remote CI, security, and release workflows have not run
 
 - **Exact limitation:** Workflow edits, gitleaks v3, dependency audits, CodeQL,
   container scans, SBOMs, provenance, attestations, and release assembly have
-  no GitHub run for this uncommitted working tree.
+  no GitHub run for this uncommitted rc.5 working tree. Rc.4's CI/security and
+  release gates are immutable historical evidence: all mandatory, image, and
+  anonymous-access jobs passed, deployment smoke failed, and assembly skipped.
 - **Reason:** Local source and workflow validation cannot create remote build
   or publication evidence.
 - **User impact:** No security or release claim can be made for a next
   candidate, and there are no valid next-candidate GHCR digests.
-- **Workaround:** Do not substitute local image IDs, floating tags, or rc.3
-  attestations for current evidence.
+- **Workaround:** Do not substitute local image IDs, floating tags, or rc.3/rc.4
+  attestations for rc.5 evidence.
 - **Recommended next repair:** Commit reviewed changes, run CI/security on the
   exact commit, then use the coordinated signed release workflow only after all
   mandatory gates pass.
