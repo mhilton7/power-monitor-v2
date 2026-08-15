@@ -12,6 +12,8 @@ test('Home shows live readings, committed summaries and sensor evidence', async 
   await expect(page.getByText('18.74 kWh')).toBeVisible();
   await expect(page.getByText('$0.43')).toBeVisible();
   await expect(page.getByTestId('usage-chart')).toBeVisible();
+  const usagePath = await page.locator('[data-testid="usage-chart"] .recharts-area-area').getAttribute('d');
+  expect(usagePath?.match(/M/g)?.length).toBeGreaterThanOrEqual(2);
   await expect(page.getByRole('button', { name: /Main Panel Sensor/ })).toBeVisible();
 });
 
@@ -70,9 +72,10 @@ test('Home has no serious accessibility violations and supports keyboard navigat
 
 test('alert acknowledgement and silence retain evidence and call scoped routes', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: '1 active alerts' }).click();
+  await page.getByRole('button', { name: '1 active alerts across all authorized homes' }).click();
   const alertDialog = page.getByRole('dialog', { name: 'Alerts & notifications' });
   await expect(alertDialog.getByRole('heading', { name: 'Alerts & notifications' })).toBeVisible();
+  await expect(alertDialog).toContainText('Alerts span all homes this account can access.');
   await expect(page.getByText('backlog', { exact: true })).toBeVisible();
   const acknowledgeRequest = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/alerts/alert-backlog/acknowledge'));
   await page.getByRole('button', { name: 'Acknowledge reading backlog' }).click();

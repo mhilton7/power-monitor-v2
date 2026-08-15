@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { alerts, apiResponse, backupStatus, billing, circuits, dailyHistory, device, firmwareReleases, history, home, homeScopes, homeUtility, session, systemHealth } from '../fixtures.ts';
+import { alerts, apiResponse, backupStatus, billing, circuits, dailyHistory, device, firmwareReleases, history, home, homeScopes, homeUtility, rateCandidate, session, systemHealth } from '../fixtures.ts';
 
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://127.0.0.1:8000');
@@ -16,6 +16,7 @@ const server = createServer((request, response) => {
   if (path.endsWith('/auth/me')) return json(response, 200, session.user);
   if (path.endsWith('/auth/login') || path.endsWith('/auth/bootstrap')) return json(response, 200, { user: session.user });
   if (path.endsWith('/auth/logout')) { response.writeHead(204); response.end(); return; }
+  if (path.endsWith('/home-scopes')) return json(response, 200, { home_scopes: homeScopes });
   if (path.endsWith('/settings/home-utility')) return json(response, 200, homeUtility);
   if (path.endsWith('/home')) return json(response, 200, home);
   if (path.endsWith('/enrollment-tokens') && request.method === 'POST') return json(response, 201, { token: 'single-use-enrollment-token-value-000000000000', expires_at: '2026-08-13T17:47:00Z' });
@@ -33,7 +34,7 @@ const server = createServer((request, response) => {
   if (path.endsWith('/history')) return json(response, 200, url.searchParams.get('resolution_seconds') === '86400' ? dailyHistory : history);
   if (path.endsWith('/billing')) return json(response, 200, billing);
   if (path.endsWith('/bill-rate-imports')) return json(response, 200, { extractions: [] });
-  if (path.endsWith('/rate-sources/check-now')) return json(response, 202, { run_id: 'rate-run-1', state: 'review_required' });
+  if (path.endsWith('/rate-sources/check-now')) return json(response, 202, { run_id: 'rate-run-1', state: 'review_required', event_code: 'RATE_SOURCE_CHANGED', revision_id: rateCandidate.source.revision_id, candidate_id: rateCandidate.id, error_code: null });
   if (path.endsWith('/users') && request.method === 'POST') return json(response, 201, { id: 'user-new', email: 'new@example.test', display_name: 'New User' });
   if (path.endsWith('/users')) return json(response, 200, { users: [session.user] });
   if (path.endsWith('/roles')) return json(response, 200, { roles: [{ id: 'role-owner', name: 'Owner', permissions: session.user.permissions, built_in: true }], available_permissions: session.user.permissions });

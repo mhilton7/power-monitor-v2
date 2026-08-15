@@ -8,7 +8,7 @@ describe('Home', () => {
   it('distinguishes a measured zero from a missing value and labels live evidence', async () => {
     installFetchMock((path) => {
       if (path.includes('/home')) return { status: 200, body: { ...home, devices: [{ ...home.devices[0]!, measurement: { ...home.devices[0]!.measurement, active_power_w: 0, voltage_v: null } }] } };
-      if (path.endsWith('/devices')) return { status: 200, body: { devices: [device] } };
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [device] } };
       return path.includes('/history') ? { status: 200, body: { points: [], energy_kwh: 0, cost: '0', completeness: 1, missing_ranges: [], resolution_seconds: 300, timezone: 'UTC', usage_source: 'authenticated PZEM-004T sensor intervals only' } } : { status: 200, body: { alerts: [] } };
     });
     renderWithProviders(<HomePage />);
@@ -25,7 +25,7 @@ describe('Home', () => {
     let formatPrepared = false;
     installFetchMock((path, method, body) => {
       if (path.includes('/home')) return { status: 200, body: home };
-      if (path.endsWith('/devices')) return { status: 200, body: { devices: [{ ...device, ...(formatPrepared ? { last_command: { id: '00000000-0000-0000-0000-000000000001', type: 'format_storage_prepare', state: 'succeeded', progress_percent: 100, result_code: 'ok', result_evidence: { prepare_command_id: '00000000-0000-0000-0000-000000000001', acknowledged_records_lost: 42, unacknowledged_records_lost: 5, ready: true } } } : {}) }] } };
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [{ ...device, ...(formatPrepared ? { last_command: { id: '00000000-0000-0000-0000-000000000001', type: 'format_storage_prepare', state: 'succeeded', progress_percent: 100, result_code: 'ok', result_evidence: { prepare_command_id: '00000000-0000-0000-0000-000000000001', acknowledged_records_lost: 42, unacknowledged_records_lost: 5, ready: true } } } : {}) }] } };
       if (path.includes('/history')) return { status: 200, body: { points: [], energy_kwh: 0, cost: '0', completeness: 1, missing_ranges: [], resolution_seconds: 300, timezone: 'UTC', usage_source: 'authenticated PZEM-004T sensor intervals only' } };
       if (path.endsWith('/alerts')) return { status: 200, body: { alerts: [] } };
       if (path.endsWith('/commands') && method === 'POST') {

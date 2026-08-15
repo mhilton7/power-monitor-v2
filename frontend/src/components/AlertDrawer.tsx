@@ -16,7 +16,7 @@ export function AlertDrawer({ open, onClose }: { open: boolean; onClose: () => v
   const silence = useMutation({ mutationFn: (alert: Alert) => api.silenceAlert(alert.id, new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()), onSuccess: () => { setSilenceTarget(null); void queryClient.invalidateQueries({ queryKey: ['alerts'] }); } });
   const actionError = acknowledge.error ?? silence.error;
 
-  return <Dialog open={open} title="Alerts & notifications" description="Evidence-backed alerts are debounced to avoid transient notification floods." onClose={onClose} wide>
+  return <Dialog open={open} title="Alerts & notifications" description="Alerts span all homes this account can access. Evidence-backed alerts are debounced to avoid transient notification floods." onClose={onClose} wide>
     {query.isLoading && <Loading label="Loading alerts" />}
     {query.isError && <ErrorState error={query.error} retry={() => void query.refetch()} />}
     {(acknowledge.isError || silence.isError) && <Notice kind="warning">{actionError instanceof Error ? actionError.message : 'The alert action failed.'}</Notice>}

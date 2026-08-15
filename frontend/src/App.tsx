@@ -7,6 +7,7 @@ import { AuthScreen } from './auth/AuthScreen';
 import { SessionProvider } from './auth/SessionContext';
 import { ErrorState, Loading, Notice } from './components/ui';
 import { AppShell } from './layout/AppShell';
+import { HomeScopeProvider } from './home/HomeScopeProvider';
 
 const HomePage = lazy(async () => ({ default: (await import('./pages/HomePage')).HomePage }));
 const HistoryPage = lazy(async () => ({ default: (await import('./pages/HistoryPage')).HistoryPage }));
@@ -35,16 +36,18 @@ export function App() {
   if (!session.authenticated) return <>{expired && <div className="session-banner"><Notice kind="warning">Your session expired. Sign in again to continue.</Notice></div>}<AuthScreen bootstrap={session.bootstrap_required} /></>;
 
   return <SessionProvider session={session}>
-    <Suspense fallback={<Loading label="Loading view" />}>
-      <Routes>
-        <Route element={<AppShell />}>
-          <Route index element={<HomePage />} />
-          <Route path="history" element={<HistoryPage />} />
-          <Route path="billing" element={<BillingPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-    </Suspense>
+    <HomeScopeProvider>
+      <Suspense fallback={<Loading label="Loading view" />}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route index element={<HomePage />} />
+            <Route path="history" element={<HistoryPage />} />
+            <Route path="billing" element={<BillingPage />} />
+            <Route path="settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </Suspense>
+    </HomeScopeProvider>
   </SessionProvider>;
 }

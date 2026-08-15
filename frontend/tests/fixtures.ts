@@ -81,12 +81,61 @@ export const alerts = {
 };
 
 export const billing = {
-  accounts: [{ utility_account_id: 'utility-account-1', plan_name: 'SCE TOU-D-4-9PM', rate_version_id: 'rate-version-2026-08', effective_start: '2026-08-01T07:00:00Z', cost_scope: 'energy_only', baseline_credit_included: false, fixed_charges_included: false, cca_or_direct_access: null }],
+  accounts: [{ utility_account_id: '00000000-0000-0000-0000-000000000020', plan_name: 'SCE TOU-D-4-9PM', rate_version_id: 'rate-version-2026-08', effective_start: '2026-08-01T07:00:00Z', cost_scope: 'energy_only', baseline_credit_included: false, fixed_charges_included: false, cca_or_direct_access: null }],
   usage_source: 'authenticated PZEM-004T sensor intervals only', rate_import_notice: 'PDFs create reviewed reusable rate-plan drafts only.',
 };
 
+export const rateCandidate = {
+  id: '00000000-0000-0000-0000-000000000060',
+  state: 'review_required',
+  created_at: '2026-08-13T16:00:00Z',
+  reviewed_at: null,
+  source: {
+    id: '00000000-0000-0000-0000-000000000061',
+    name: 'Southern California Edison TOU rate plans',
+    url: 'https://www.sce.com/save-money/rates-financing/residential-rate-plans/time-of-use-plans',
+    revision_id: '00000000-0000-0000-0000-000000000062',
+    artifact_sha256: 'd'.repeat(64),
+    retrieved_at: '2026-08-13T16:00:00Z',
+    parser_version: 'sce-tou-public-v1',
+  },
+  normalized_rates: {
+    schema: 'sce-rate-candidate/1.0.0',
+    utility_name: 'Southern California Edison',
+    timezone: 'America/Los_Angeles',
+    currency: 'USD',
+    season_definitions: { summer: { start_month: 6, end_month: 9 }, winter: { start_month: 10, end_month: 5 } },
+    holiday_rule: 'weekend_rates',
+    effective_start: null,
+    effective_end: null,
+    effective_date_confirmation_required: true,
+    plans: [{
+      rate_plan_name: 'TOU-D-4-9PM', rate_class: 'residential', pricing_model: 'time_of_use_plus_baseline_credit',
+      daily_fixed_charge: '0.79000000', monthly_fixed_charge: '0.00000000', baseline_credit_per_kwh: '0.10000000',
+      rate_components: 'sce_delivery_and_generation_combined',
+      periods: [{ season: 'all', day_type: 'all', name: 'all_day', start_minute: 0, end_minute: 1440, price_per_kwh: '0.12345678', currency: 'USD', unit: 'kWh', tier_min_kwh: null, tier_max_kwh: null }],
+    }],
+  },
+  validation_evidence: { parser_version: 'sce-tou-public-v1', schema: 'sce-rate-candidate/1.0.0', plan_count: 1, period_count: 1, seasons: ['summer', 'winter'], day_types: ['weekday', 'weekend', 'holiday'], coverage: 'complete', price_unit: 'USD/kWh', effective_date: 'administrator_confirmation_required' },
+  diff: { change_count: 1 },
+  manual_approval_required: true,
+  workflow: { state: 'review_required' },
+};
+
+export const rateCandidates = { home_id: homeScopes[0]!.id, candidates: [rateCandidate] };
+
+export const rateSourceStatus = {
+  home_id: homeScopes[0]!.id,
+  scheduled: { state: 'enabled', source_id: rateCandidate.source.id, source_name: rateCandidate.source.name, source_url: rateCandidate.source.url, check_interval_hours: 24, next_check_at: '2026-08-14T16:00:00Z' },
+  last_run: { id: 'rate-run-old', source_id: rateCandidate.source.id, source_name: rateCandidate.source.name, source_type: 'official_https', source_url: rateCandidate.source.url, state: 'review_required', event_code: 'RATE_SOURCE_CHANGED', started_at: '2026-08-13T15:59:59Z', completed_at: '2026-08-13T16:00:00Z', revision_id: rateCandidate.source.revision_id, error_code: null, initiator: 'user' },
+  last_success: { id: 'rate-run-old', source_id: rateCandidate.source.id, source_name: rateCandidate.source.name, source_type: 'official_https', source_url: rateCandidate.source.url, state: 'review_required', event_code: 'RATE_SOURCE_CHANGED', started_at: '2026-08-13T15:59:59Z', completed_at: '2026-08-13T16:00:00Z', revision_id: rateCandidate.source.revision_id, error_code: null, initiator: 'user' },
+  last_failure: null,
+  active: { state: 'active', utility_account_id: billing.accounts[0]!.utility_account_id, assignment_id: '00000000-0000-0000-0000-000000000063', rate_plan_version_id: 'rate-version-2026-08', plan_name: 'SCE TOU-D-4-9PM', effective_start: '2026-08-01T07:00:00Z', effective_end: null, provenance: { source_artifact_sha256: 'c'.repeat(64), origin: 'official_https', source_name: rateCandidate.source.name, source_url: rateCandidate.source.url, source_revision_id: rateCandidate.source.revision_id, candidate_id: rateCandidate.id, review_id: '00000000-0000-0000-0000-000000000064' } },
+  last_known_good: { state: 'available', candidate_id: rateCandidate.id, source_revision_id: rateCandidate.source.revision_id, source_artifact_sha256: rateCandidate.source.artifact_sha256, retrieved_at: rateCandidate.source.retrieved_at, source_name: rateCandidate.source.name, source_type: 'official_https', source_url: rateCandidate.source.url, active_source_match: false },
+};
+
 export const systemHealth = {
-  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.3', protocol: 'pm-protocol/1.0.0', database: 'reachable',
+  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.4', protocol: 'pm-protocol/1.0.0', database: 'reachable',
   sensors: [{ device_id: 'device-main', state: 'online', heartbeat_age_seconds: 5, pzem_status: 'ok', storage_status: 'healthy', backlog: 3 }],
   open_alert_count: 1, last_rate_sync: { id: 'rate-run-old', state: 'review_required', event_code: 'RATE_SOURCE_SNAPSHOT_CAPTURED', completed_at: '2026-08-13T16:00:00Z' },
   backup: {}, restore_test: {}, physical_hardware_certification: 'pending',
@@ -111,11 +160,13 @@ export const settings = {
 };
 
 export function apiResponse(path: string, method = 'GET'): { status: number; body?: unknown; contentType?: string } {
+  const pathname = new URL(path, 'http://frontend.test').pathname;
   if (path.endsWith('/auth/bootstrap/status')) return { status: 200, body: { required: false } };
   if (path.endsWith('/auth/me')) return { status: 200, body: session.user };
   if (path.endsWith('/auth/login') || path.endsWith('/auth/bootstrap')) return { status: 200, body: { user: session.user } };
-  if (path.endsWith('/settings/home-utility')) return { status: 200, body: homeUtility };
-  if (path.endsWith('/home')) return { status: 200, body: home };
+  if (pathname.endsWith('/home-scopes')) return { status: 200, body: { home_scopes: homeScopes } };
+  if (pathname.endsWith('/settings/home-utility')) return { status: 200, body: homeUtility };
+  if (pathname.endsWith('/home')) return { status: 200, body: home };
   if (path.includes('/history/export')) return { status: 200, body: 'timestamp,value\n2026-08-13T10:00:00Z,0\n', contentType: 'text/csv' };
   if (path.includes('/history')) return { status: 200, body: path.includes('resolution_seconds=86400') ? dailyHistory : history };
   if (path.includes('/devices') && path.endsWith('/commands') && method === 'POST') return { status: 202, body: { command: { id: 'cmd-new', type: 'sync_now', state: 'queued' }, confirmation_token: null } };
@@ -123,16 +174,24 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (path.includes('/credentials/rotations/') && path.endsWith('/cancel') && method === 'POST') return { status: 202, body: { rotation: { rotation_id: '00000000-0000-0000-0000-000000000050', credential_fingerprint: 'b'.repeat(64), state: 'pending', overlap_expires_at: '2026-08-13T17:42:10Z', prepare_command_id: '00000000-0000-0000-0000-000000000051', commit_command_id: null, cancel_command_id: '00000000-0000-0000-0000-000000000052' } } };
   if (path.endsWith('/enrollment-tokens') && method === 'POST') return { status: 201, body: { token: 'single-use-enrollment-token-value-000000000000', expires_at: '2026-08-13T17:47:00Z' } };
   if (path.endsWith('/circuits/verified-aggregates') && method === 'POST') return { status: 201, body: { id: '00000000-0000-0000-0000-000000000040', name: 'Verified whole home', device_ids: ['device-main', 'device-secondary'] } };
-  if (path.endsWith('/circuits')) return { status: 200, body: circuits };
-  if (path.endsWith('/devices')) return { status: 200, body: { home_scopes: homeScopes, devices: [device] } };
+  if (pathname.endsWith('/circuits')) return { status: 200, body: circuits };
+  if (pathname.endsWith('/devices')) return { status: 200, body: { home_scopes: homeScopes, devices: [device] } };
   if (path.includes('/devices/') && path.endsWith('/revoke') && method === 'POST') return { status: 204 };
   if (path.includes('/devices/') && method === 'PATCH') return { status: 200, body: { id: device.id, friendly_name: device.friendly_name, measurement_scope: 'energy_only' } };
   if (path.endsWith('/alerts')) return { status: 200, body: alerts };
   if (path.endsWith('/acknowledge')) return { status: 200, body: { id: 'alert-backlog', state: 'acknowledged' } };
   if (path.endsWith('/silence')) return { status: 200, body: { id: 'alert-backlog', silenced_until: '2026-08-14T17:32:00Z' } };
-  if (path.endsWith('/billing')) return { status: 200, body: billing };
-  if (path.endsWith('/bill-rate-imports')) return { status: 200, body: { extractions: [] } };
-  if (path.endsWith('/rate-sources/check-now')) return { status: 202, body: { run_id: 'rate-run-1', state: 'review_required' } };
+  if (pathname.endsWith('/billing')) return { status: 200, body: billing };
+  if (pathname.endsWith('/bill-rate-imports')) return { status: 200, body: { extractions: [] } };
+  if (pathname.endsWith('/rate-sources/status')) return { status: 200, body: rateSourceStatus };
+  if (pathname.endsWith('/rate-sources/candidates') && method === 'GET') return { status: 200, body: rateCandidates };
+  if (pathname.endsWith('/rate-sources/runs')) return { status: 200, body: { home_id: homeScopes[0]!.id, runs: [] } };
+  if (pathname.endsWith('/rate-sources/manual-candidates') && method === 'POST') return { status: 201, body: { home_id: homeScopes[0]!.id, created: true, candidate_id: rateCandidate.id, revision_id: rateCandidate.source.revision_id, source_id: rateCandidate.source.id, run_id: 'rate-run-manual', state: 'review_required', canonical_input_sha256: rateCandidate.source.artifact_sha256, network_fetch_performed: false } };
+  if (pathname.endsWith('/review') && pathname.includes('/rate-sources/candidates/') && method === 'POST') return { status: 200, body: { home_id: homeScopes[0]!.id, candidate_id: rateCandidate.id, workflow: { id: 'review-1', state: 'reviewed', selected_plan_name: 'TOU-D-4-9PM', effective_start: '2026-08-01T07:00:00Z', effective_end: null, reviewed_at: '2026-08-13T17:00:00Z', published_at: null, activated_at: null, rate_plan_version_id: null, utility_account_id: null } } };
+  if (pathname.endsWith('/reject') && pathname.includes('/rate-sources/candidates/') && method === 'POST') return { status: 200, body: { home_id: homeScopes[0]!.id, candidate_id: rateCandidate.id, workflow: { id: 'review-1', state: 'rejected', selected_plan_name: null, effective_start: null, effective_end: null, reviewed_at: '2026-08-13T17:00:00Z', published_at: null, activated_at: null, rate_plan_version_id: null, utility_account_id: null } } };
+  if (pathname.endsWith('/publish') && pathname.includes('/rate-sources/candidates/') && method === 'POST') return { status: 201, body: { home_id: homeScopes[0]!.id, candidate_id: rateCandidate.id, workflow: { id: 'review-1', state: 'published', selected_plan_name: 'TOU-D-4-9PM', effective_start: '2026-08-01T07:00:00Z', effective_end: null, reviewed_at: '2026-08-13T17:00:00Z', published_at: '2026-08-13T17:01:00Z', activated_at: null, rate_plan_version_id: 'rate-version-new', utility_account_id: null }, rate_plan_version: { id: 'rate-version-new', plan_id: 'rate-plan-1', plan_name: 'TOU-D-4-9PM', version: 2, effective_start: '2026-08-01T07:00:00Z', effective_end: null, source_artifact_sha256: rateCandidate.source.artifact_sha256, state: 'published' } } };
+  if (pathname.endsWith('/activate') && pathname.includes('/rate-sources/candidates/') && method === 'POST') return { status: 201, body: { home_id: homeScopes[0]!.id, candidate_id: rateCandidate.id, workflow: { id: 'review-1', state: 'activated', selected_plan_name: 'TOU-D-4-9PM', effective_start: '2026-08-01T07:00:00Z', effective_end: null, reviewed_at: '2026-08-13T17:00:00Z', published_at: '2026-08-13T17:01:00Z', activated_at: '2026-08-13T17:02:00Z', rate_plan_version_id: 'rate-version-new', utility_account_id: billing.accounts[0]!.utility_account_id }, assignment: { id: 'assignment-new', utility_account_id: billing.accounts[0]!.utility_account_id, rate_plan_version_id: 'rate-version-new', effective_start: '2026-08-01T07:00:00Z', effective_end: null } } };
+  if (pathname.endsWith('/rate-sources/check-now')) return { status: 202, body: { run_id: 'rate-run-1', state: 'review_required', event_code: 'RATE_SOURCE_CHANGED', revision_id: rateCandidate.source.revision_id, candidate_id: rateCandidate.id, error_code: null } };
   if (path.endsWith('/users') && method === 'POST') return { status: 201, body: { id: 'user-new', email: 'new@example.test', display_name: 'New User' } };
   if (path.endsWith('/users')) return { status: 200, body: { users: [session.user] } };
   if (path.endsWith('/roles')) return { status: 200, body: { roles: [{ id: 'role-owner', name: 'Owner', permissions: allPermissions, built_in: true }], available_permissions: allPermissions } };
