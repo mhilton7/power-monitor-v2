@@ -19,7 +19,7 @@ compatibility, or authorize replacing the current YAML with old images.
 
 ## Restored rollback only
 
-A direct application-only rollback is not authorized for v0.1.0-rc.2. The
+A direct application-only rollback is not authorized for v0.1.0-rc.3. The
 previous YAML and images may be used only after an explicit, release-specific
 recovery test validates an isolated clone or restore of the matching
 pre-upgrade database snapshot or verified encrypted backup. The tested
@@ -72,15 +72,22 @@ Until then:
 5. Perform a reviewed maintenance-window cutover only under that release's
    tested recovery procedure.
 
-For v0.1.0-rc.2, v0.1.0-rc.1 is the prior V2 candidate. Rc.2 adds no Alembic
-migration and retains `pm-protocol/1.0.0`, but those facts do not prove that
-rc.1 binaries support a database touched by rc.2. The rc.1-to-rc.2 release gate
-proves only forward upgrade. Rollback compatibility remains unproven, and no
-rc.1 image/YAML rollback is authorized without the separately validated,
-matching pre-upgrade database restore described above. The GitHub-hosted rc.2
-clean-deployment smoke records `not_exercised_github_hosted_smoke`; do not call
-rollback passed without that separate execution evidence. Reinstalling legacy
-`power-monitor` code or importing its database wholesale remains unsupported.
+For v0.1.0-rc.3, v0.1.0-rc.1 is the prior public V2 release. The signed server
+rc.2 tag is not a rollback or migration predecessor: release run `31866197054`
+failed cross-repository contract validation before it published a server rc.2
+GitHub Release, image set, YAML, or deployment smoke. The rc.3 migration gate
+therefore selects rc.1 from non-draft public GitHub Release metadata instead of
+choosing the newest Git tag.
+
+Rc.3 adds no Alembic migration and retains `pm-protocol/1.0.0`, but those facts
+do not prove that rc.1 binaries support a database touched by rc.3. The
+rc.1-to-rc.3 release gate proves only forward upgrade. Rollback compatibility
+remains unproven, and no rc.1 image/YAML rollback is authorized without the
+separately validated, matching pre-upgrade database restore described above.
+The GitHub-hosted rc.3 clean-deployment smoke records
+`not_exercised_github_hosted_smoke`; do not call rollback passed without that
+separate execution evidence. Reinstalling legacy `power-monitor` code or
+importing its database wholesale remains unsupported.
 
 Do not roll firmware back solely to match a server. Its signed manifest must
 declare compatible protocol, configuration, storage, bootloader, and partition

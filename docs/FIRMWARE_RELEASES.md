@@ -18,7 +18,8 @@ The signed, public firmware
 [`v0.1.0-rc.1`](https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.1)
 prerelease is the historical firmware paired with the published server rc.1
 candidate. The following values preserve its prepublication development
-snapshot and belong only to rc.1; they must not be relabeled as rc.2 evidence.
+snapshot and belong only to rc.1; they must not be relabeled as later-release
+evidence.
 
 The independently buildable firmware repository was validated at commit
 `5dea90d91ecd5731b4286a5f67117741aa2ce539` on
@@ -36,18 +37,28 @@ dependency, memory, stack, test, migration, and release reports. These preserved
 local values are historical test evidence, not substitutes for the public
 rc.1 release's attached `SHA256SUMS`, attestations, or downloadable assets.
 
-## Current coordinated target
+## Historical rc.2 and current coordinated target
 
-The current server rc.2 coordination target is the signed, public firmware
+The signed, public firmware
 [`v0.1.0-rc.2`](https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.2)
-prerelease. It changes release identity and compatible-server metadata while
-retaining firmware runtime behavior and `pm-protocol/1.0.0`. The server rc.2
-release audit must verify the public firmware release, contracts, checksums,
-attestations, and cross-links before publishing server assets. This document
-does not copy the rc.1 hash/test totals onto rc.2 or invent final rc.2 asset
-values before that audit completes.
+prerelease is retained as historical evidence. It changed release identity and
+compatible-server metadata while retaining firmware runtime behavior and
+`pm-protocol/1.0.0`. Server rc.2 release run `31866197054` nevertheless failed
+before server publication because firmware rc.2 declared a stale
+`power-meter-v2.openapi.json` hash. No server rc.2 Release, image set, TrueNAS
+YAML, or deployment smoke was produced. The signed tags are immutable and must
+not be moved or relabeled.
 
-Both firmware candidates retain hardware-certification status `pending`.
+The current server rc.3 coordination target is a distinct firmware rc.3 release
+that names server `v0.1.0-rc.3` and declares the generated OpenAPI SHA-256
+`7caada9c6295f4c201fd7ce7d383822e6b5785a960022de8355e3b6acc9a4e2c`.
+It must retain `pm-protocol/1.0.0`. The server release audit must verify that
+public firmware rc.3 release, its contracts, checksums, attestations, and
+cross-links before publishing server assets. This document does not copy rc.1
+or rc.2 test totals or asset hashes onto rc.3 and does not invent final rc.3
+asset values before that audit completes.
+
+All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,
 outage/power-cycle/USB recovery, and a continuous 72-hour soak still block
 stable promotion.

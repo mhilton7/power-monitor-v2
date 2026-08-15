@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
+import pytest
 import yaml
 from backend.app.bill_rate_import.parser import extract_rate_plan_from_pdf
 from backend.app.schemas.api import BootstrapRequest
@@ -103,6 +109,231 @@ def test_release_gate_stages_only_flat_frontend_evidence_files() -> None:
     assert all(
         re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", path) for path in uploaded_paths
     )
+
+
+def test_release_gate_archives_latest_same_major_public_release_not_newest_tag() -> None:
+    gates = (ROOT / ".github/workflows/release-gates.yml").read_text(encoding="utf-8")
+    step_name = "Verify an upgrade from the latest public same-major V2 release"
+    assert gates.index("Require a public source repository") < gates.index(step_name)
+    step = gates.split(
+        f"- name: {step_name}",
+        maxsplit=1,
+    )[1].split("- name: Create evidence-backed reports", maxsplit=1)[0]
+
+    assert "GH_TOKEN: ${{ github.token }}" in step
+    assert "gh api --paginate --slurp" in step
+    assert 'repos/${GITHUB_REPOSITORY}/releases?per_page=100' in step
+    assert "[.[][]" in step
+    assert ".draft == false" in step
+    assert ".published_at != null" in step
+    assert ".tag_name != $current" in step
+    assert "(.tag_name | startswith($major_prefix))" in step
+    assert "sort_by([.published_at, .tag_name])" in step
+    assert "| last" in step
+    assert (
+        '[[ "$previous_tag" =~ '
+        "^v[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[1-9][0-9]*)?$ ]]"
+        in step
+    )
+    assert 'python - "$previous_tag" "$GITHUB_REF_NAME" <<\'PY\'' in step
+    assert "from packaging.version import InvalidVersion, Version" in step
+    assert "if previous >= current:" in step
+    assert 'previous_ref="refs/tags/${previous_tag}"' in step
+    assert 'git show-ref --verify --quiet "$previous_ref"' in step
+    assert '"repos/${GITHUB_REPOSITORY}/git/ref/tags/${previous_tag}"' in step
+    assert 'select(.ref == $expected_ref and .object.type == "tag")' in step
+    assert '[[ "$(git cat-file -t "$local_tag_object")" == tag ]]' in step
+    assert '[[ "$local_tag_object" == "$remote_tag_object" ]]' in step
+    assert '"repos/${GITHUB_REPOSITORY}/git/tags/${remote_tag_object}"' in step
+    assert ".sha == $expected_tag_object" in step
+    assert ".tag == $expected_tag" in step
+    assert '.object.type == "commit"' in step
+    assert ".verification.verified == true" in step
+    assert '.verification.reason == "valid"' in step
+    assert 'local_commit="$(git rev-parse "${previous_ref}^{commit}")"' in step
+    assert '[[ "$local_commit" == "$remote_commit" ]]' in step
+    assert '[[ "$local_commit" != "$GITHUB_SHA" ]]' in step
+    assert 'git merge-base --is-ancestor "$local_commit" "$GITHUB_SHA"' in step
+    assert 'git archive --format=tar "$local_commit"' in step
+    assert "No prior non-draft public GitHub Release exists" in step
+
+    assert "git tag --list" not in step
+    assert "--sort=-v:refname" not in step
+    assert "not_applicable_initial_release" not in step
+    assert "|| true" not in step
+
+
+def _release_upgrade_step() -> str:
+    gates = (ROOT / ".github/workflows/release-gates.yml").read_text(encoding="utf-8")
+    return gates.split(
+        "- name: Verify an upgrade from the latest public same-major V2 release",
+        maxsplit=1,
+    )[1].split("- name: Create evidence-backed reports", maxsplit=1)[0]
+
+
+def _between(source: str, start_marker: str, end_marker: str) -> str:
+    start = source.index(start_marker) + len(start_marker)
+    return source[start : source.index(end_marker, start)]
+
+
+def _run_jq(program: str, value: object, *arguments: str) -> subprocess.CompletedProcess[str]:
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is supplied by the tagged Linux release runner")
+    return subprocess.run(  # noqa: S603 - fixed local jq with test-only arguments
+        [jq, "-er", *arguments, program],
+        input=json.dumps(value),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_public_release_selector_executes_against_paginated_fail_closed_fixtures() -> None:
+    step = _release_upgrade_step()
+    program = _between(
+        step,
+        'jq -er --arg current "$GITHUB_REF_NAME" --arg major_prefix "$major_prefix" \'\n',
+        '\n            \' "$release_metadata"',
+    )
+    arguments = (
+        "--arg",
+        "current",
+        "v0.1.0-rc.3",
+        "--arg",
+        "major_prefix",
+        "v0.",
+    )
+    pages = [
+        [
+            {
+                "draft": True,
+                "published_at": "2026-08-15T06:00:00Z",
+                "prerelease": True,
+                "tag_name": "v0.2.0-rc.1",
+            },
+            {
+                "draft": False,
+                "published_at": "2026-08-15T05:30:00Z",
+                "prerelease": True,
+                "tag_name": "v0.1.0-rc.3",
+            },
+            {
+                "draft": False,
+                "published_at": "2026-08-15T05:00:00Z",
+                "prerelease": True,
+                "tag_name": "v1.0.0-rc.1",
+            },
+        ],
+        [
+            {
+                "draft": False,
+                "published_at": "2026-08-14T18:35:05Z",
+                "prerelease": True,
+                "tag_name": "v0.1.0-rc.1",
+            }
+        ],
+    ]
+    # Failed RC2 has a Git tag but no Release, so it is intentionally absent.
+    selected = _run_jq(program, pages, *arguments)
+    assert selected.returncode == 0, selected.stderr
+    assert selected.stdout.strip() == "v0.1.0-rc.1"
+
+    for rejected in ([[]], [[{}]], {"not": "slurped release pages"}):
+        result = _run_jq(program, rejected, *arguments)
+        assert result.returncode != 0
+
+
+def test_release_predecessor_version_check_rejects_equal_or_newer_versions() -> None:
+    step = _release_upgrade_step()
+    program = textwrap.dedent(
+        _between(
+            step,
+            'python - "$previous_tag" "$GITHUB_REF_NAME" <<\'PY\'\n',
+            "\n          PY",
+        )
+    )
+
+    def validate(previous: str, current: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603 - fixed interpreter with test-only input
+            [sys.executable, "-", previous, current],
+            input=program,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert validate("v0.1.0-rc.1", "v0.1.0-rc.3").returncode == 0
+    assert validate("v0.1.0-rc.3", "v0.1.0-rc.3").returncode != 0
+    assert validate("v0.1.0-rc.4", "v0.1.0-rc.3").returncode != 0
+    assert validate("v0.1.0", "v0.1.0-rc.3").returncode != 0
+    assert validate("not-a-version", "v0.1.0-rc.3").returncode != 0
+
+
+def test_release_tag_metadata_filters_execute_and_reject_invalid_verification() -> None:
+    step = _release_upgrade_step()
+    ref_program = _between(
+        step,
+        'jq -er --arg expected_ref "$previous_ref" \'\n',
+        '\n            \' "$tag_ref_metadata"',
+    )
+    tag_program = _between(
+        step,
+        '              select(\n                .sha == $expected_tag_object',
+        '\n            \' "$tag_object_metadata"',
+    )
+    tag_program = "select(\n  .sha == $expected_tag_object" + tag_program
+    tag_object = "a" * 40
+    commit = "b" * 40
+    ref = {
+        "ref": "refs/tags/v0.1.0-rc.1",
+        "object": {"sha": tag_object, "type": "tag"},
+    }
+    ref_result = _run_jq(
+        ref_program,
+        ref,
+        "--arg",
+        "expected_ref",
+        "refs/tags/v0.1.0-rc.1",
+    )
+    assert ref_result.returncode == 0, ref_result.stderr
+    assert ref_result.stdout.strip() == tag_object
+    ref["object"]["type"] = "commit"
+    assert (
+        _run_jq(
+            ref_program,
+            ref,
+            "--arg",
+            "expected_ref",
+            "refs/tags/v0.1.0-rc.1",
+        ).returncode
+        != 0
+    )
+
+    metadata = {
+        "sha": tag_object,
+        "tag": "v0.1.0-rc.1",
+        "object": {"sha": commit, "type": "commit"},
+        "verification": {
+            "payload": "signed payload",
+            "reason": "valid",
+            "signature": "SSH signature",
+            "verified": True,
+        },
+    }
+    tag_arguments = (
+        "--arg",
+        "expected_tag",
+        "v0.1.0-rc.1",
+        "--arg",
+        "expected_tag_object",
+        tag_object,
+    )
+    tag_result = _run_jq(tag_program, metadata, *tag_arguments)
+    assert tag_result.returncode == 0, tag_result.stderr
+    assert tag_result.stdout.strip() == commit
+    metadata["verification"]["verified"] = False
+    assert _run_jq(tag_program, metadata, *tag_arguments).returncode != 0
 
 
 def test_release_checksums_only_flat_regular_files_and_publishes_every_asset() -> None:
@@ -525,7 +756,7 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     assert "docker exec --user 568:568" in installation
     assert "pm-protocol/1.0.0" in installation
     assert "authenticated PZEM-004T readings" in installation
-    assert "tag=v0.1.0-rc.2" in installation
+    assert "tag=v0.1.0-rc.3" in installation
     assert 'cd "/tmp/powermeter-${tag}"' in installation
 
     for dataset in (
@@ -576,14 +807,19 @@ def test_candidate_notes_describe_workflow_output_without_claiming_source_public
     notes = (ROOT / "release/RELEASE_NOTES.md").read_text(encoding="utf-8")
     normalized = " ".join(notes.split())
     assert "presence alone does not prove a release workflow ran" in normalized
-    assert "power-monitor-v2-v0.1.0-rc.2.yaml" in normalized
+    assert "power-monitor-v2-v0.1.0-rc.3.yaml" in normalized
     assert "v0.1.0-rc.1 system upgrades in place" in normalized
     assert "existing ZFS datasets" in normalized
     assert "application secrets" in normalized
     assert "database remains at Alembic revision `20260813_0007`" in normalized
-    assert "firmware v0.1.0-rc.2" in normalized
+    assert "firmware v0.1.0-rc.3" in normalized
+    assert "7caada9c6295f4c201fd7ce7d383822e6b5785a960022de8355e3b6acc9a4e2c" in normalized
+    assert "failed release run" in normalized
+    assert "31866197054" in normalized
+    assert "There is no server rc.2 GitHub Release" in normalized
+    assert "server rc.1 remains the installation authority" in normalized
     assert "not_exercised_github_hosted_smoke" in normalized
-    assert "proves only that an rc.1 database can upgrade forward to rc.2" in normalized
+    assert "proves only that an rc.1 database can upgrade forward to rc.3" in normalized
     assert "Rollback compatibility remains unproven" in normalized
     assert "matching pre-upgrade database" in normalized
     assert "migration report can permit application rollback" not in normalized
@@ -593,7 +829,7 @@ def test_candidate_notes_describe_workflow_output_without_claiming_source_public
     assert "Current `gh` authentication is invalid" not in normalized
 
 
-def test_rc2_audit_docs_separate_forward_upgrade_publication_and_recovery() -> None:
+def test_rc3_recovery_docs_separate_failed_rc2_forward_upgrade_and_publication() -> None:
     rollback = " ".join(
         (ROOT / "deploy/truenas/ROLLBACK.md").read_text(encoding="utf-8").split()
     )
@@ -613,9 +849,11 @@ def test_rc2_audit_docs_separate_forward_upgrade_publication_and_recovery() -> N
     assert "matching pre-upgrade database restore" in rollback
     assert "migration report can permit" not in rollback
     assert (
-        "prior-version migration gate proves only forward rc.1-to-rc.2 upgrade"
+        "That gate proves only forward rc.1-to-rc.3 upgrade"
         in release_process
     )
+    assert "latest same-major non-draft public release" in release_process
+    assert "never the failed rc.2 tag" in release_process
     assert "exercises only the forward path" in testing
 
     assert "Historical published v0.1.0-rc.1 evidence" in firmware
@@ -623,10 +861,13 @@ def test_rc2_audit_docs_separate_forward_upgrade_publication_and_recovery() -> N
     assert "02e0c46a0bfee4fcf35a0bf82de191bf04e69a65d387fbbdbb78e6876b6b06da" in firmware
     assert "signed, public firmware" in firmware
     assert "v0.1.0-rc.2" in firmware
-    assert "does not copy the rc.1 hash/test totals onto rc.2" in firmware
+    assert "No server rc.2 Release, image set, TrueNAS YAML, or deployment smoke" in firmware
+    assert "current server rc.3 coordination target" in firmware
+    assert "7caada9c6295f4c201fd7ce7d383822e6b5785a960022de8355e3b6acc9a4e2c" in firmware
 
-    assert "server `v0.1.0-rc.2` remains an unpublished source candidate" in traceability
-    assert "signed public firmware `v0.1.0-rc.2`" in traceability
+    assert "Signed public firmware `v0.1.0-rc.2` is historical" in traceability
+    assert "Signed server tag `v0.1.0-rc.2` and failed run `31866197054`" in traceability
+    assert "Server and firmware `v0.1.0-rc.3` are the current coordinated target" in traceability
     assert "target repos are absent" not in traceability
     assert "invalid `gh` authentication" not in traceability
     assert "no signed public release" not in traceability

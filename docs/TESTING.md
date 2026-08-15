@@ -22,7 +22,7 @@ actual registry digests after push.
 docker build --file backup/Dockerfile --tag pm-backup:test .
 python scripts/render_truenas_release.py --template deploy/truenas/power-monitor-v2.yaml `
   --output release/power-monitor-v2-test.yaml --manifest release/release-manifest-test.json `
-  --version 0.1.0-rc.1 --revision 0123456789abcdef0123456789abcdef01234567 `
+  --version 0.1.0-rc.3 --revision 0123456789abcdef0123456789abcdef01234567 `
   --api-digest sha256:<published-api-digest> `
   --frontend-digest sha256:<published-frontend-digest> `
   --gateway-digest sha256:<published-gateway-digest> `
@@ -35,9 +35,12 @@ Release workflow gates cover backend unit/integration and PostgreSQL migration
 tests; frontend checks; shared protocol vectors; Compose/hardening checks;
 dependency/secret/CodeQL/container scans; SBOM/provenance; a clean digest-pinned
 deployment with TLS, SSE, upload limits, restarts, encrypted backup, and actual
-isolated restore; and firmware release compatibility. When a prior V2 tag
-exists, the migration gate exercises only the forward path from that release's
-database to the current release. It does not run prior binaries against the
+isolated restore; and firmware release compatibility. The migration gate uses
+authenticated GitHub release metadata to select the latest same-major,
+non-draft public V2 Release, requires that exact tag in the checkout, and then
+exercises only the forward path from that release's database to the current
+release. It fails closed instead of treating a newer unpublished or failed tag
+as an installable predecessor. It does not run prior binaries against the
 post-upgrade database or prove rollback compatibility. The GitHub-hosted
 clean-deployment smoke does not exercise application rollback and records
 `not_exercised_github_hosted_smoke`, never a rollback pass. Target upgrade and
@@ -160,7 +163,7 @@ certification.
   Compose project, its containers, three labeled volumes, and network were
   removed. This cleanup intentionally made the test-only data unrecoverable.
 
-### Firmware candidate
+### Historical firmware snapshot
 
 - Firmware repository commit
   `5dea90d91ecd5731b4286a5f67117741aa2ce539` passed 55/55 host tests,
@@ -176,14 +179,18 @@ certification.
 
 ### Gates that remain closed
 
-- No signed server or firmware tag/GitHub Release has been produced.
-- The target GitHub repositories are absent, current `gh` authentication is
-  invalid, and no signing key/tool is registered or configured. An unsigned tag
-  is not release evidence.
-- No public GHCR images, anonymous digest resolution, attestations, or generated
-  real-digest TrueNAS YAML exist; checked-in `UNPUBLISHED_*` sentinels remain.
-- The full seven-service digest-pinned release smoke and target-TrueNAS clean
-  install/upgrade/rollback/restart/permission suite have not run.
+- Signed public server/firmware rc.1 releases and signed public firmware rc.2
+  are historical evidence. The signed server rc.2 tag's run `31866197054`
+  failed the cross-repository OpenAPI-hash check before server images or release
+  assets were published. Current coordinated firmware/server rc.3 publication
+  remains pending.
+- Public rc.1 GHCR digests, attestations, generated TrueNAS YAML, and release
+  smoke are version-specific historical evidence. There is no server rc.2
+  image set or YAML, and rc.3 images, anonymous digest resolution, attestations,
+  real-digest YAML, and smoke do not exist until its release workflow passes.
+  The checked-in template correctly retains `UNPUBLISHED_*` sentinels.
+- The target-TrueNAS rc.3 clean install, forward upgrade, restored rollback,
+  restart, and permission suite has not run.
 - No marked-unit PZEM/ESP32-S3/SD identity, electrical, TLS/HMAC, OTA rollback,
   physical-cycle, USB-recovery, or continuous 72-hour soak evidence exists.
   Simulation cannot satisfy those gates, so stable promotion remains blocked.

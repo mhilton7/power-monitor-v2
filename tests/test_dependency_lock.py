@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import tomllib
@@ -48,8 +49,8 @@ def test_release_version_metadata_is_consistent() -> None:
         (ROOT / "frontend" / "package-lock.json").read_text(encoding="utf-8")
     )
 
-    assert VERSION == "0.1.0-rc.2"
-    assert project["version"] == "0.1.0rc2"
+    assert VERSION == "0.1.0-rc.3"
+    assert project["version"] == "0.1.0rc3"
     assert package["version"] == VERSION
     assert package_lock["version"] == VERSION
     assert package_lock["packages"][""]["version"] == VERSION
@@ -64,3 +65,9 @@ def test_release_version_metadata_is_consistent() -> None:
         (ROOT / "shared/openapi/power-meter-v2.openapi.json").read_text(encoding="utf-8")
     )
     assert openapi["info"]["version"] == VERSION
+    assert (
+        hashlib.sha256(
+            (ROOT / "shared/openapi/power-meter-v2.openapi.json").read_bytes()
+        ).hexdigest()
+        == "7caada9c6295f4c201fd7ce7d383822e6b5785a960022de8355e3b6acc9a4e2c"
+    )
