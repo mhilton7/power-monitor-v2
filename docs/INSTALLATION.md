@@ -4,7 +4,10 @@ Production installation uses the generated digest-pinned TrueNAS release asset.
 Follow `deploy/truenas/INSTALLATION.md`; it contains the exact release
 authentication, dataset creation, UID/GID and ACL, secret, DNS, TLS, Custom App
 UI, first-boot, backup/restore, upgrade, and rollback sequence. Each release
-copies those operator files and `prepare-host.sh` beside its generated YAML.
+copies those operator files, the Windows SMB staging helper, and the auditable
+one-shot initializer source beside its generated YAML. The no-shell initializer
+model begins with the complete signed v0.1.0-rc.4 release asset set; do not
+combine it with rc.3 assets or any other release.
 
 ## Production availability gate
 
@@ -36,7 +39,9 @@ Required production facts:
 - The only published container port is gateway TCP 8443.
 - Application timezone defaults to `America/Los_Angeles`; storage and logs use UTC.
 - Sensor readings accepted through `pm-protocol/1.0.0` are the sole usage authority.
-- A bill PDF is a rate-source artifact only; it can create no History or usage record.
+- A bill PDF contributes rate facts only; it can create no History or usage
+  record, and its original bytes/full OCR text are never persisted, even
+  encrypted.
 - The API host kernel exposes Landlock ABI 3 or newer and seccomp filter mode. API `/tmp` is a `nodev,noexec,nosuid` tmpfs; otherwise readiness and bill parsing fail closed.
 
 For local development Compose only, force the parser-boundary self-test and
@@ -46,7 +51,8 @@ require exit zero:
 docker compose exec api python -m backend.app.bill_rate_import.sandbox_check
 ```
 
-On TrueNAS, use the UID-scoped `docker exec` command in the release
-`INSTALLATION.md`; do not create a second Compose project from a host shell.
+On TrueNAS, use the signed release's browser/Windows health checks and the Apps
+UI. Normal installation and verification do not require SSH, System Shell,
+`docker exec`, or a second Compose project.
 
 Do not deploy the repository template `deploy/truenas/power-monitor-v2.yaml`; explicit `UNPUBLISHED_*` sentinels make it non-deployable until the release workflow substitutes actual registry digests.

@@ -1,6 +1,6 @@
 # Migration from the legacy power monitor
 
-There is no in-place schema or dataset migration from `mhilton7/power-monitor` to PowerMeter V2. Preserve the old application and `/mnt/Apps/Power/...` datasets read-only while deploying V2 into `/mnt/Apps/PowerMeterV2/...`.
+There is no in-place schema or dataset migration from `mhilton7/power-monitor` to PowerMeter V2. Preserve the old application's datasets read-only while deploying V2 into `/mnt/Apps/PowerMeterV2/...`; never reuse a V1 dataset as a V2 bind mount.
 
 This exclusion is deliberate. The legacy schema contains surfaces such as `manual_account_usage`, `utility_usage_imports`, account reconciliation/manual bill adjustments, utility bill cycle drafts, and other representations that cannot prove authenticated PZEM origin or violate V2's rate-only bill boundary. Importing those rows would make provenance ambiguous.
 
