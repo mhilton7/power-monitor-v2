@@ -490,8 +490,8 @@ def _validate_permissions(path: Path) -> None:
         f"directory|{base}/caddy-data|1000:1000|750",
         f"directory|{base}/caddy-config|1000:1000|750",
         f"directory|{base}/secrets|0:0|711",
-        f"config|{base}/config/Caddyfile|0:0|644",
-        f"config|{base}/config/postgres-init-roles.sh|0:0|644",
+        f"config|{base}/config/Caddyfile|0:1000|440",
+        f"config|{base}/config/postgres-init-roles.sh|0:70|440",
         f"acl|{base}/backups|exact-api-traverse-only",
         f"acl|{base}/backups/status|exact-api-read-default",
     }

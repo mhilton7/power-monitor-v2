@@ -109,6 +109,40 @@ def test_initializer_requires_each_explicit_host_mount_without_claiming_zfs_proo
         test_root.rmdir()
 
 
+def test_config_assets_are_readable_by_only_their_runtime_group(monkeypatch) -> None:
+    path = Path("/host/config/Caddyfile")
+    metadata_calls: list[tuple[str, int, int]] = []
+
+    def fake_chown(_path: Path, uid: int, gid: int, *, follow_symlinks: bool) -> None:
+        metadata_calls.append(("chown", uid, gid))
+        assert follow_symlinks is False
+
+    def fake_chmod(_path: Path, mode: int, *, follow_symlinks: bool) -> None:
+        metadata_calls.append(("chmod", mode, 0))
+        assert follow_symlinks is False
+
+    monkeypatch.setattr(INITIALIZER.os, "chown", fake_chown, raising=False)
+    monkeypatch.setattr(INITIALIZER.os, "chmod", fake_chmod)
+
+    INITIALIZER._set_asset_metadata(path, 1000)
+
+    assert metadata_calls == [("chown", 0, 1000), ("chmod", 0o440, 0)]
+    assert {name: gid for name, (_source, gid) in INITIALIZER.CONFIG_ASSETS.items()} == {
+        "Caddyfile": 1000,
+        "postgres-init-roles.sh": 70,
+    }
+
+
+def test_source_only_host_preparer_matches_restricted_config_asset_contract() -> None:
+    source = (ROOT / "deploy/truenas/prepare-host.sh").read_text(encoding="utf-8")
+    assert 'install -o 0 -g 1000 -m 0440 -- "$assets/Caddyfile" "$base/config/Caddyfile"' in source
+    assert "install -o 0 -g 70 -m 0440 -- \\\n" in source
+    assert '"$assets/postgres-init-roles.sh" "$base/config/postgres-init-roles.sh"' in source
+    assert '"$base/config/Caddyfile|0:1000|440"' in source
+    assert '"$base/config/postgres-init-roles.sh|0:70|440"' in source
+    assert "-m 0644" not in source
+
+
 def test_tls_verification_rejects_encryption_and_binds_strict_hostname(monkeypatch) -> None:
     test_root = ROOT / ".test-runtime" / f"tls-initializer-{uuid.uuid4()}"
     test_root.mkdir(parents=True)

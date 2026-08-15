@@ -93,6 +93,15 @@ def load(path: Path) -> dict[str, Any]:
     return value
 
 
+def _has_exact_secret_file_mapping(value: object) -> bool:
+    """Validate secret references without returning or formatting sensitive input."""
+    expected = {
+        name: {"file": f"/mnt/Apps/PowerMeterV2/secrets/{basename}"}
+        for name, basename in EXPECTED_SECRETS.items()
+    }
+    return value == expected
+
+
 def validate_compose(path: Path) -> list[str]:
     errors: list[str] = []
     data = load(path)
@@ -355,16 +364,8 @@ def validate_compose(path: Path) -> list[str]:
             True,
         ) not in mounts:
             errors.append(f"{path}: {name} lacks the read-only backup evidence mount")
-    secrets = data.get("secrets", {})
-    if not isinstance(secrets, dict) or set(secrets) != set(EXPECTED_SECRETS):
-        errors.append(f"{path}: file secrets must be the exact required 13-file set")
-    else:
-        for name, expected_basename in EXPECTED_SECRETS.items():
-            secret = secrets[name]
-            source = secret.get("file") if isinstance(secret, dict) else None
-            expected_source = f"/mnt/Apps/PowerMeterV2/secrets/{expected_basename}"
-            if source != expected_source:
-                errors.append(f"{path}: secret {name} does not use its exact host file")
+    if not _has_exact_secret_file_mapping(data.get("secrets")):
+        errors.append(f"{path}: file secrets must match the exact required 13-file mapping")
     return errors
 
 

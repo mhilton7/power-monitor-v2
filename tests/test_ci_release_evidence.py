@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,41 @@ from backend.app.schemas.api import BootstrapRequest
 from backend.tests.deployment_evidence_probe import _rate_source_pdf
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_gitleaks_private_key_allowlist_is_exactly_scoped_to_synthetic_fixture() -> None:
+    policy = tomllib.loads((ROOT / ".gitleaks.toml").read_text(encoding="utf-8"))
+    assert set(policy) == {"title", "extend", "rules"}
+    private_key_rules = [rule for rule in policy["rules"] if rule["id"] == "private-key"]
+
+    assert private_key_rules == [
+        {
+            "id": "private-key",
+            "allowlists": [
+                {
+                    "description": (
+                        "Allow only the exact historical synthetic encrypted-key rejection fixture"
+                    ),
+                    "condition": "AND",
+                    "regexTarget": "match",
+                    "commits": ["7b025b031c12e3760ffad1f4471ce4b3bb69ccfb"],
+                    "paths": [r"^tests/test_host_initializer\.py$"],
+                    "regexes": [
+                        "^-----BEGIN ENCRYPTED PRIVATE KEY-----\\\\n"
+                        "ZmFrZQ==\\\\n"
+                        '-----END ENCRYPTED PRIVATE KEY-----\\\\n"\\n'
+                        r"    \)\n"
+                        "    try:\\n"
+                        "        with pytest\\.raises\\(INITIALIZER\\.InitializationError, "
+                        'match="unencrypted"\\):\\n'
+                        '            INITIALIZER\\._validate_tls\\("power-monitor\\.home\\.'
+                        'arpa", test_root\\)\\n\\n'
+                        '        key_path\\.write_bytes\\(b"-----BEGIN PRIVATE KEY-----$'
+                    ],
+                }
+            ],
+        }
+    ]
 
 
 def test_deployment_probe_pdf_contains_rates_but_no_usage_evidence() -> None:

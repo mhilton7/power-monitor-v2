@@ -16,3 +16,20 @@ paths = [
 regexes = [
   '''^(?:8c7c04e1e3615e5e9f53e30d7087e10b00c9a7a1fe1ad59289b20c6f16901a37|a85d515e3aec04f1109f32576283aafadcb57d06f90841149c0ddabc9e0397bf)$''',
 ]
+
+[[rules]]
+id = "private-key"
+
+[[rules.allowlists]]
+description = "Allow only the exact historical synthetic encrypted-key rejection fixture"
+condition = "AND"
+regexTarget = "match"
+commits = [
+  "7b025b031c12e3760ffad1f4471ce4b3bb69ccfb",
+]
+paths = [
+  '''^tests/test_host_initializer\.py$''',
+]
+regexes = [
+  '''^-----BEGIN ENCRYPTED PRIVATE KEY-----\\nZmFrZQ==\\n-----END ENCRYPTED PRIVATE KEY-----\\n"\n    \)\n    try:\n        with pytest\.raises\(INITIALIZER\.InitializationError, match="unencrypted"\):\n            INITIALIZER\._validate_tls\("power-monitor\.home\.arpa", test_root\)\n\n        key_path\.write_bytes\(b"-----BEGIN PRIVATE KEY-----$''',
+]

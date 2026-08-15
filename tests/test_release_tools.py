@@ -173,8 +173,8 @@ def _write_success_evidence(prefix: Path) -> None:
         f"directory|{base}/caddy-data|1000:1000|750",
         f"directory|{base}/caddy-config|1000:1000|750",
         f"directory|{base}/secrets|0:0|711",
-        f"config|{base}/config/Caddyfile|0:0|644",
-        f"config|{base}/config/postgres-init-roles.sh|0:0|644",
+        f"config|{base}/config/Caddyfile|0:1000|440",
+        f"config|{base}/config/postgres-init-roles.sh|0:70|440",
         f"acl|{base}/backups|exact-api-traverse-only",
         f"acl|{base}/backups/status|exact-api-read-default",
     ]
@@ -626,6 +626,23 @@ def test_static_release_validation_binds_each_exact_component_sentinel(
     path.write_text(wrong, encoding="utf-8")
     errors = validate_static_compose(path)
     assert any("gateway must use the exact gateway image contract" in error for error in errors)
+
+
+def test_static_release_validation_never_echoes_secret_mapping_details(
+    evidence_dir: Path,
+) -> None:
+    compose = yaml.safe_load(
+        (ROOT / "deploy/truenas/power-monitor-v2.yaml").read_text(encoding="utf-8")
+    )
+    compose["secrets"]["tls_key"]["file"] = "SENSITIVE_FIXTURE_DO_NOT_LOG"
+    path = evidence_dir / "invalid-secret-mapping.yaml"
+    path.write_text(yaml.safe_dump(compose), encoding="utf-8")
+
+    errors = validate_static_compose(path)
+
+    assert errors == [f"{path}: file secrets must match the exact required 13-file mapping"]
+    assert "SENSITIVE_FIXTURE_DO_NOT_LOG" not in errors[0]
+    assert "tls_key" not in errors[0]
 
 
 def test_release_artifact_verifier_accepts_exact_four_image_binding(

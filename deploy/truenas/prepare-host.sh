@@ -113,8 +113,8 @@ reset_directory "$base/logs/application" 10001 10001 0750
 install -d -o 1000 -g 1000 -m 0750 "$base/logs/gateway"
 reset_directory "$base/logs/gateway" 1000 1000 0750
 
-install -o 0 -g 0 -m 0644 -- "$assets/Caddyfile" "$base/config/Caddyfile"
-install -o 0 -g 0 -m 0644 -- \
+install -o 0 -g 1000 -m 0440 -- "$assets/Caddyfile" "$base/config/Caddyfile"
+install -o 0 -g 70 -m 0440 -- \
   "$assets/postgres-init-roles.sh" "$base/config/postgres-init-roles.sh"
 cmp --silent -- "$assets/Caddyfile" "$base/config/Caddyfile" ||
   fail "installed Caddyfile differs from the verified release asset"
@@ -282,6 +282,16 @@ for directory_record in \
   "$base/caddy-config|1000:1000|750" \
   "$base/secrets|0:0|711"; do
   IFS='|' read -r path expected_owner expected_mode <<<"$directory_record"
+  [[ "$(stat -c '%u:%g' -- "$path")" == "$expected_owner" ]] ||
+    fail "wrong owner on $path"
+  [[ "$(stat -c '%a' -- "$path")" == "$expected_mode" ]] ||
+    fail "wrong mode on $path"
+done
+
+for config_record in \
+  "$base/config/Caddyfile|0:1000|440" \
+  "$base/config/postgres-init-roles.sh|0:70|440"; do
+  IFS='|' read -r path expected_owner expected_mode <<<"$config_record"
   [[ "$(stat -c '%u:%g' -- "$path")" == "$expected_owner" ]] ||
     fail "wrong owner on $path"
   [[ "$(stat -c '%a' -- "$path")" == "$expected_mode" ]] ||

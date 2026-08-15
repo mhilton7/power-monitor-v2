@@ -69,8 +69,8 @@ SECRET_READERS = {
     "tls-ca.crt": (1000,),
 }
 CONFIG_ASSETS = {
-    "Caddyfile": ASSET_ROOT / "Caddyfile",
-    "postgres-init-roles.sh": ASSET_ROOT / "postgres-init-roles.sh",
+    "Caddyfile": (ASSET_ROOT / "Caddyfile", 1000),
+    "postgres-init-roles.sh": (ASSET_ROOT / "postgres-init-roles.sh", 70),
 }
 EXPECTED_STATUS_ACL = {
     "user::rwx",
@@ -328,7 +328,21 @@ def _ensure_child_directory(relative: str, uid: int, gid: int, mode: int) -> Pat
     return path
 
 
-def _install_asset(source: Path, destination: Path) -> None:
+def _set_asset_metadata(path: Path, gid: int) -> None:
+    os.chown(path, 0, gid, follow_symlinks=False)
+    os.chmod(path, 0o440, follow_symlinks=False)
+
+
+def _verify_asset_metadata(path: Path, gid: int) -> None:
+    try:
+        value = path.lstat()
+    except OSError as exc:
+        raise InitializationError(f"cannot verify config asset metadata: {path.name}") from exc
+    if (value.st_uid, value.st_gid, stat.S_IMODE(value.st_mode)) != (0, gid, 0o440):
+        _fail(f"config asset owner or mode verification failed: {path.name}")
+
+
+def _install_asset(source: Path, destination: Path, gid: int) -> None:
     source_bytes = _assert_regular_file(source, f"image asset {source.name}")
     if destination.exists() or destination.is_symlink():
         _assert_regular_file(destination, f"existing config file {destination.name}")
@@ -341,8 +355,7 @@ def _install_asset(source: Path, destination: Path) -> None:
             stream.write(source_bytes)
             stream.flush()
             os.fsync(stream.fileno())
-        os.chown(temporary, 0, 0, follow_symlinks=False)
-        os.chmod(temporary, 0o644, follow_symlinks=False)
+        _set_asset_metadata(temporary, gid)
         os.replace(temporary, destination)
         directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -359,6 +372,7 @@ def _install_asset(source: Path, destination: Path) -> None:
         temporary.unlink(missing_ok=True)
     if not hmac.compare_digest(source_bytes, _assert_regular_file(destination, destination.name)):
         _fail(f"installed config asset differs from image asset: {destination.name}")
+    _verify_asset_metadata(destination, gid)
 
 
 def _set_secret_acl(path: Path, readers: tuple[int, ...]) -> None:
@@ -461,8 +475,8 @@ def initialize() -> None:
         "cannot grant the API read-only backup-status ACL",
     )
 
-    for name, source in CONFIG_ASSETS.items():
-        _install_asset(source, config_root / name)
+    for name, (source, gid) in CONFIG_ASSETS.items():
+        _install_asset(source, config_root / name, gid)
     for name, readers in SECRET_READERS.items():
         _set_secret_acl(secret_root / name, readers)
 

@@ -406,8 +406,8 @@ for record in \
 done
 sudo cmp --silent deploy/caddy/Caddyfile "$base/config/Caddyfile"
 sudo cmp --silent deploy/postgres/init-roles.sh "$base/config/postgres-init-roles.sh"
-record_metadata "$base/config/Caddyfile" "0:0" "644" config
-record_metadata "$base/config/postgres-init-roles.sh" "0:0" "644" config
+record_metadata "$base/config/Caddyfile" "0:1000" "440" config
+record_metadata "$base/config/postgres-init-roles.sh" "0:70" "440" config
 backups_acl=$'user::rwx\nuser:10001:--x\ngroup::r-x\nmask::r-x\nother::---'
 assert_exact_acl "$base/backups" "$backups_acl"
 printf 'acl|%s|exact-api-traverse-only\n' "$base/backups" >> "$work/permissions.txt"
