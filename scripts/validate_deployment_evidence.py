@@ -140,6 +140,19 @@ FAILURE_DIAGNOSTICS = [
     "Compose service state",
     "allowlisted container health state",
 ]
+FAILURE_ASSERTIONS = {
+    "outside_instrumented_recovery",
+    "capture_runtime_container_id",
+    "runtime_container_stop",
+    "runtime_container_stopped",
+    "runtime_container_identity_before_direct_start",
+    "runtime_container_direct_start",
+    "runtime_container_identity_after_direct_start",
+    "runtime_container_healthy_after_direct_start",
+    "initializer_id_unchanged_after_runtime_restart",
+    "initializer_exited_zero_after_runtime_restart",
+    "initializer_finished_at_unchanged_after_runtime_restart",
+}
 
 
 class EvidenceError(ValueError):
@@ -628,6 +641,7 @@ def validate(
             "completed_at",
             "status",
             "exit_code",
+            "failed_assertion",
             "diagnostics",
         },
         source=failure_path,
@@ -643,6 +657,11 @@ def validate(
         raise EvidenceError(f"failure completed_at must be an exact UTC timestamp: {failure_path}")
     if not _is_int(failure.get("exit_code")) or failure["exit_code"] <= 0:
         raise EvidenceError(f"failure exit_code must be a positive integer: {failure_path}")
+    if (
+        not isinstance(failure["failed_assertion"], str)
+        or failure["failed_assertion"] not in FAILURE_ASSERTIONS
+    ):
+        raise EvidenceError(f"failed assertion is not on the fixed allowlist: {failure_path}")
     if failure["diagnostics"] != FAILURE_DIAGNOSTICS:
         raise EvidenceError(f"failure diagnostics list is incomplete: {failure_path}")
     failure_compose_path = prefix.with_name(prefix.name + "-failure-compose-ps.jsonl")

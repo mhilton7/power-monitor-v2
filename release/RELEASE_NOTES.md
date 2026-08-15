@@ -1,4 +1,4 @@
-# PowerMeter V2 v0.1.0-rc.4
+# PowerMeter V2 v0.1.0-rc.5
 
 PowerMeter V2 is a central, authenticated PZEM-004T monitoring system paired
 with the independent
@@ -8,11 +8,34 @@ Authenticated sensor evidence remains the only source of live measurements,
 History, energy, completeness, forecasts, and usage-based cost. Utility-bill
 PDFs remain rate-source documents only.
 
-This source file is the release-body input for candidate `v0.1.0-rc.4`. This
+This source file is the release-body input for candidate `v0.1.0-rc.5`. This
 source copy alone is not publication evidence. Installation is authorized only after the
 signed tagged workflow publishes the complete checksummed and attested asset
 set, digest-pinned YAML, public multi-architecture images, deployment evidence,
 and coordinated firmware release.
+
+## Why rc.5 follows the non-installable rc.4 tag
+
+Server `v0.1.0-rc.4` remains a valid, immutable signed tag. Tagged release run
+[`31893354667`](https://github.com/mhilton7/power-monitor-v2/actions/runs/31893354667)
+passed the workflow's named `Mandatory release gates` job, published all four
+multi-architecture images, and
+proved anonymous GHCR access. Its digest-pinned deployment smoke then failed
+deterministically: `docker compose start` traversed service dependencies and
+restarted the already-completed one-shot initializer, so its preserved
+completion-time assertion correctly failed even though the runtime services
+returned healthy. Release assembly was skipped. There is no server rc.4 GitHub
+Release or generated rc.4 YAML, and the published rc.4 images alone are not an
+installation authority.
+
+Rc.5 preserves the audited application, protocol, and migration behavior while
+repairing that recovery check. It captures the six runtime container IDs,
+starts those exact stopped containers directly without Compose dependency
+traversal, requires their identities and health to remain stable, and still
+proves that the initializer ID, exit state, and completion time are unchanged.
+Failure evidence now records only a fixed allowlisted assertion identifier in
+addition to the existing redacted diagnostics. No workflow, API behavior,
+protocol, or migration revision changed for this repair.
 
 ## What changed since public v0.1.0-rc.3
 
@@ -89,7 +112,7 @@ and coordinated firmware release.
   are not part of the normal path.
 - Operators create exactly nine Generic/POSIX child ZFS datasets below
   `/mnt/Apps/PowerMeterV2`. The former `bill-rate-source-artifacts` dataset is
-  not mounted by rc.4; an existing rc.3 dataset is left untouched and should
+  not mounted by rc.5; an existing rc.3 dataset is left untouched and should
   remain unshared until an operator chooses a separately reviewed cleanup.
 - TLS verification remains strict for `power-monitor.home.arpa`, including
   hostname, key match, current validity, and at least seven days of remaining
@@ -110,7 +133,7 @@ and coordinated firmware release.
 ## Upgrade and rollback boundary
 
 Back up and verify the database, perform an isolated restore check, and take a
-recursive ZFS snapshot before installing rc.4. Keep all existing application
+recursive ZFS snapshot before installing rc.5. Keep all existing application
 secrets, database credentials, the backup encryption key, TLS material, and
 datasets. Do not recreate storage or rotate secrets during this upgrade.
 
@@ -125,7 +148,7 @@ applied migration, or delete evidence merely to continue.
 
 The release migration report proves only the forward upgrade from the latest
 lower same-major public release. It does not prove that rc.3 binaries can use a
-database touched by rc.4. Application-only rollback is not authorized. A
+database touched by rc.5. Application-only rollback is not authorized. A
 rollback requires a separately validated restore or clone of the matching
 pre-upgrade snapshot or verified backup, paired with the exact older release
 assets. GitHub-hosted smoke records rollback as
@@ -133,24 +156,27 @@ assets. GitHub-hosted smoke records rollback as
 
 ## Release contents and firmware pairing
 
-A successfully published rc.4 candidate includes:
+A successfully published rc.5 candidate includes:
 
 - four immutable multi-architecture GHCR images referenced by registry digest;
-- `power-monitor-v2-v0.1.0-rc.4.yaml` and `release-manifest.json`;
+- `power-monitor-v2-v0.1.0-rc.5.yaml` and `release-manifest.json`;
 - the Windows SMB staging helper and auditable initializer source;
 - checksums, strict attestations, SBOMs, vulnerability results, dependency and
   test reports, migration evidence, and deployment-smoke evidence;
 - installation, secrets/TLS, dataset/ACL, backup/restore, upgrade, and rollback
   instructions; and
-- an exact coordinated public firmware `v0.1.0-rc.4` release whose server
+- an exact coordinated public firmware `v0.1.0-rc.5` release whose server
   contract declares OpenAPI SHA-256
-  `f9b936468f5a696a0bee3e04edda021c12ab81dddc091cbb307face0be1de7b1`.
+  `66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591`.
 
 The signed server rc.2 tag and failed release run `31866197054` remain
 immutable prepublication evidence. There is no server rc.2 GitHub Release.
-Public server rc.3 remains the prior installation authority for its own attached
-seven-service assets and instructions. Neither historical release is modified
-or relabeled by rc.4.
+Public server rc.3 remains the installation authority and migration predecessor
+for its own attached seven-service assets and instructions. Public firmware
+rc.4 is immutable historical evidence for the failed server rc.4 attempt; the
+coordinated firmware rc.5 target must be published and verified before a server
+rc.5 tag is created. No historical tag or release is modified or relabeled by
+rc.5.
 
 This remains a prerelease candidate. Hardware status is honestly `pending`.
 Marked-unit electrical identity, physical TLS/HMAC behavior, OTA installation

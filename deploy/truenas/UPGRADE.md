@@ -1,6 +1,6 @@
 # Upgrade PowerMeter V2 on TrueNAS
 
-> This UI-only flow applies to the complete signed v0.1.0-rc.4 release asset
+> This UI-only flow applies to the complete signed v0.1.0-rc.5 release asset
 > set and later releases that retain this contract. Immutable rc.3 assets
 > retain their attached rc.3 procedure. Never mix release asset sets.
 
@@ -23,7 +23,7 @@ Never edit one image tag/digest, accept a generic image-update suggestion, use
    `Apps/PowerMeterV2` named with the old version and UTC time. A snapshot
    supplements rather than replaces the verified logical backup.
 
-The coordinated rc.4 migration chain advances through `20260815_0011` and is
+The coordinated rc.5 migration chain advances through `20260815_0011` and is
 fail-closed. The 0008 preflight can
 stop when existing immutable ingestion evidence conflicts, including a raw
 reading whose sequence was also recorded as permanent loss or overlapping
@@ -32,7 +32,7 @@ that evidence automatically. It also stops if a legacy database row references
 a retained original bill document; the new runtime forbids all persistent
 original-bill storage, including encrypted storage, and does not silently
 delete an operator's legacy file. Complete and verify the backup and snapshot
-above before applying rc.4. If either preflight stops, leave the prior datasets
+above before applying rc.5. If either preflight stops, leave the prior datasets
 intact and preserve the exact failure for reviewed recovery; do not edit
 evidence or delete a referenced file merely to make the migration pass.
 
@@ -49,7 +49,7 @@ release explicitly requires coordinated new inputs, its release-specific guide
 must provide a reviewed UI/SMB procedure and compatibility evidence.
 
 An rc.3 installation can also have a legacy `bill-rate-source-artifacts`
-dataset. Rc.4 does not mount or write it, and the upgrade never deletes it.
+dataset. Rc.5 does not mount or write it, and the upgrade never deletes it.
 Leave it unmounted and unshared; do not export or decrypt its contents. Its
 separate retention or deletion requires an explicit operator decision outside
 this upgrade rather than an automated migration.

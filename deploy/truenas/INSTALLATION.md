@@ -5,9 +5,10 @@ authenticated SMB share, and the TrueNAS web UI. It does **not** require SSH,
 the TrueNAS shell, a container console, or a host-side preparation command.
 
 > **Release boundary:** this no-shell procedure applies to the complete signed
-> v0.1.0-rc.4 release asset set and later releases that retain this contract.
+> v0.1.0-rc.5 release asset set and later releases that retain this contract.
 > The immutable rc.3 assets use their attached rc.3 instructions and do not
-> contain this initializer/staging helper. Never combine files from releases.
+> contain this initializer/staging helper. The signed server rc.4 tag has no
+> GitHub Release or YAML. Never combine files from releases.
 
 The signed release YAML runs eight services. `initialize` first validates the
 staged inputs, installs the image-embedded Caddy/PostgreSQL configuration, and
@@ -24,14 +25,13 @@ dataset.
 ## 1. Verify the public release on Windows
 
 Install GitHub CLI and Git for Windows, sign in with `gh auth login`, then use
-the complete release tag you intend to install:
+the exact coordinated release tag. A unique directory below Windows `%TEMP%`
+prevents an earlier partial download from contaminating this asset set:
 
 ```powershell
-$Tag = Read-Host 'Enter the next signed PowerMeter release tag'
-if ($Tag -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*$') {
-    throw 'Expected a signed release-candidate tag'
-}
-$Release = Join-Path $HOME "powermeter-$Tag"
+$Tag = 'v0.1.0-rc.5'
+$TempRoot = [IO.Path]::GetFullPath($env:TEMP)
+$Release = Join-Path $TempRoot ("powermeter-{0}-{1}" -f $Tag, [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $Release -ErrorAction Stop | Out-Null
 gh release download $Tag --repo mhilton7/power-monitor-v2 --dir $Release
 $Sums = Join-Path $Release 'SHA256SUMS'

@@ -24,7 +24,7 @@ actual registry digests after push.
 docker build --file backup/Dockerfile --tag pm-backup:test .
 python scripts/render_truenas_release.py --template deploy/truenas/power-monitor-v2.yaml `
   --output release/power-monitor-v2-test.yaml --manifest release/release-manifest-test.json `
-  --version 0.1.0-rc.4 --revision 0123456789abcdef0123456789abcdef01234567 `
+  --version 0.1.0-rc.5 --revision 0123456789abcdef0123456789abcdef01234567 `
   --api-digest sha256:<published-api-digest> `
   --frontend-digest sha256:<published-frontend-digest> `
   --gateway-digest sha256:<published-gateway-digest> `
@@ -33,7 +33,7 @@ docker compose -f release/power-monitor-v2-test.yaml config --quiet
 python scripts/verify_release_artifacts.py --manifest release/release-manifest-test.json
 ```
 
-The rc.4 value above is a local post-rc.3 render example, not a tag or
+The rc.5 value above is a local post-rc.3 render example, not a tag or
 publication claim. The checked-in template cannot become installable until a
 new coordinated release supplies real registry digests and passes every gate.
 
@@ -64,9 +64,13 @@ most five seconds. API healthcheck client and container timeouts both exceed the
 sandbox's bounded self-test duration. If the digest-pinned deployment smoke
 fails, it uploads redacted Compose status, container health state, and service
 log-event JSONL (`deployment-test-report-failure-log-events.jsonl`) before
-cleanup. The event stream is bounded and contains only known service, UTC
-timestamp, and event enums—never raw log text. Those diagnostics never make a
-failed smoke eligible for release assembly.
+cleanup. Its failure report includes one fixed allowlisted `failed_assertion`
+identifier; arbitrary assertion or log text is rejected. The event stream is
+bounded and contains only known service, UTC timestamp, and event enums—never
+raw log text. The runtime-recovery check restarts the six exact captured
+container IDs directly, avoiding Compose dependency traversal, and proves the
+initializer identity and completion time remain unchanged. Those diagnostics
+never make a failed smoke eligible for release assembly.
 
 The target TrueNAS deployment suite records machine-readable evidence for clean
 migration, service health, HTTPS routing and headers, SSE proxying, upload
@@ -80,6 +84,20 @@ and cannot be inferred from a GitHub-hosted Docker runner.
 Firmware host/fault/simulation/HIL tests live in the independent firmware repository. Hardware certification requires actual marked ESP32-S3/PZEM/SD evidence for PZEM readings, endurance sample, AP/server/DNS/TLS outages, physical cycles, USB recovery, OTA/rollback, and 72-hour soak. A passing simulator cannot set hardware status to passed.
 
 Every evidence report records schema, version, full revision, UTC generation time, outcome, exact command/environment, input/output checksums, test counts, failures/skips, and physical/simulated classification. A release gate must not be reported passed from missing, stale, or unparsable evidence.
+
+## Historical rc.4 tagged outcome
+
+Signed server tag `v0.1.0-rc.4` and release workflow run
+[`31893354667`](https://github.com/mhilton7/power-monitor-v2/actions/runs/31893354667)
+are immutable historical evidence. The workflow's named
+`Mandatory release gates` job passed; all four
+multi-architecture images were published; and anonymous GHCR access passed.
+Deployment smoke then failed deterministically because `docker compose start`
+restarted the completed initializer dependency and changed its completion time.
+All runtime services returned healthy, but the invariant correctly failed.
+Assembly was skipped, so there is no server rc.4 GitHub Release or generated
+YAML and rc.4 is not installable. The rc.5 source repairs this check; it has no
+tagged CI or publication evidence until its own workflow runs.
 
 ## Current audit-candidate local evidence
 
@@ -207,14 +225,16 @@ certification.
 ### Gates that remain closed
 
 - Signed public server/firmware rc.1 and rc.3 releases, plus signed public
-  firmware rc.2, are historical evidence. The signed server rc.2 tag's run
+  firmware rc.2 and rc.4, are historical evidence. The signed server rc.2 tag's run
   `31866197054` failed the cross-repository OpenAPI-hash check before server
   images or release assets were published.
 - Public rc.1/rc.3 GHCR digests, attestations, generated TrueNAS YAML, and
   release smokes are version-specific historical evidence. There is no server
-  rc.2 image set or YAML. The post-rc.3 eight-service/no-shell source changes
-  remain unpublished and the checked-in template correctly retains
-  `UNPUBLISHED_*` sentinels pending a new coordinated tag.
+  rc.2 image set or YAML. Server rc.4 published images but no Release or YAML
+  after deployment smoke failed; those images are not an installation
+  authority. The rc.5 eight-service/no-shell source remains unpublished and the
+  checked-in template correctly retains `UNPUBLISHED_*` sentinels pending its
+  own coordinated tag.
 - The target-TrueNAS clean install, forward upgrade, restored rollback,
   restart, and permission suite has not run for the post-rc.3 initializer model.
 - No marked-unit PZEM/ESP32-S3/SD identity, electrical, TLS/HMAC, OTA rollback,

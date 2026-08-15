@@ -15,6 +15,7 @@ import yaml
 from backend.app.bill_rate_import.parser import extract_rate_plan_from_pdf
 from backend.app.schemas.api import BootstrapRequest
 from backend.tests.deployment_evidence_probe import _rate_source_pdf
+from scripts.validate_deployment_evidence import FAILURE_ASSERTIONS
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -228,7 +229,7 @@ def test_public_release_selector_executes_against_paginated_fail_closed_fixtures
     arguments = (
         "--arg",
         "current",
-        "v0.1.0-rc.4",
+        "v0.1.0-rc.5",
         "--arg",
         "major_prefix",
         "v0.",
@@ -245,7 +246,7 @@ def test_public_release_selector_executes_against_paginated_fail_closed_fixtures
                 "draft": False,
                 "published_at": "2026-08-15T05:30:00Z",
                 "prerelease": True,
-                "tag_name": "v0.1.0-rc.4",
+                "tag_name": "v0.1.0-rc.5",
             },
             {
                 "draft": False,
@@ -269,7 +270,7 @@ def test_public_release_selector_executes_against_paginated_fail_closed_fixtures
             },
         ],
     ]
-    # Failed RC2 has a Git tag but no Release, so it is intentionally absent.
+    # Failed RC2 and RC4 have Git tags but no Releases, so they are intentionally absent.
     selected = _run_jq(program, pages, *arguments)
     assert selected.returncode == 0, selected.stderr
     assert selected.stdout.strip() == "v0.1.0-rc.3"
@@ -298,11 +299,11 @@ def test_release_predecessor_version_check_rejects_equal_or_newer_versions() -> 
             check=False,
         )
 
-    assert validate("v0.1.0-rc.3", "v0.1.0-rc.4").returncode == 0
-    assert validate("v0.1.0-rc.4", "v0.1.0-rc.4").returncode != 0
-    assert validate("v0.1.0-rc.5", "v0.1.0-rc.4").returncode != 0
-    assert validate("v0.1.0", "v0.1.0-rc.4").returncode != 0
-    assert validate("not-a-version", "v0.1.0-rc.4").returncode != 0
+    assert validate("v0.1.0-rc.3", "v0.1.0-rc.5").returncode == 0
+    assert validate("v0.1.0-rc.5", "v0.1.0-rc.5").returncode != 0
+    assert validate("v0.1.0-rc.6", "v0.1.0-rc.5").returncode != 0
+    assert validate("v0.1.0", "v0.1.0-rc.5").returncode != 0
+    assert validate("not-a-version", "v0.1.0-rc.5").returncode != 0
 
 
 def test_release_tag_metadata_filters_execute_and_reject_invalid_verification() -> None:
@@ -718,6 +719,20 @@ def test_release_smoke_preserves_redacted_failure_diagnostics() -> None:
     assert 'rollback:"not_exercised_github_hosted_smoke"' in smoke
     assert "compose run --rm initialize" in smoke
     assert "initializer_finished_at" in smoke
+    assert "declare -A runtime_container_ids=()" in smoke
+    assert 'compose stop "${runtime_service_names[@]}"' in smoke
+    assert "compose start postgres api worker frontend gateway backup" not in smoke
+    assert 'docker start "$expected_container_id"' in smoke
+    assert 'wait_healthy "$service" "$expected_container_id"' in smoke
+    assert smoke.index('runtime_container_ids["$service"]="$container_id"') < smoke.index(
+        'compose stop "${runtime_service_names[@]}"'
+    )
+    assert 'failed_assertion="initializer_finished_at_unchanged_after_runtime_restart"' in smoke
+    assert '"failed_assertion": sys.argv[6]' in smoke
+    assigned_failure_assertions = set(
+        re.findall(r'^[ \t]*failed_assertion="([a-z_]+)"$', smoke, flags=re.MULTILINE)
+    )
+    assert assigned_failure_assertions == FAILURE_ASSERTIONS
     restart_loop = smoke.split(
         "for service in postgres api worker frontend gateway backup; do", maxsplit=1
     )[1].split("done", maxsplit=1)[0]
@@ -803,8 +818,11 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     assert "prepare-host.sh" not in installation
     assert "pm-protocol/1.0.0" in installation
     assert "authenticated PZEM-004T readings" in installation
-    assert "$Tag = Read-Host" in installation
-    assert "signed v0.1.0-rc.4 release" in normalized_installation
+    assert "$Tag = 'v0.1.0-rc.5'" in installation
+    assert "$env:TEMP" in installation
+    assert "[guid]::NewGuid().ToString('N')" in installation
+    assert "Join-Path $HOME" not in installation
+    assert "signed v0.1.0-rc.5 release" in normalized_installation
     assert "Stage-PowerMeterTrueNAS.ps1" in installation
     assert "power-monitor.home.arpa -> 192.168.0.175" in installation
     assert "Direct-IP HTTPS is not supported" in installation
@@ -860,17 +878,22 @@ def test_candidate_notes_describe_workflow_output_without_claiming_source_public
     notes = (ROOT / "release/RELEASE_NOTES.md").read_text(encoding="utf-8")
     normalized = " ".join(notes.split())
     assert "source copy alone is not publication evidence" in normalized
-    assert "power-monitor-v2-v0.1.0-rc.4.yaml" in normalized
+    assert "power-monitor-v2-v0.1.0-rc.5.yaml" in normalized
     assert "Keep all existing application secrets" in normalized
     assert "Alembic head `20260815_0011`" in normalized
     assert "Revision 0009 adds the exact-home rate-candidate" in normalized
     assert "permanent-loss rows immutable" in normalized
-    assert "firmware `v0.1.0-rc.4`" in normalized
-    assert "f9b936468f5a696a0bee3e04edda021c12ab81dddc091cbb307face0be1de7b1" in normalized
+    assert "firmware `v0.1.0-rc.5`" in normalized
+    assert "66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591" in normalized
     assert "failed release run" in normalized
     assert "31866197054" in normalized
     assert "There is no server rc.2 GitHub Release" in normalized
-    assert "Public server rc.3 remains the prior installation authority" in normalized
+    assert "Public server rc.3 remains the installation authority" in normalized
+    assert "31893354667" in normalized
+    assert "no server rc.4 GitHub Release" in normalized
+    assert "deterministically" in normalized
+    assert "docker compose start" in normalized
+    assert "captures the six runtime container IDs" in normalized
     assert "never persisted" in normalized
     assert "nine Generic/POSIX child ZFS datasets" in normalized
     assert "not_exercised_github_hosted_smoke" in normalized

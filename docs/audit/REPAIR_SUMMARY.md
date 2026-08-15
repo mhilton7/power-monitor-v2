@@ -1,9 +1,12 @@
 # Repair summary
 
 This summary describes post-rc.3 source repairs. Public `v0.1.0-rc.3` is
-immutable and does not contain these changes. The source checkout remains
-non-installable until a new coordinated, signed server/firmware candidate
-passes its gates and supplies digest-pinned release YAML.
+immutable and does not contain these changes. The repairs reached the valid
+signed server rc.4 tag, but deterministic deployment smoke failed and release
+assembly skipped, leaving no server rc.4 Release or YAML. The rc.5 checkout
+adds only the exact smoke recovery repair and release identity; it remains
+non-installable until coordinated signed server/firmware rc.5 passes its gates
+and supplies digest-pinned release YAML.
 
 ## User-visible fixes
 
@@ -165,7 +168,8 @@ passes its gates and supplies digest-pinned release YAML.
 - No firmware runtime or wire-protocol change was required. Public rc.3 already
   returned authorized home scopes with `/devices`, even before first
   enrollment, and the server enrolls from a one-time token owned by a home.
-  Rc.4 decouples browser-wide home discovery into `/home-scopes` and removes
+  Post-rc.3 server source decouples browser-wide home discovery into
+  `/home-scopes` and removes
   ambiguity from every home-specific operation.
 - Reviewed the independent firmware source, host/fault/HIL definitions,
   workflows, release metadata, and server contract. Added `.gitattributes` so
@@ -201,8 +205,11 @@ passes its gates and supplies digest-pinned release YAML.
   is never auto-deleted.
 - Kept encrypted backup and isolated restore identities separate. The API has
   traversal/read access only to bounded backup status, not archive contents.
-- Corrected release smoke to exercise a genuine first run, use certificates
-  valid beyond the seven-day horizon, and restart only long-running services.
+- Rc.4 release smoke exercised a genuine first run and certificates valid
+  beyond the seven-day horizon, but its Compose restart traversed dependencies
+  and reran the initializer. Rc.5 captures the six runtime container IDs,
+  restarts those exact containers directly, and requires the initializer ID,
+  exit state, and completion time to remain unchanged.
 
 ## Security fixes
 
@@ -228,9 +235,9 @@ passes its gates and supplies digest-pinned release YAML.
 - Added workflow gates for Ruff formatting, Linux-platform mypy of the
   initializer, PowerShell parsing of the stager, and exact release/stable asset
   comparison.
-- No uncontrolled bulk dependency upgrade was performed. Current CI,
-  dependency audit, image scan, attestation, and release execution remain
-  pending.
+- No uncontrolled bulk dependency upgrade was performed. Rc.4 CI, dependency,
+  scan, image, attestation, and anonymous-access gates passed before deployment
+  smoke failed and assembly skipped. Rc.5 requires its own complete execution.
 
 ## Principal test additions
 
@@ -253,6 +260,7 @@ kept separate. See `VALIDATION_MATRIX.md` for the current result of each gate.
 The full backend real-PostgreSQL suite passed 135 tests with 3 expected skips;
 Ruff lint/format and mypy across 81 files passed. Frontend lint/type/build, 24
 Vitest tests, and 36 Chromium Playwright tests passed. No whole-repository
-aggregate is claimed, and these local results do not replace the tagged
-public-rc.3 forward-upgrade, four-image Docker, remote CI, target TrueNAS,
-publication, or HIL gates.
+  aggregate is claimed. Rc.4 subsequently passed the tagged public-rc.3
+  forward-upgrade, four-image, CI/security, and anonymous-access gates, then
+  failed deterministic deployment smoke. Those results do not replace rc.5
+  remote CI/release, target TrueNAS, publication, or HIL gates.

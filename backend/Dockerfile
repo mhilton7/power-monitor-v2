@@ -58,7 +58,7 @@ RUN install -d \
 
 FROM python:3.13.14-alpine3.23@sha256:9fdbf2e3e82628351513560b121e2ee6ce31cac212be9e070c5a5e2769fb5e76
 
-ARG VERSION=0.1.0-rc.4
+ARG VERSION=0.1.0-rc.5
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="PowerMeter V2 API and worker" \
       org.opencontainers.image.description="Authenticated PZEM-only PowerMeter V2 services" \
