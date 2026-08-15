@@ -513,7 +513,7 @@ def validate(
             )
         if report["services"] != SUCCESS_SERVICES or report["checks"] != SUCCESS_CHECKS:
             raise EvidenceError(f"success service/check evidence is incomplete: {report_path}")
-        if report["rollback"] != "not_applicable_initial_release_candidate":
+        if report["rollback"] != "not_exercised_github_hosted_smoke":
             raise EvidenceError(f"success rollback status is unexpected: {report_path}")
         if report["pdf_sandbox"] != {
             "schema_id": "pm-pdf-sandbox-health/1.0.0",

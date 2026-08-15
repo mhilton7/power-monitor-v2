@@ -35,10 +35,13 @@ Release workflow gates cover backend unit/integration and PostgreSQL migration
 tests; frontend checks; shared protocol vectors; Compose/hardening checks;
 dependency/secret/CodeQL/container scans; SBOM/provenance; a clean digest-pinned
 deployment with TLS, SSE, upload limits, restarts, encrypted backup, and actual
-isolated restore; and firmware release compatibility. A prior-V2 migration is
-exercised when such a tag exists. For the first V2 candidate, prior-version
-migration and rollback are explicitly `not_applicable_initial_release`, not
-reported as passes.
+isolated restore; and firmware release compatibility. When a prior V2 tag
+exists, the migration gate exercises only the forward path from that release's
+database to the current release. It does not run prior binaries against the
+post-upgrade database or prove rollback compatibility. The GitHub-hosted
+clean-deployment smoke does not exercise application rollback and records
+`not_exercised_github_hosted_smoke`, never a rollback pass. Target upgrade and
+rollback evidence remains separate.
 
 The API image starts Uvicorn on Python's standard `asyncio` loop because the
 fail-closed PDF sandbox establishes its boundary through asyncio subprocess
@@ -55,9 +58,11 @@ failed smoke eligible for release assembly.
 The target TrueNAS deployment suite records machine-readable evidence for clean
 migration, service health, HTTPS routing and headers, SSE proxying, upload
 rejection, dataset permissions, backup/restore, every individual service
-restart, full-stack restart, persistence, and—once a prior V2 release exists—
-rollback to prior digests. Target-TrueNAS execution remains separate physical
-deployment evidence and cannot be inferred from a GitHub-hosted Docker runner.
+restart, full-stack restart, and persistence. A rollback result additionally
+requires an explicit release-specific test that restores or clones the matching
+pre-upgrade database into a validated recovery target before binding prior
+digests. Target-TrueNAS execution remains separate physical deployment evidence
+and cannot be inferred from a GitHub-hosted Docker runner.
 
 Firmware host/fault/simulation/HIL tests live in the independent firmware repository. Hardware certification requires actual marked ESP32-S3/PZEM/SD evidence for PZEM readings, endurance sample, AP/server/DNS/TLS outages, physical cycles, USB recovery, OTA/rollback, and 72-hour soak. A passing simulator cannot set hardware status to passed.
 

@@ -14,6 +14,7 @@ from starlette.responses import Response
 
 from .bill_rate_import.isolated import pdf_sandbox_is_ready
 from .config import get_settings
+from .constants import VERSION
 from .db import make_engine, make_session_factory
 from .errors import PowerMeterError
 from .logging_config import configure_logging
@@ -69,7 +70,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    logger.info("application_started", version="0.1.0-rc.1")
+    logger.info("application_started", version=VERSION)
     try:
         yield
     finally:
@@ -79,7 +80,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="PowerMeter V2 API",
-    version="0.1.0-rc.1",
+    version=VERSION,
     lifespan=lifespan,
     docs_url=None if settings.env == "production" else "/api/docs",
     redoc_url=None,

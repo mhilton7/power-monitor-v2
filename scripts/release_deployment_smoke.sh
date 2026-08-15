@@ -307,7 +307,8 @@ jq -e \
   "$authenticated_evidence" >/dev/null
 curl "${curl_common[@]}" --cookie "$cookie_jar" \
   "$endpoint/api/v1/system/health" | jq -e \
-  '.database == "reachable" and .backup.last_successful.state == "verified" and .restore_test.last_successful.state == "verified"' \
+  --arg expected_version "${GITHUB_REF_NAME#v}" \
+  '.version == $expected_version and .database == "reachable" and .backup.last_successful.state == "verified" and .restore_test.last_successful.state == "verified"' \
   >/dev/null
 
 set +e
@@ -357,7 +358,7 @@ jq -cn \
   --argjson restore "$(sudo cat "$base/backups/status/last-successful-restore-test.json")" \
   --argjson authenticated "$(cat "$authenticated_evidence")" \
   --argjson pdf_sandbox "$(cat "$work/pdf-sandbox.json")" \
-  '{schema:"pm-deployment-test/1.0.0",version:$version,revision:$revision,completed_at:$completed_at,status:"passed",services:($services|split(" ")),checks:["exact service set","digest-pinned image startup","TLS chain and hostname","liveness and readiness","API image PDF sandbox self-test","authenticated owner login","authenticated sensor enrollment","authenticated PZEM heartbeat and reading","PZEM-only History","reviewed rate-only PDF","worker-produced sensor cost","authenticated command round trip","authenticated system health","SSE proxy streaming","oversize PDF rejection","per-service restarts","migration rerun","full-stack restart","bind-mount access","encrypted backup","isolated restore"],rollback:"not_applicable_initial_release_candidate",pdf_sandbox:$pdf_sandbox,authenticated_sensor_evidence:$authenticated,backup:$backup,restore_test:$restore}' \
+  '{schema:"pm-deployment-test/1.0.0",version:$version,revision:$revision,completed_at:$completed_at,status:"passed",services:($services|split(" ")),checks:["exact service set","digest-pinned image startup","TLS chain and hostname","liveness and readiness","API image PDF sandbox self-test","authenticated owner login","authenticated sensor enrollment","authenticated PZEM heartbeat and reading","PZEM-only History","reviewed rate-only PDF","worker-produced sensor cost","authenticated command round trip","authenticated system health","SSE proxy streaming","oversize PDF rejection","per-service restarts","migration rerun","full-stack restart","bind-mount access","encrypted backup","isolated restore"],rollback:"not_exercised_github_hosted_smoke",pdf_sandbox:$pdf_sandbox,authenticated_sensor_evidence:$authenticated,backup:$backup,restore_test:$restore}' \
   > "$EVIDENCE_FILE"
 cp "$work/compose-ps.jsonl" "$compose_ps_evidence"
 cp "$work/permissions.txt" "$permissions_evidence"

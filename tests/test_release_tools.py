@@ -34,7 +34,7 @@ DIGEST_C = "sha256:" + "3" * 64
 DIGEST_D = "sha256:" + "4" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
-VERSION = "0.1.0-rc.1"
+VERSION = "0.1.0-rc.2"
 
 
 @pytest.fixture
@@ -133,7 +133,7 @@ def _write_success_evidence(prefix: Path) -> None:
         "status": "passed",
         "services": SUCCESS_SERVICES,
         "checks": SUCCESS_CHECKS,
-        "rollback": "not_applicable_initial_release_candidate",
+        "rollback": "not_exercised_github_hosted_smoke",
         "pdf_sandbox": {
             "schema_id": "pm-pdf-sandbox-health/1.0.0",
             "pdf_sandbox": "enforced",
@@ -265,6 +265,15 @@ def test_deployment_evidence_validator_accepts_only_complete_exact_sets(
     _write(report_path, json.dumps(report))
     with pytest.raises(EvidenceError, match="missing or unexpected"):
         _validate(malformed, outcome="success")
+
+    invalid_rollback = evidence_dir / "invalid-rollback-report"
+    _write_success_evidence(invalid_rollback)
+    invalid_report_path = invalid_rollback.with_name(invalid_rollback.name + ".json")
+    invalid_report = json.loads(invalid_report_path.read_text(encoding="utf-8"))
+    invalid_report["rollback"] = "passed"
+    _write(invalid_report_path, json.dumps(invalid_report))
+    with pytest.raises(EvidenceError, match="rollback status is unexpected"):
+        _validate(invalid_rollback, outcome="success")
 
     with pytest.raises(EvidenceError, match="expected release"):
         validate(

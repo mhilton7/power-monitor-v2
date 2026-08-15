@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 PRODUCT_NAME = "PowerMeter V2"
-VERSION = "0.1.0-rc.1"
+VERSION = "0.1.0-rc.2"
 PROTOCOL_ID = "pm-protocol/1.0.0"
 DEFAULT_TIMEZONE = "America/Los_Angeles"
 DEFAULT_HEARTBEAT_SECONDS = 15

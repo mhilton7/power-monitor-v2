@@ -12,22 +12,42 @@ Required firmware release assets include firmware/merged-flash/bootloader/partit
 
 Until machine-readable results from the actual marked ESP32-S3/PZEM/SD unit pass the hardware-in-loop suite and 72-hour soak, firmware and coordinated server releases remain prerelease candidates. Simulation is not physical certification.
 
-## Current local release candidate
+## Historical published v0.1.0-rc.1 evidence
 
-The independently buildable firmware repository is at commit
+The signed, public firmware
+[`v0.1.0-rc.1`](https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.1)
+prerelease is the historical firmware paired with the published server rc.1
+candidate. The following values preserve its prepublication development
+snapshot and belong only to rc.1; they must not be relabeled as rc.2 evidence.
+
+The independently buildable firmware repository was validated at commit
 `5dea90d91ecd5731b4286a5f67117741aa2ce539` on
-`codex/greenfield-headless-agent`. Its local `0.1.0-rc.1` pack was verified with
+`codex/greenfield-headless-agent`. Its rc.1 snapshot was verified with
 55/55 host tests, 36/36 fault-injection cases, 63/63 production-C assertions,
 63/63 ASan/UBSan assertions, and an accelerated 120-day simulation containing
 10,368,000 samples and 172,800 durable intervals. Two clean ESP-IDF 6.0.2
 release builds were byte-identical.
 
-`firmware.bin` is 978,576 bytes with SHA-256
+That snapshot's `firmware.bin` is 978,576 bytes with SHA-256
 `02e0c46a0bfee4fcf35a0bf82de191bf04e69a65d387fbbdbb78e6876b6b06da`.
 The 24-file local pack includes the required flash binaries, checksums,
 compatibility/manifest metadata, PowerShell utilities, SBOM, provenance,
-dependency, memory, stack, test, migration, and release reports. It is not a
-signed tag or public GitHub Release. Its manifest and hardware-certification
-record remain `pending`; marked-unit identity/electrical evidence, TLS/HMAC,
-OTA install/rollback, outage/power-cycle/USB recovery, and a continuous 72-hour
-soak still block stable promotion.
+dependency, memory, stack, test, migration, and release reports. These preserved
+local values are historical test evidence, not substitutes for the public
+rc.1 release's attached `SHA256SUMS`, attestations, or downloadable assets.
+
+## Current coordinated target
+
+The current server rc.2 coordination target is the signed, public firmware
+[`v0.1.0-rc.2`](https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.2)
+prerelease. It changes release identity and compatible-server metadata while
+retaining firmware runtime behavior and `pm-protocol/1.0.0`. The server rc.2
+release audit must verify the public firmware release, contracts, checksums,
+attestations, and cross-links before publishing server assets. This document
+does not copy the rc.1 hash/test totals onto rc.2 or invent final rc.2 asset
+values before that audit completes.
+
+Both firmware candidates retain hardware-certification status `pending`.
+Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,
+outage/power-cycle/USB recovery, and a continuous 72-hour soak still block
+stable promotion.

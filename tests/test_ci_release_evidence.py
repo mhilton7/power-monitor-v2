@@ -447,6 +447,9 @@ def test_release_smoke_preserves_redacted_failure_diagnostics() -> None:
     assert smoke.index('collect_failure_diagnostics "$exit_code"') < smoke.index(
         "compose down --volumes --remove-orphans"
     )
+    assert '--arg expected_version "${GITHUB_REF_NAME#v}"' in smoke
+    assert '.version == $expected_version' in smoke
+    assert 'rollback:"not_exercised_github_hosted_smoke"' in smoke
 
     deployment = release.split("  deployment-smoke:", maxsplit=1)[1]
     deployment = deployment.split("  public-distribution:", maxsplit=1)[0]
@@ -522,6 +525,8 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     assert "docker exec --user 568:568" in installation
     assert "pm-protocol/1.0.0" in installation
     assert "authenticated PZEM-004T readings" in installation
+    assert "tag=v0.1.0-rc.2" in installation
+    assert 'cd "/tmp/powermeter-${tag}"' in installation
 
     for dataset in (
         "postgres",
@@ -571,8 +576,57 @@ def test_candidate_notes_describe_workflow_output_without_claiming_source_public
     notes = (ROOT / "release/RELEASE_NOTES.md").read_text(encoding="utf-8")
     normalized = " ".join(notes.split())
     assert "presence alone does not prove a release workflow ran" in normalized
-    assert "power-monitor-v2-v0.1.0-rc.1.yaml" in normalized
+    assert "power-monitor-v2-v0.1.0-rc.2.yaml" in normalized
+    assert "v0.1.0-rc.1 system upgrades in place" in normalized
+    assert "existing ZFS datasets" in normalized
+    assert "application secrets" in normalized
+    assert "database remains at Alembic revision `20260813_0007`" in normalized
+    assert "firmware v0.1.0-rc.2" in normalized
+    assert "not_exercised_github_hosted_smoke" in normalized
+    assert "proves only that an rc.1 database can upgrade forward to rc.2" in normalized
+    assert "Rollback compatibility remains unproven" in normalized
+    assert "matching pre-upgrade database" in normalized
+    assert "migration report can permit application rollback" not in normalized
     assert "hardware-certification-status.json` remains `pending`" in normalized
     assert "at least 72 hours" in normalized
     assert "repositories do not yet exist" not in normalized
     assert "Current `gh` authentication is invalid" not in normalized
+
+
+def test_rc2_audit_docs_separate_forward_upgrade_publication_and_recovery() -> None:
+    rollback = " ".join(
+        (ROOT / "deploy/truenas/ROLLBACK.md").read_text(encoding="utf-8").split()
+    )
+    release_process = " ".join(
+        (ROOT / "docs/RELEASE_PROCESS.md").read_text(encoding="utf-8").split()
+    )
+    testing = " ".join((ROOT / "docs/TESTING.md").read_text(encoding="utf-8").split())
+    firmware = " ".join(
+        (ROOT / "docs/FIRMWARE_RELEASES.md").read_text(encoding="utf-8").split()
+    )
+    traceability = " ".join(
+        (ROOT / "docs/REQUIREMENTS_TRACEABILITY.md").read_text(encoding="utf-8").split()
+    )
+
+    assert "proves only forward upgrade" in rollback
+    assert "must never attach old binaries to the current post-upgrade database" in rollback
+    assert "matching pre-upgrade database restore" in rollback
+    assert "migration report can permit" not in rollback
+    assert (
+        "prior-version migration gate proves only forward rc.1-to-rc.2 upgrade"
+        in release_process
+    )
+    assert "exercises only the forward path" in testing
+
+    assert "Historical published v0.1.0-rc.1 evidence" in firmware
+    assert "55/55 host tests" in firmware
+    assert "02e0c46a0bfee4fcf35a0bf82de191bf04e69a65d387fbbdbb78e6876b6b06da" in firmware
+    assert "signed, public firmware" in firmware
+    assert "v0.1.0-rc.2" in firmware
+    assert "does not copy the rc.1 hash/test totals onto rc.2" in firmware
+
+    assert "server `v0.1.0-rc.2` remains an unpublished source candidate" in traceability
+    assert "signed public firmware `v0.1.0-rc.2`" in traceability
+    assert "target repos are absent" not in traceability
+    assert "invalid `gh` authentication" not in traceability
+    assert "no signed public release" not in traceability

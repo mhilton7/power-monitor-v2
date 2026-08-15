@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 from pathlib import Path
 
+from backend.app.constants import VERSION
 from packaging.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,3 +39,28 @@ def test_production_dependencies_are_exact_and_present_in_lock() -> None:
         assert lock[_canonical(requirement.name)] == pins[0].version
 
     assert len(lock) >= len(project["dependencies"]), "transitive closure was not locked"
+
+
+def test_release_version_metadata_is_consistent() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    package = json.loads((ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
+    package_lock = json.loads(
+        (ROOT / "frontend" / "package-lock.json").read_text(encoding="utf-8")
+    )
+
+    assert VERSION == "0.1.0-rc.2"
+    assert project["version"] == "0.1.0rc2"
+    assert package["version"] == VERSION
+    assert package_lock["version"] == VERSION
+    assert package_lock["packages"][""]["version"] == VERSION
+    for relative in ("backend/Dockerfile", "frontend/Dockerfile", "backup/Dockerfile"):
+        dockerfile = (ROOT / relative).read_text(encoding="utf-8")
+        assert f"ARG VERSION={VERSION}" in dockerfile
+
+    main = (ROOT / "backend/app/main.py").read_text(encoding="utf-8")
+    assert "from .constants import VERSION" in main
+    assert 'version="0.1.0-rc.' not in main
+    openapi = json.loads(
+        (ROOT / "shared/openapi/power-meter-v2.openapi.json").read_text(encoding="utf-8")
+    )
+    assert openapi["info"]["version"] == VERSION
