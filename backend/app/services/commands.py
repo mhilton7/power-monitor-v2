@@ -98,9 +98,7 @@ def _invalidate_rotation_credential(credential: DeviceCredential, now: datetime)
     credential.revoked_at = now
 
 
-async def expire_rotation_credentials(
-    session: AsyncSession, *, now: datetime | None = None
-) -> int:
+async def expire_rotation_credentials(session: AsyncSession, *, now: datetime | None = None) -> int:
     effective_now = now or datetime.now(UTC)
     candidates = (
         await session.scalars(

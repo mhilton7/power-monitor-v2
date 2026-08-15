@@ -15,6 +15,11 @@ from backend.app.models import (
     Device,
     DeviceHeartbeat,
     Home,
+    RateCandidate,
+    RateCandidateReview,
+    RateSource,
+    RateSourceRevision,
+    RateSyncRun,
     User,
 )
 from sqlalchemy import select
@@ -183,6 +188,114 @@ async def test_backup_failure_status_opens_and_verified_status_resolves() -> Non
         assert (
             await evaluate_operational_alerts(
                 session, status_dir=status_dir, now=now + timedelta(seconds=15)
+            )
+            == 1
+        )
+        assert alert.state == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_operational_alerts_include_sensorless_home_when_another_home_has_device() -> None:
+    now = datetime(2026, 8, 13, 22, 30, tzinfo=UTC)
+    status_dir = Path(".test-runtime") / f"mixed-home-alert-status-{uuid.uuid4()}"
+    status_dir.mkdir(parents=True)
+    (status_dir / "last-backup-attempt.json").write_text(
+        json.dumps({"format": "pm-backup/1.0.0", "state": "failed", "run_id": "mixed-b-1"}),
+        encoding="utf-8",
+    )
+    (status_dir / "last-restore-test-attempt.json").write_text(
+        json.dumps({"format": "pm-backup/1.0.0", "state": "verified", "run_id": "mixed-r-1"}),
+        encoding="utf-8",
+    )
+    async with session_factory() as session:
+        sensor_home, _device_row = await _device(session, now)
+        sensorless_home = Home(name="Sensorless Operational Alert Home")
+        session.add(sensorless_home)
+        await session.flush()
+
+        assert await evaluate_operational_alerts(session, status_dir=status_dir, now=now) == 2
+        alerts = (
+            await session.scalars(select(Alert).where(Alert.alert_type == "backup_failed"))
+        ).all()
+        assert {alert.home_id for alert in alerts} == {sensor_home.id, sensorless_home.id}
+
+
+@pytest.mark.asyncio
+async def test_rejected_rate_candidate_resolves_exact_home_review_alert() -> None:
+    now = datetime(2026, 8, 13, 23, 0, tzinfo=UTC)
+    status_dir = Path(".test-runtime") / f"rejected-rate-alert-status-{uuid.uuid4()}"
+    status_dir.mkdir(parents=True)
+    async with session_factory() as session:
+        home = Home(name="Rejected Rate Candidate Home")
+        reviewer = User(
+            email="rate-reviewer@example.test",
+            display_name="Rate Reviewer",
+            password_hash="not-used-in-this-test",
+        )
+        source = RateSource(
+            name="SCE official candidate alert test",
+            source_type="official_https",
+            https_url="https://www.sce.com/regulatory/tariff-books",
+            enabled=True,
+        )
+        session.add_all((home, reviewer, source))
+        await session.flush()
+        revision = RateSourceRevision(
+            source_id=source.id,
+            artifact_sha256="a" * 64,
+            parser_version="sce-tou-public-html-v1",
+        )
+        session.add(revision)
+        await session.flush()
+        candidate = RateCandidate(
+            source_revision_id=revision.id,
+            normalized_rates={"schema": "sce-rate-candidate/1.0.0", "plans": []},
+            validation_evidence={"coverage": "complete"},
+            state="review_required",
+        )
+        session.add(candidate)
+        await session.flush()
+        session.add(
+            RateSyncRun(
+                source_id=source.id,
+                home_id=home.id,
+                state="review_required",
+                event_code="RATE_SOURCE_CHANGED",
+                correlation_id="rejected-alert-candidate",
+                requested_url=source.https_url or "https://www.sce.com/",
+                revision_id=revision.id,
+                completed_at=now,
+                evidence={"candidate_id": candidate.id, "initiator": "scheduled_worker"},
+            )
+        )
+        await session.flush()
+
+        assert await evaluate_operational_alerts(session, status_dir=status_dir, now=now) == 1
+        alert = await session.scalar(
+            select(Alert).where(
+                Alert.home_id == home.id,
+                Alert.alert_type == "rate_source_changed",
+            )
+        )
+        assert alert is not None and alert.state == "open"
+
+        session.add(
+            RateCandidateReview(
+                candidate_id=candidate.id,
+                home_id=home.id,
+                selected_plan_name=None,
+                effective_start=None,
+                state="rejected",
+                reviewed_by_user_id=reviewer.id,
+                reviewed_at=now + timedelta(seconds=1),
+            )
+        )
+        await session.flush()
+        assert (
+            await evaluate_operational_alerts(
+                session,
+                status_dir=status_dir,
+                now=now + timedelta(seconds=1),
             )
             == 1
         )

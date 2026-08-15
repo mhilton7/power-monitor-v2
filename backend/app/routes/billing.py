@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from anyio import Path as AsyncPath
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +16,7 @@ from ..bill_rate_import.isolated import (
 from ..config import Settings, get_settings
 from ..constants import MAX_PDF_BYTES
 from ..db import get_session
-from ..errors import BillRateImportError, InvalidRequest, NotFound
+from ..errors import BillRateImportError, InvalidRequest, NotFound, RateWorkflowConflict
 from ..models import (
     AuditEvent,
     BillingEstimate,
@@ -28,6 +26,7 @@ from ..models import (
     NormalizedInterval,
     RateAssignment,
     RateCandidate,
+    RateCandidateReview,
     RatePeriod,
     RatePlan,
     RatePlanVersion,
@@ -40,10 +39,29 @@ from ..models import (
     UtilityBillRateUpload,
     user_home_scopes,
 )
-from ..schemas.api import RateCorrectionRequest, RatePublishRequest
+from ..schemas.api import (
+    ManualRateCandidateRequest,
+    RateCandidateActivationRequest,
+    RateCandidateReviewRequest,
+    RateCorrectionRequest,
+    RatePublishRequest,
+)
 from ..security.auth import CurrentUser, require_permission
-from ..security.crypto import encrypt_secret
-from ..services.rate_sync import ensure_default_sce_source, sync_official_rate_source
+from ..services.rate_sync import (
+    ensure_default_sce_source,
+    sync_official_rate_source,
+)
+from ..services.rate_workflow import (
+    activate_rate_candidate,
+    create_manual_rate_candidate,
+    exact_home_candidate,
+    locked_rate_plan_and_next_version,
+    publish_rate_candidate,
+    reject_rate_candidate,
+    replace_rate_assignment,
+    review_rate_candidate,
+    safe_review,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["billing"])
 # Compatibility seam for existing API tests that replace the parser with a sanitized
@@ -55,7 +73,9 @@ async def _user_homes(session: AsyncSession, user_id: str) -> tuple[str, ...]:
     return tuple(
         (
             await session.scalars(
-                select(user_home_scopes.c.home_id).where(user_home_scopes.c.user_id == user_id)
+                select(user_home_scopes.c.home_id)
+                .where(user_home_scopes.c.user_id == user_id)
+                .order_by(user_home_scopes.c.home_id)
             )
         ).all()
     )
@@ -69,7 +89,9 @@ async def _resolve_user_home(
         if requested_home_id not in homes:
             raise NotFound("home does not exist")
         return requested_home_id
-    if len(homes) != 1:
+    if not homes:
+        raise NotFound("home does not exist")
+    if len(homes) > 1:
         raise InvalidRequest("home_id is required when the actor can access multiple homes")
     return homes[0]
 
@@ -163,7 +185,6 @@ async def import_rates_from_bill(
     upload = UtilityBillRateUpload(
         home_id=scoped_home_id,
         artifact_sha256=draft.source_artifact_sha256,
-        encrypted_artifact_path=None,
         byte_count=len(data),
         page_count=max(field.source.page for field in draft.fields),
         media_type="application/pdf",
@@ -179,14 +200,6 @@ async def import_rates_from_bill(
         # owned by another home is deliberately indistinguishable from a new
         # document and is imported independently for this home.
         raise BillRateImportError("this rate-source document was already imported") from exc
-    if settings.retain_bill_artifacts:
-        settings.bill_artifact_dir.mkdir(parents=True, exist_ok=True)
-        encrypted = encrypt_secret(settings.master_key, data, context=upload.id.encode())
-        target = settings.bill_artifact_dir / f"{upload.id}.pdf.enc"
-        temporary = target.with_suffix(".tmp")
-        temporary.write_bytes(encrypted)
-        os.replace(temporary, target)
-        upload.encrypted_artifact_path = str(target)
     extraction = UtilityBillRateExtraction(
         upload_id=upload.id,
         utility_name=draft.utility_name,
@@ -219,22 +232,23 @@ async def import_rates_from_bill(
         state="review_required",
     )
     session.add(extraction)
-    session.add(
-        AuditEvent(
-            actor_user_id=user.id,
-            event_code="BILL_RATE_SOURCE_PARSED",
-            target_type="utility_bill_rate_extraction",
-            target_id=extraction.id,
-            correlation_id=request.state.correlation_id,
-            details={
-                "artifact_sha256": upload.artifact_sha256,
-                "ignored_categories": list(ignored_categories),
-                "retained_encrypted": bool(upload.encrypted_artifact_path),
-            },
+    try:
+        session.add(
+            AuditEvent(
+                actor_user_id=user.id,
+                event_code="BILL_RATE_SOURCE_PARSED",
+                target_type="utility_bill_rate_extraction",
+                target_id=extraction.id,
+                correlation_id=request.state.correlation_id,
+                details={
+                    "artifact_sha256": upload.artifact_sha256,
+                    "ignored_categories": list(ignored_categories),
+                },
+            )
         )
-    )
-    await session.commit()
-    data = b""  # release the source document; no OCR text enters application state
+        await session.commit()
+    finally:
+        data = b""  # release the source document; no OCR text enters application state
     return {
         "extraction": _safe_extraction(extraction, upload),
         "usage_source_notice": (
@@ -246,10 +260,11 @@ async def import_rates_from_bill(
 
 @router.get("/bill-rate-imports")
 async def list_bill_rate_imports(
+    home_id: str | None = None,
     user: CurrentUser = Depends(require_permission("rates.view")),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
-    actor_homes = select(user_home_scopes.c.home_id).where(user_home_scopes.c.user_id == user.id)
+    scoped_home_id = await _resolve_user_home(session, user.id, home_id)
     rows = (
         await session.execute(
             select(UtilityBillRateExtraction, UtilityBillRateUpload)
@@ -257,7 +272,7 @@ async def list_bill_rate_imports(
                 UtilityBillRateUpload,
                 UtilityBillRateUpload.id == UtilityBillRateExtraction.upload_id,
             )
-            .where(UtilityBillRateUpload.home_id.in_(actor_homes))
+            .where(UtilityBillRateUpload.home_id == scoped_home_id)
             .order_by(UtilityBillRateUpload.created_at.desc())
         )
     ).all()
@@ -348,31 +363,11 @@ async def publish_bill_rate_import(
     )
     if extraction.state != "review_required":
         raise BillRateImportError("rate extraction is not publishable")
-    plan = await session.scalar(
-        select(RatePlan).where(
-            RatePlan.name == extraction.rate_plan_name,
-            RatePlan.utility_name == extraction.utility_name,
-            RatePlan.rate_class == extraction.rate_class,
-        )
-    )
-    if plan is None:
-        plan = RatePlan(
-            name=extraction.rate_plan_name,
-            utility_name=extraction.utility_name,
-            rate_class=extraction.rate_class,
-        )
-        session.add(plan)
-        await session.flush()
-    version_number = (
-        int(
-            await session.scalar(
-                select(func.max(RatePlanVersion.version)).where(
-                    RatePlanVersion.rate_plan_id == plan.id
-                )
-            )
-            or 0
-        )
-        + 1
+    plan, version_number = await locked_rate_plan_and_next_version(
+        session,
+        name=extraction.rate_plan_name,
+        utility_name=extraction.utility_name,
+        rate_class=extraction.rate_class,
     )
     daily = Decimal("0")
     monthly = Decimal("0")
@@ -433,14 +428,11 @@ async def publish_bill_rate_import(
         )
         if account is None:
             raise NotFound("utility account does not exist")
-        session.add(
-            RateAssignment(
-                utility_account_id=account.id,
-                rate_plan_version_id=version.id,
-                effective_start=version.effective_start,
-                effective_end=version.effective_end,
-                assigned_by_user_id=user.id,
-            )
+        assignment, _created = await replace_rate_assignment(
+            session,
+            account=account,
+            version=version,
+            actor_user_id=user.id,
         )
         # Selected-cost rows are mutable pointers into immutable cost evidence.
         # Invalidate only pointers in the new assignment's home/effective range;
@@ -450,8 +442,8 @@ async def publish_bill_rate_import(
             Device.home_id == account.home_id,
             NormalizedInterval.start_utc >= version.effective_start,
         ]
-        if version.effective_end is not None:
-            affected_conditions.append(NormalizedInterval.end_utc <= version.effective_end)
+        if assignment.effective_end is not None:
+            affected_conditions.append(NormalizedInterval.end_utc <= assignment.effective_end)
         affected_intervals = (
             select(NormalizedInterval.id)
             .join(Device, Device.id == NormalizedInterval.device_id)
@@ -504,23 +496,20 @@ async def reject_bill_rate_import(
     extraction.state = "rejected"
     extraction.reviewer_user_id = user.id
     extraction.reviewed_at = datetime.now(UTC)
-    if upload.encrypted_artifact_path:
-        target = AsyncPath(upload.encrypted_artifact_path)
-        if await target.exists():
-            await target.unlink()
-        upload.encrypted_artifact_path = None
-        upload.artifact_deleted_at = datetime.now(UTC)
     await session.commit()
 
 
 @router.get("/billing")
 async def billing_overview(
+    home_id: str | None = None,
     user: CurrentUser = Depends(require_permission("billing.view")),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
-    homes = await _user_homes(session, user.id)
+    scoped_home_id = await _resolve_user_home(session, user.id, home_id)
     accounts = (
-        await session.scalars(select(UtilityAccount).where(UtilityAccount.home_id.in_(homes)))
+        await session.scalars(
+            select(UtilityAccount).where(UtilityAccount.home_id == scoped_home_id)
+        )
     ).all()
     now = datetime.now(UTC)
     plans: list[dict[str, object]] = []
@@ -623,10 +612,31 @@ async def list_rate_source_candidates(
                 RateSourceRevision.id == RateCandidate.source_revision_id,
             )
             .join(RateSource, RateSource.id == RateSourceRevision.source_id)
+            .where(
+                select(RateSyncRun.id)
+                .where(
+                    RateSyncRun.home_id == scoped_home_id,
+                    RateSyncRun.revision_id == RateSourceRevision.id,
+                )
+                .exists()
+            )
             .order_by(RateCandidate.created_at.desc(), RateCandidate.id.desc())
             .limit(100)
         )
     ).all()
+    reviews = {
+        review.candidate_id: review
+        for review in (
+            await session.scalars(
+                select(RateCandidateReview).where(
+                    RateCandidateReview.home_id == scoped_home_id,
+                    RateCandidateReview.candidate_id.in_(
+                        [candidate.id for candidate, _, _ in rows]
+                    ),
+                )
+            )
+        ).all()
+    }
     return {
         "home_id": scoped_home_id,
         "candidates": [
@@ -648,6 +658,7 @@ async def list_rate_source_candidates(
                 "validation_evidence": candidate.validation_evidence,
                 "diff": candidate.diff,
                 "manual_approval_required": True,
+                "workflow": safe_review(reviews.get(candidate.id)),
             }
             for candidate, revision, source in rows
         ],
@@ -662,8 +673,9 @@ async def list_rate_source_runs(
 ) -> dict[str, object]:
     scoped_home_id = await _resolve_user_home(session, user.id, home_id)
     runs = (
-        await session.scalars(
-            select(RateSyncRun)
+        await session.execute(
+            select(RateSyncRun, RateSource)
+            .join(RateSource, RateSource.id == RateSyncRun.source_id)
             .where(RateSyncRun.home_id == scoped_home_id)
             .order_by(RateSyncRun.started_at.desc(), RateSyncRun.id.desc())
             .limit(100)
@@ -675,6 +687,8 @@ async def list_rate_source_runs(
             {
                 "id": run.id,
                 "source_id": run.source_id,
+                "source_name": source.name,
+                "source_type": source.source_type,
                 "state": run.state,
                 "event_code": run.event_code,
                 "correlation_id": run.correlation_id,
@@ -688,8 +702,397 @@ async def list_rate_source_runs(
                 "error_code": run.error_code,
                 "evidence": run.evidence,
             }
-            for run in runs
+            for run, source in runs
         ],
+    }
+
+
+def _safe_rate_run(
+    run: RateSyncRun | None,
+    source: RateSource | None,
+) -> dict[str, object] | None:
+    if run is None:
+        return None
+    return {
+        "id": run.id,
+        "source_id": run.source_id,
+        "source_name": source.name if source is not None else None,
+        "source_type": source.source_type if source is not None else None,
+        "source_url": source.https_url if source is not None else None,
+        "state": run.state,
+        "event_code": run.event_code,
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+        "revision_id": run.revision_id,
+        "error_code": run.error_code,
+        "initiator": run.evidence.get("initiator"),
+    }
+
+
+@router.get("/rate-sources/status")
+async def rate_source_status(
+    home_id: str | None = None,
+    user: CurrentUser = Depends(require_permission("rates.view")),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    scoped_home_id = await _resolve_user_home(session, user.id, home_id)
+    official_source = await session.scalar(
+        select(RateSource).where(RateSource.https_url == str(settings.sce_rate_source_url))
+    )
+    home_runs = select(RateSyncRun).where(
+        RateSyncRun.home_id == scoped_home_id,
+        RateSyncRun.source_id
+        == (
+            official_source.id if official_source is not None else "official-source-not-configured"
+        ),
+    )
+    last_run = await session.scalar(
+        home_runs.order_by(RateSyncRun.started_at.desc(), RateSyncRun.id.desc()).limit(1)
+    )
+    last_success = await session.scalar(
+        home_runs.where(
+            RateSyncRun.completed_at.is_not(None),
+            RateSyncRun.state.in_(("review_required", "unchanged")),
+        )
+        .order_by(RateSyncRun.completed_at.desc(), RateSyncRun.id.desc())
+        .limit(1)
+    )
+    last_failure = await session.scalar(
+        home_runs.where(RateSyncRun.state == "failed")
+        .order_by(RateSyncRun.completed_at.desc(), RateSyncRun.id.desc())
+        .limit(1)
+    )
+    now = datetime.now(UTC)
+    active_row = (
+        await session.execute(
+            select(RateAssignment, RatePlanVersion, RatePlan, UtilityAccount)
+            .join(
+                RatePlanVersion,
+                RatePlanVersion.id == RateAssignment.rate_plan_version_id,
+            )
+            .join(RatePlan, RatePlan.id == RatePlanVersion.rate_plan_id)
+            .join(
+                UtilityAccount,
+                UtilityAccount.id == RateAssignment.utility_account_id,
+            )
+            .where(
+                UtilityAccount.home_id == scoped_home_id,
+                RateAssignment.effective_start <= now,
+                (RateAssignment.effective_end.is_(None) | (RateAssignment.effective_end > now)),
+                RatePlanVersion.state == "published",
+            )
+            .order_by(RateAssignment.effective_start.desc(), RateAssignment.id.desc())
+            .limit(1)
+        )
+    ).first()
+    active: dict[str, object] = {"state": "not_configured"}
+    if active_row is not None:
+        assignment, version, plan, account = active_row
+        provenance_row = (
+            await session.execute(
+                select(
+                    RateCandidateReview,
+                    RateCandidate,
+                    RateSourceRevision,
+                    RateSource,
+                )
+                .join(
+                    RateCandidate,
+                    RateCandidate.id == RateCandidateReview.candidate_id,
+                )
+                .join(
+                    RateSourceRevision,
+                    RateSourceRevision.id == RateCandidate.source_revision_id,
+                )
+                .join(RateSource, RateSource.id == RateSourceRevision.source_id)
+                .where(
+                    RateCandidateReview.home_id == scoped_home_id,
+                    RateCandidateReview.rate_plan_version_id == version.id,
+                )
+                .limit(1)
+            )
+        ).first()
+        provenance: dict[str, object] = {
+            "source_artifact_sha256": version.source_hash,
+            "origin": "reviewed_rate_plan_version",
+        }
+        if provenance_row is not None:
+            review, candidate, revision, source = provenance_row
+            provenance = {
+                "source_artifact_sha256": revision.artifact_sha256,
+                "origin": source.source_type,
+                "source_name": source.name,
+                "source_url": source.https_url or candidate.validation_evidence.get("source_url"),
+                "source_revision_id": revision.id,
+                "candidate_id": candidate.id,
+                "review_id": review.id,
+            }
+        active = {
+            "state": "active",
+            "utility_account_id": account.id,
+            "assignment_id": assignment.id,
+            "rate_plan_version_id": version.id,
+            "plan_name": plan.name,
+            "effective_start": version.effective_start,
+            "effective_end": version.effective_end,
+            "provenance": provenance,
+        }
+    lkg_row = (
+        await session.execute(
+            select(RateCandidate, RateSourceRevision, RateSource)
+            .join(
+                RateSourceRevision,
+                RateSourceRevision.id == RateCandidate.source_revision_id,
+            )
+            .join(RateSource, RateSource.id == RateSourceRevision.source_id)
+            .where(
+                select(RateSyncRun.id)
+                .where(
+                    RateSyncRun.home_id == scoped_home_id,
+                    RateSyncRun.revision_id == RateSourceRevision.id,
+                    RateSyncRun.state.in_(("review_required", "unchanged")),
+                )
+                .exists()
+            )
+            .order_by(RateSourceRevision.retrieved_at.desc(), RateSourceRevision.id.desc())
+            .limit(1)
+        )
+    ).first()
+    lkg: dict[str, object] = {"state": "unavailable"}
+    if lkg_row is not None:
+        candidate, revision, source = lkg_row
+        active_provenance = active.get("provenance")
+        active_source_hash = (
+            active_provenance.get("source_artifact_sha256")
+            if isinstance(active_provenance, dict)
+            else None
+        )
+        lkg = {
+            "state": "available",
+            "candidate_id": candidate.id,
+            "source_revision_id": revision.id,
+            "source_artifact_sha256": revision.artifact_sha256,
+            "retrieved_at": revision.retrieved_at,
+            "source_name": source.name,
+            "source_type": source.source_type,
+            "source_url": source.https_url or candidate.validation_evidence.get("source_url"),
+            "active_source_match": active_source_hash == revision.artifact_sha256,
+        }
+    scheduled: dict[str, object] = {"state": "not_configured"}
+    if official_source is not None:
+        next_check_at = (
+            official_source.last_checked_at + timedelta(hours=official_source.check_interval_hours)
+            if official_source.last_checked_at is not None
+            else None
+        )
+        scheduled = {
+            "state": "enabled" if official_source.enabled else "disabled",
+            "source_id": official_source.id,
+            "source_name": official_source.name,
+            "source_url": official_source.https_url,
+            "check_interval_hours": official_source.check_interval_hours,
+            "next_check_at": next_check_at,
+        }
+    return {
+        "home_id": scoped_home_id,
+        "scheduled": scheduled,
+        "last_run": _safe_rate_run(last_run, official_source),
+        "last_success": _safe_rate_run(last_success, official_source),
+        "last_failure": _safe_rate_run(last_failure, official_source),
+        "active": active,
+        "last_known_good": lkg,
+    }
+
+
+@router.post("/rate-sources/manual-candidates", status_code=201)
+async def create_manual_rate_source_candidate(
+    payload: ManualRateCandidateRequest,
+    request: Request,
+    home_id: str | None = None,
+    user: CurrentUser = Depends(require_permission("rates.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    scoped_home_id = await _resolve_user_home(session, user.id, home_id)
+    candidate, revision, source, run, created = await create_manual_rate_candidate(
+        session,
+        payload=payload,
+        home_id=scoped_home_id,
+        actor_user_id=user.id,
+        correlation_id=request.state.correlation_id,
+    )
+    await session.commit()
+    return {
+        "home_id": scoped_home_id,
+        "created": created,
+        "candidate_id": candidate.id,
+        "revision_id": revision.id,
+        "source_id": source.id,
+        "run_id": run.id,
+        "state": "review_required",
+        "canonical_input_sha256": revision.artifact_sha256,
+        "network_fetch_performed": False,
+    }
+
+
+@router.post("/rate-sources/candidates/{candidate_id}/review")
+async def review_official_rate_candidate(
+    candidate_id: str,
+    payload: RateCandidateReviewRequest,
+    request: Request,
+    home_id: str | None = None,
+    user: CurrentUser = Depends(require_permission("rates.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    scoped_home_id = await _resolve_user_home(session, user.id, home_id)
+    candidate, _, _ = await exact_home_candidate(
+        session,
+        candidate_id=candidate_id,
+        home_id=scoped_home_id,
+        for_update=True,
+    )
+    review = await review_rate_candidate(
+        session,
+        candidate=candidate,
+        home_id=scoped_home_id,
+        payload=payload,
+        actor_user_id=user.id,
+        correlation_id=request.state.correlation_id,
+    )
+    await session.commit()
+    return {
+        "home_id": scoped_home_id,
+        "candidate_id": candidate.id,
+        "workflow": safe_review(review),
+    }
+
+
+@router.post("/rate-sources/candidates/{candidate_id}/reject")
+async def reject_official_rate_candidate(
+    candidate_id: str,
+    request: Request,
+    home_id: str | None = None,
+    user: CurrentUser = Depends(require_permission("rates.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    scoped_home_id = await _resolve_user_home(session, user.id, home_id)
+    candidate, _, _ = await exact_home_candidate(
+        session,
+        candidate_id=candidate_id,
+        home_id=scoped_home_id,
+        for_update=True,
+    )
+    review = await reject_rate_candidate(
+        session,
+        candidate=candidate,
+        home_id=scoped_home_id,
+        actor_user_id=user.id,
+        correlation_id=request.state.correlation_id,
+    )
+    await session.commit()
+    return {
+        "home_id": scoped_home_id,
+        "candidate_id": candidate.id,
+        "workflow": safe_review(review),
+    }
+
+
+@router.post("/rate-sources/candidates/{candidate_id}/publish", status_code=201)
+async def publish_official_rate_candidate(
+    candidate_id: str,
+    request: Request,
+    home_id: str | None = None,
+    user: CurrentUser = Depends(require_permission("rates.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    scoped_home_id = await _resolve_user_home(session, user.id, home_id)
+    candidate, _, _ = await exact_home_candidate(
+        session,
+        candidate_id=candidate_id,
+        home_id=scoped_home_id,
+        for_update=True,
+    )
+    review = await session.scalar(
+        select(RateCandidateReview)
+        .where(
+            RateCandidateReview.candidate_id == candidate.id,
+            RateCandidateReview.home_id == scoped_home_id,
+        )
+        .with_for_update()
+    )
+    if review is None:
+        raise RateWorkflowConflict("candidate must be reviewed before publication")
+    plan, version = await publish_rate_candidate(
+        session,
+        candidate=candidate,
+        review=review,
+        actor_user_id=user.id,
+        correlation_id=request.state.correlation_id,
+    )
+    await session.commit()
+    return {
+        "home_id": scoped_home_id,
+        "candidate_id": candidate.id,
+        "workflow": safe_review(review),
+        "rate_plan_version": {
+            "id": version.id,
+            "plan_id": plan.id,
+            "plan_name": plan.name,
+            "version": version.version,
+            "effective_start": version.effective_start,
+            "effective_end": version.effective_end,
+            "source_artifact_sha256": version.source_hash,
+            "state": version.state,
+        },
+    }
+
+
+@router.post("/rate-sources/candidates/{candidate_id}/activate", status_code=201)
+async def activate_official_rate_candidate(
+    candidate_id: str,
+    payload: RateCandidateActivationRequest,
+    request: Request,
+    home_id: str | None = None,
+    user: CurrentUser = Depends(require_permission("rates.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    scoped_home_id = await _resolve_user_home(session, user.id, home_id)
+    candidate, _, _ = await exact_home_candidate(
+        session,
+        candidate_id=candidate_id,
+        home_id=scoped_home_id,
+        for_update=True,
+    )
+    review = await session.scalar(
+        select(RateCandidateReview)
+        .where(
+            RateCandidateReview.candidate_id == candidate.id,
+            RateCandidateReview.home_id == scoped_home_id,
+        )
+        .with_for_update()
+    )
+    if review is None:
+        raise RateWorkflowConflict("candidate must be published before activation")
+    assignment = await activate_rate_candidate(
+        session,
+        candidate=candidate,
+        review=review,
+        utility_account_id=payload.utility_account_id,
+        actor_user_id=user.id,
+        correlation_id=request.state.correlation_id,
+    )
+    await session.commit()
+    return {
+        "home_id": scoped_home_id,
+        "candidate_id": candidate.id,
+        "workflow": safe_review(review),
+        "assignment": {
+            "id": assignment.id,
+            "utility_account_id": assignment.utility_account_id,
+            "rate_plan_version_id": assignment.rate_plan_version_id,
+            "effective_start": assignment.effective_start,
+            "effective_end": assignment.effective_end,
+        },
     }
 
 
@@ -702,7 +1105,7 @@ async def check_rate_sources_now(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
     scoped_home_id = await _resolve_user_home(session, user.id, home_id)
-    source = await ensure_default_sce_source(session)
+    source = await ensure_default_sce_source(session, str(settings.sce_rate_source_url))
     result = await sync_official_rate_source(
         session,
         settings,

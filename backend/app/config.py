@@ -11,6 +11,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .constants import DEFAULT_TIMEZONE
 
+RATE_SOURCE_OPERATION_TIMEOUT_MAX_SECONDS = 25.0
+DEFAULT_SCE_RATE_SOURCE_URL = (
+    "https://www.sce.com/save-money/rates-financing/residential-rate-plans/time-of-use-plans"
+)
+_ALLOWED_SCE_RATE_PATH_PREFIXES = (
+    "/save-money/rates-financing/",
+    "/regulatory/",
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="PM_", env_file=None, extra="forbid")
@@ -34,9 +43,7 @@ class Settings(BaseSettings):
     log_dir: Path | None = None
     log_retention_days: int = Field(default=90, ge=1, le=3650)
     backup_status_dir: Path = Path("/data/backup-status")
-    retain_bill_artifacts: bool = False
     bill_import_timeout_seconds: int = Field(default=30, ge=5, le=60)
-    bill_artifact_dir: Path = Path("/data/bill-rate-source-artifacts")
     rate_artifact_dir: Path = Path("/data/rate-source-artifacts")
     firmware_dir: Path = Path("/data/firmware")
     session_absolute_hours: int = Field(default=12, ge=1, le=168)
@@ -46,6 +53,7 @@ class Settings(BaseSettings):
     login_principal_max_failures: int = Field(default=5, ge=2, le=100)
     login_source_max_failures: int = Field(default=50, ge=2, le=10_000)
     allowed_sce_hosts: tuple[str, ...] = ("www.sce.com", "sce.com")
+    sce_rate_source_url: AnyHttpUrl = AnyHttpUrl(DEFAULT_SCE_RATE_SOURCE_URL)
     rate_source_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     rate_source_read_timeout_seconds: float = Field(default=15.0, gt=0, le=60)
     rate_source_total_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
@@ -54,6 +62,13 @@ class Settings(BaseSettings):
     rate_source_max_header_count: int = Field(default=100, ge=10, le=200)
     rate_source_max_redirects: int = Field(default=3, ge=0, le=5)
     rate_source_due_limit: int = Field(default=10, ge=1, le=100)
+    rate_source_retry_attempts: int = Field(default=3, ge=1, le=5)
+    rate_source_retry_backoff_seconds: float = Field(default=0.25, ge=0, le=5)
+    rate_source_operation_timeout_seconds: float = Field(
+        default=20.0,
+        ge=0.05,
+        le=RATE_SOURCE_OPERATION_TIMEOUT_MAX_SECONDS,
+    )
 
     @field_validator("allowed_sce_hosts", mode="before")
     @classmethod
@@ -87,6 +102,21 @@ class Settings(BaseSettings):
             )
         if self.rate_source_total_timeout_seconds <= self.rate_source_connect_timeout_seconds:
             raise ValueError("PM_RATE_SOURCE_TOTAL_TIMEOUT_SECONDS must exceed the connect timeout")
+        source_url = self.sce_rate_source_url
+        source_host = (source_url.host or "").lower().rstrip(".")
+        if (
+            source_url.scheme != "https"
+            or source_host not in self.allowed_sce_hosts
+            or source_url.port not in (None, 443)
+            or source_url.username is not None
+            or source_url.password is not None
+            or source_url.fragment is not None
+            or source_url.query is not None
+            or not (source_url.path or "").startswith(_ALLOWED_SCE_RATE_PATH_PREFIXES)
+        ):
+            raise ValueError(
+                "PM_SCE_RATE_SOURCE_URL must be ordinary HTTPS on an allowed SCE host/path"
+            )
         if self.env == "production" and self.service_role == "api":
             if not (self.session_secret or self.session_secret_file):
                 raise ValueError("production requires PM_SESSION_SECRET_FILE")

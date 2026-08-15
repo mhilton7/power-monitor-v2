@@ -279,3 +279,155 @@ def test_later_orm_metadata_cannot_change_initial_revision_or_chain(
             Base.metadata.remove(future_table)
         get_settings.cache_clear()
         database.unlink(missing_ok=True)
+
+
+def test_upgrade_refuses_legacy_original_bill_document_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = ROOT / ".test-runtime" / f"bill-retention-preflight-{uuid.uuid4().hex}.sqlite3"
+    async_url = _sqlite_url(database, async_driver=True)
+    sync_url = _sqlite_url(database, async_driver=False)
+    monkeypatch.setenv("PM_ENV", "test")
+    monkeypatch.setenv("PM_DATABASE_URL", async_url)
+    get_settings.cache_clear()
+    config = _config()
+    try:
+        command.upgrade(config, "20260813_0007")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO utility_bill_rate_uploads "
+                        "(id, home_id, artifact_sha256, encrypted_artifact_path, "
+                        "byte_count, page_count, media_type, state, uploaded_by_user_id, "
+                        "created_at) VALUES "
+                        "(:id, :home_id, :digest, :path, 128, 1, 'application/pdf', "
+                        "'parsed_rate_only', :user_id, CURRENT_TIMESTAMP)"
+                    ),
+                    {
+                        "id": str(uuid.uuid4()),
+                        "home_id": str(uuid.uuid4()),
+                        "digest": "a" * 64,
+                        "path": "/legacy/prohibited-original.pdf.enc",
+                        "user_id": str(uuid.uuid4()),
+                    },
+                )
+        finally:
+            engine.dispose()
+
+        with pytest.raises(RuntimeError, match="retained original bill documents"):
+            command.upgrade(config, "head")
+
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == (
+                    "20260813_0007"
+                )
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT encrypted_artifact_path FROM utility_bill_rate_uploads")
+                    )
+                    == "/legacy/prohibited-original.pdf.enc"
+                )
+        finally:
+            engine.dispose()
+    finally:
+        get_settings.cache_clear()
+        database.unlink(missing_ok=True)
+
+
+def test_permanent_loss_immutability_revision_preserves_existing_rows_on_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = ROOT / ".test-runtime" / f"loss-immutability-{uuid.uuid4().hex}.sqlite3"
+    async_url = _sqlite_url(database, async_driver=True)
+    sync_url = _sqlite_url(database, async_driver=False)
+    monkeypatch.setenv("PM_ENV", "test")
+    monkeypatch.setenv("PM_DATABASE_URL", async_url)
+    get_settings.cache_clear()
+    config = _config()
+    home_id = str(uuid.uuid4())
+    device_id = str(uuid.uuid4())
+    loss_id = str(uuid.uuid4())
+    try:
+        command.upgrade(config, "20260815_0008")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO homes (id, name, timezone, created_at) VALUES "
+                        "(:id, 'Migration home', 'America/Los_Angeles', CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": home_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO devices (id, home_id, friendly_name, protocol_id, "
+                        "pzem_variant, ct_rating_a, measurement_scope, state, contiguous_ack, "
+                        "maximum_sequence, reset_generation, created_at) VALUES "
+                        "(:id, :home_id, 'Migration sensor', 'pm-protocol/1.0.0', "
+                        "'pzem004t-v4-classic-candidate', 100, 'energy_only', 'enrolled', "
+                        "2, 2, 0, CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": device_id, "home_id": home_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO unavailable_sequence_ranges "
+                        "(id, device_id, first_sequence, last_sequence, reason_code, "
+                        "evidence_sha256, authenticated_at) VALUES "
+                        "(:id, :device_id, 1, 2, 'storage_failure', :digest, "
+                        "CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": loss_id, "device_id": device_id, "digest": "e" * 64},
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(config, "20260815_0010")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == (
+                    "20260815_0010"
+                )
+                assert connection.execute(
+                    sa.text(
+                        "SELECT first_sequence, last_sequence, reason_code, evidence_sha256 "
+                        "FROM unavailable_sequence_ranges WHERE id = :id"
+                    ),
+                    {"id": loss_id},
+                ).one() == (1, 2, "storage_failure", "e" * 64)
+                assert connection.execute(
+                    sa.text("SELECT contiguous_ack, maximum_sequence FROM devices WHERE id = :id"),
+                    {"id": device_id},
+                ).one() == (2, 2)
+        finally:
+            engine.dispose()
+
+        command.downgrade(config, "20260815_0009")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == (
+                    "20260815_0009"
+                )
+                assert connection.execute(
+                    sa.text(
+                        "SELECT first_sequence, last_sequence, reason_code, evidence_sha256 "
+                        "FROM unavailable_sequence_ranges WHERE id = :id"
+                    ),
+                    {"id": loss_id},
+                ).one() == (1, 2, "storage_failure", "e" * 64)
+                assert connection.execute(
+                    sa.text("SELECT contiguous_ack, maximum_sequence FROM devices WHERE id = :id"),
+                    {"id": device_id},
+                ).one() == (2, 2)
+        finally:
+            engine.dispose()
+    finally:
+        get_settings.cache_clear()
+        database.unlink(missing_ok=True)

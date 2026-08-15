@@ -45,6 +45,16 @@ class BillRateImportError(PowerMeterError):
     status_code = 422
 
 
+class RateWorkflowConflict(PowerMeterError):
+    code = "RATE_WORKFLOW_CONFLICT"
+    status_code = 409
+
+
+class RateSyncBusy(PowerMeterError):
+    code = "RATE_SYNC_BUSY"
+    status_code = 409
+
+
 class InvalidRequest(PowerMeterError):
     code = "INVALID_REQUEST"
     status_code = 422

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -12,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 RUNTIME = Path(".test-runtime")
 RUNTIME.mkdir(exist_ok=True)
-tempfile.tempdir = str(RUNTIME.resolve())
 DATABASE = RUNTIME / "powermeter-tests.sqlite3"
 os.environ["PM_ENV"] = "test"
 CONFIGURED_DATABASE_URL = os.environ.get("PM_DATABASE_URL")
@@ -35,7 +33,6 @@ if REQUIRE_POSTGRES and not (
     )
 if CONFIGURED_DATABASE_URL is None:
     os.environ["PM_DATABASE_URL"] = f"sqlite+aiosqlite:///{DATABASE.as_posix()}"
-os.environ["PM_BILL_ARTIFACT_DIR"] = str(RUNTIME / "bill-artifacts")
 os.environ["PM_RATE_ARTIFACT_DIR"] = str(RUNTIME / "rate-artifacts")
 os.environ["PM_FIRMWARE_DIR"] = str(RUNTIME / "firmware")
 
@@ -65,9 +62,7 @@ async def clean_database() -> AsyncIterator[None]:
                 )
             ).all()
             if table_names:
-                quoted = ", ".join(
-                    '"' + str(name).replace('"', '""') + '"' for name in table_names
-                )
+                quoted = ", ".join('"' + str(name).replace('"', '""') + '"' for name in table_names)
                 await connection.execute(text(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE"))
     else:
         async with engine.begin() as connection:

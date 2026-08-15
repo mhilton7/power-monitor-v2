@@ -91,9 +91,7 @@ async def test_device_listing_exposes_only_authorized_home_scopes_before_enrollm
     owner_client: AsyncClient,
 ) -> None:
     owner_id, owner_home_id = await _owner_home()
-    _other_user_id, other_home_id, _account_id = await _create_home_owner(
-        "other-owner@example.com"
-    )
+    _other_user_id, other_home_id, _account_id = await _create_home_owner("other-owner@example.com")
 
     response = await owner_client.get("/api/v1/devices")
     assert response.status_code == 200, response.text
@@ -119,13 +117,17 @@ async def test_device_listing_exposes_only_authorized_home_scopes_before_enrollm
         )
         await session.commit()
 
-    multiple = await owner_client.get("/api/v1/devices")
+    ambiguous = await owner_client.get("/api/v1/devices")
+    assert ambiguous.status_code == 422, ambiguous.text
+    multiple = await owner_client.get("/api/v1/home-scopes")
     assert multiple.status_code == 200, multiple.text
-    assert multiple.json()["devices"] == []
     assert multiple.json()["home_scopes"] == [
         {"id": other_home_id, "name": "Home for other-owner@example.com"},
         {"id": owner_home_id, "name": "Test Home"},
     ]
+    selected = await owner_client.get("/api/v1/devices", params={"home_id": other_home_id})
+    assert selected.status_code == 200, selected.text
+    assert selected.json()["devices"] == []
 
 
 @pytest.mark.asyncio
@@ -294,6 +296,21 @@ async def test_bill_rate_drafts_are_home_owned_and_cross_home_hashes_do_not_leak
                 user_home_scopes.insert().values(user_id=owner_id, home_id=other_home_id)
             )
             await session.commit()
+        ambiguous_list = await owner_client.get("/api/v1/bill-rate-imports")
+        assert ambiguous_list.status_code == 422, ambiguous_list.text
+        assert ambiguous_list.json()["code"] == "INVALID_REQUEST"
+        owner_scoped_list = await owner_client.get(
+            "/api/v1/bill-rate-imports", params={"home_id": owner_home_id}
+        )
+        other_scoped_list = await owner_client.get(
+            "/api/v1/bill-rate-imports", params={"home_id": other_home_id}
+        )
+        assert {row["id"] for row in owner_scoped_list.json()["extractions"]} == {
+            owner_extraction_id
+        }
+        assert {row["id"] for row in other_scoped_list.json()["extractions"]} == {
+            other_extraction_id
+        }
         cross_assignment = await owner_client.post(
             f"/api/v1/bill-rate-imports/{owner_extraction_id}/publish",
             json={

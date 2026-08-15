@@ -103,10 +103,27 @@ async def _home_ids(session: AsyncSession, user_id: str) -> tuple[str, ...]:
     return tuple(
         (
             await session.scalars(
-                select(user_home_scopes.c.home_id).where(user_home_scopes.c.user_id == user_id)
+                select(user_home_scopes.c.home_id)
+                .where(user_home_scopes.c.user_id == user_id)
+                .order_by(user_home_scopes.c.home_id)
             )
         ).all()
     )
+
+
+async def _resolve_home_id(
+    session: AsyncSession, user_id: str, requested_home_id: str | None
+) -> str:
+    home_ids = await _home_ids(session, user_id)
+    if requested_home_id is not None:
+        if requested_home_id not in home_ids:
+            raise NotFound("home does not exist")
+        return requested_home_id
+    if not home_ids:
+        raise NotFound("home does not exist")
+    if len(home_ids) > 1:
+        raise InvalidRequest("home_id is required when the actor can access multiple homes")
+    return home_ids[0]
 
 
 async def _scoped_device(session: AsyncSession, user_id: str, device_id: str) -> Device:
@@ -228,13 +245,11 @@ async def _summary(
 
 async def _current_rate(
     session: AsyncSession,
-    home_ids: tuple[str, ...],
+    home_id: str,
     now: datetime,
     device_ids: tuple[str, ...],
     cycle_start: datetime,
 ) -> dict[str, object] | None:
-    if not home_ids:
-        return None
     row = (
         await session.execute(
             select(RatePlanVersion, RatePlan, UtilityAccount)
@@ -242,7 +257,7 @@ async def _current_rate(
             .join(UtilityAccount, UtilityAccount.id == RateAssignment.utility_account_id)
             .join(RatePlan, RatePlan.id == RatePlanVersion.rate_plan_id)
             .where(
-                UtilityAccount.home_id.in_(home_ids),
+                UtilityAccount.home_id == home_id,
                 RateAssignment.effective_start <= now,
                 (RateAssignment.effective_end.is_(None) | (RateAssignment.effective_end > now)),
                 RatePlanVersion.state == "published",
@@ -346,6 +361,7 @@ async def _current_rate(
 
 @router.get("/home")
 async def home_dashboard(
+    home_id: str | None = None,
     device_id: str | None = None,
     aggregate_circuit_id: str | None = None,
     user: CurrentUser = Depends(require_permission("dashboard.view")),
@@ -353,10 +369,12 @@ async def home_dashboard(
 ) -> dict[str, object]:
     if device_id and aggregate_circuit_id:
         raise PermissionDenied("select either one sensor or one verified aggregate")
-    homes = await _home_ids(session, user.id)
+    scoped_home_id = await _resolve_home_id(session, user.id, home_id)
     devices = (
         await session.scalars(
-            select(Device).where(Device.home_id.in_(homes), Device.revoked_at.is_(None))
+            select(Device)
+            .where(Device.home_id == scoped_home_id, Device.revoked_at.is_(None))
+            .order_by(Device.id)
         )
     ).all()
     now = datetime.now(UTC)
@@ -418,11 +436,12 @@ async def home_dashboard(
     # A default card represents one selected sensor. A multi-device sum requires
     # an explicitly configured verified_sum circuit and is never inferred.
     summary_kind = "selected_sensor"
+    summary_home_id = scoped_home_id
     if aggregate_circuit_id:
         circuit = await session.scalar(
             select(Circuit).where(
                 Circuit.id == aggregate_circuit_id,
-                Circuit.home_id.in_(homes),
+                Circuit.home_id == scoped_home_id,
                 Circuit.aggregate_mode == "verified_sum",
             )
         )
@@ -433,37 +452,62 @@ async def home_dashboard(
             raise NotFound("verified aggregate has no active sensors")
         summary_kind = "verified_aggregate"
     elif device_id:
-        if device_id not in {device.id for device in devices}:
+        selected_device = next((device for device in devices if device.id == device_id), None)
+        if selected_device is None:
             raise NotFound("device does not exist")
         ids = (device_id,)
     else:
         ids = (devices[0].id,) if devices else ()
-    home = await session.get(Home, homes[0]) if homes else None
-    timezone = home.timezone if home else "America/Los_Angeles"
+    home = await session.get(Home, summary_home_id)
     account = await session.scalar(
-        select(UtilityAccount).where(UtilityAccount.home_id.in_(homes)).limit(1)
+        select(UtilityAccount).where(UtilityAccount.home_id == summary_home_id)
     )
+    timezone = account.timezone if account is not None else home.timezone if home else "UTC"
     today_bounds = _utc_bounds(timezone, now, "today")
     week_bounds = _utc_bounds(timezone, now, "week")
     month_bounds = _utc_bounds(timezone, now, "month")
     yesterday_bounds, last_week_bounds = _comparison_bounds(timezone, now)
     billing_bounds = _billing_cycle_bounds(timezone, account.billing_day if account else 1, now)
-    current_rate = await _current_rate(session, homes, now, ids, billing_bounds[0])
-    if current_rate and current_rate.get("price_per_kwh") is not None:
-        price = Decimal(str(current_rate["price_per_kwh"]))
-        for item in output_devices:
-            item_measurement = item.get("measurement")
-            power = (
-                item_measurement.get("active_power_w")
-                if isinstance(item_measurement, dict)
-                else None
-            )
-            item["estimated_cost_per_hour"] = (
-                Decimal(current_cost_per_hour_microdollars(Decimal(str(power)), price))
-                / Decimal(1_000_000)
-                if power is not None
-                else None
-            )
+    current_rate = await _current_rate(session, summary_home_id, now, ids, billing_bounds[0])
+    homes_by_id = {
+        home_id: await session.get(Home, home_id)
+        for home_id in {device.home_id for device in devices}
+    }
+    accounts_by_home_id = {
+        home_id: await session.scalar(
+            select(UtilityAccount).where(UtilityAccount.home_id == home_id)
+        )
+        for home_id in homes_by_id
+    }
+    for device, item in zip(devices, output_devices, strict=True):
+        card_account = accounts_by_home_id[device.home_id]
+        card_home = homes_by_id[device.home_id]
+        card_timezone = (
+            card_account.timezone
+            if card_account is not None
+            else card_home.timezone
+            if card_home is not None
+            else "UTC"
+        )
+        card_cycle_start = _billing_cycle_bounds(
+            card_timezone, card_account.billing_day if card_account is not None else 1, now
+        )[0]
+        card_rate = await _current_rate(
+            session, device.home_id, now, (device.id,), card_cycle_start
+        )
+        if card_rate is None or card_rate.get("price_per_kwh") is None:
+            continue
+        price = Decimal(str(card_rate["price_per_kwh"]))
+        item_measurement = item.get("measurement")
+        power = (
+            item_measurement.get("active_power_w") if isinstance(item_measurement, dict) else None
+        )
+        item["estimated_cost_per_hour"] = (
+            Decimal(current_cost_per_hour_microdollars(Decimal(str(power)), price))
+            / Decimal(1_000_000)
+            if power is not None
+            else None
+        )
     aggregate_measurement: dict[str, object] | None = None
     if summary_kind == "verified_aggregate":
         members = [item for item in output_devices if item["id"] in ids]
@@ -495,7 +539,9 @@ async def home_dashboard(
     estimate_scope_id = ids[0] if len(ids) == 1 else aggregate_circuit_id
     if account is not None and account.cost_scope != "energy_only":
         configured = {
-            device.id for device in devices if device.measurement_scope == account.cost_scope
+            device.id
+            for device in devices
+            if device.home_id == summary_home_id and device.measurement_scope == account.cost_scope
         }
         if configured and configured == set(ids):
             estimate_scope_kind = account.cost_scope
@@ -564,6 +610,7 @@ def _bucket_seconds(start: datetime, end: datetime, requested: int | None) -> in
 async def history(
     from_utc: datetime = Query(alias="from"),
     to_utc: datetime = Query(alias="to"),
+    home_id: str | None = None,
     metric: Literal[
         "power", "voltage", "current", "frequency", "power_factor", "energy", "cost"
     ] = "power",
@@ -581,11 +628,13 @@ async def history(
     end = to_utc.astimezone(UTC)
     if end <= start or end - start > timedelta(days=366):
         raise InvalidRequest("History range must be ordered and no longer than 366 days")
-    homes = await _home_ids(session, user.id)
+    scoped_home_id = await _resolve_home_id(session, user.id, home_id)
     device_ids = tuple(
         (
             await session.scalars(
-                select(Device.id).where(Device.home_id.in_(homes), Device.revoked_at.is_(None))
+                select(Device.id)
+                .where(Device.home_id == scoped_home_id, Device.revoked_at.is_(None))
+                .order_by(Device.id)
             )
         ).all()
     )
@@ -594,7 +643,7 @@ async def history(
         circuit = await session.scalar(
             select(Circuit).where(
                 Circuit.id == aggregate_circuit_id,
-                Circuit.home_id.in_(homes),
+                Circuit.home_id == scoped_home_id,
                 Circuit.aggregate_mode == "verified_sum",
             )
         )
@@ -867,6 +916,7 @@ async def history(
 async def history_csv(
     from_utc: datetime = Query(alias="from"),
     to_utc: datetime = Query(alias="to"),
+    home_id: str | None = None,
     user: CurrentUser = Depends(require_permission("history.export")),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
@@ -874,14 +924,14 @@ async def history_csv(
         raise InvalidRequest("CSV timestamps must include a UTC offset")
     if to_utc <= from_utc or to_utc - from_utc > timedelta(days=366):
         raise InvalidRequest("CSV range must be ordered and no longer than 366 days")
-    homes = await _home_ids(session, user.id)
+    scoped_home_id = await _resolve_home_id(session, user.id, home_id)
     rows = (
         await session.execute(
             select(NormalizedInterval, RawReading)
             .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
             .join(Device, Device.id == NormalizedInterval.device_id)
             .where(
-                Device.home_id.in_(homes),
+                Device.home_id == scoped_home_id,
                 RawReading.reset_generation == Device.reset_generation,
                 NormalizedInterval.start_utc >= from_utc.astimezone(UTC),
                 NormalizedInterval.end_utc <= to_utc.astimezone(UTC),
@@ -915,18 +965,22 @@ async def history_csv(
 
 @router.get("/devices")
 async def list_devices(
+    home_id: str | None = None,
     user: CurrentUser = Depends(require_permission("sensors.view")),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     homes = await _home_ids(session, user.id)
+    scoped_home_id = await _resolve_home_id(session, user.id, home_id)
     home_scopes = (
         await session.execute(
-            select(Home.id, Home.name)
-            .where(Home.id.in_(homes))
-            .order_by(Home.name, Home.id)
+            select(Home.id, Home.name).where(Home.id.in_(homes)).order_by(Home.name, Home.id)
         )
     ).all()
-    devices = (await session.scalars(select(Device).where(Device.home_id.in_(homes)))).all()
+    devices = (
+        await session.scalars(
+            select(Device).where(Device.home_id == scoped_home_id).order_by(Device.id)
+        )
+    ).all()
     result: list[dict[str, object]] = []
     for device in devices:
         heartbeat = await session.scalar(
