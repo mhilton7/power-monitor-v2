@@ -41,6 +41,8 @@ export const device = {
   last_reboot_reason: 'software_update', last_command: { id: 'cmd-old', type: 'sync_now', state: 'succeeded', progress_percent: 100 },
 };
 
+export const homeScopes = [{ id: '00000000-0000-0000-0000-000000000010', name: 'Home' }];
+
 export const homeUtility = {
   home: { id: '00000000-0000-0000-0000-000000000010', name: 'Home', timezone: 'America/Los_Angeles' },
   utility: { id: '00000000-0000-0000-0000-000000000020', utility_name: 'Southern California Edison', timezone: 'America/Los_Angeles', billing_day: 12, cost_scope: 'energy_only', baseline_allocation_kwh: null, cca_provider: null },
@@ -122,7 +124,7 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (path.endsWith('/enrollment-tokens') && method === 'POST') return { status: 201, body: { token: 'single-use-enrollment-token-value-000000000000', expires_at: '2026-08-13T17:47:00Z' } };
   if (path.endsWith('/circuits/verified-aggregates') && method === 'POST') return { status: 201, body: { id: '00000000-0000-0000-0000-000000000040', name: 'Verified whole home', device_ids: ['device-main', 'device-secondary'] } };
   if (path.endsWith('/circuits')) return { status: 200, body: circuits };
-  if (path.endsWith('/devices')) return { status: 200, body: { devices: [device] } };
+  if (path.endsWith('/devices')) return { status: 200, body: { home_scopes: homeScopes, devices: [device] } };
   if (path.includes('/devices/') && path.endsWith('/revoke') && method === 'POST') return { status: 204 };
   if (path.includes('/devices/') && method === 'PATCH') return { status: 200, body: { id: device.id, friendly_name: device.friendly_name, measurement_scope: 'energy_only' } };
   if (path.endsWith('/alerts')) return { status: 200, body: alerts };

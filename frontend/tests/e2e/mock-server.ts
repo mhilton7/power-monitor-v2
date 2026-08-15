@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { alerts, apiResponse, backupStatus, billing, circuits, dailyHistory, device, firmwareReleases, history, home, homeUtility, session, systemHealth } from '../fixtures.ts';
+import { alerts, apiResponse, backupStatus, billing, circuits, dailyHistory, device, firmwareReleases, history, home, homeScopes, homeUtility, session, systemHealth } from '../fixtures.ts';
 
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://127.0.0.1:8000');
@@ -23,7 +23,7 @@ const server = createServer((request, response) => {
   if (path.endsWith('/cancel') && path.includes('/credentials/rotations/') && request.method === 'POST') return json(response, 202, { rotation: { rotation_id: '00000000-0000-0000-0000-000000000050', credential_fingerprint: 'b'.repeat(64), state: 'pending', overlap_expires_at: '2026-08-13T17:42:10Z', prepare_command_id: '00000000-0000-0000-0000-000000000051', commit_command_id: null, cancel_command_id: '00000000-0000-0000-0000-000000000052' } });
   if (path.endsWith('/circuits/verified-aggregates') && request.method === 'POST') return json(response, 201, { id: '00000000-0000-0000-0000-000000000040', name: 'Verified whole home', device_ids: ['device-main', 'device-secondary'] });
   if (path.endsWith('/circuits')) return json(response, 200, circuits);
-  if (path.endsWith('/devices')) return json(response, 200, { devices: [device] });
+  if (path.endsWith('/devices')) return json(response, 200, { home_scopes: homeScopes, devices: [device] });
   if (path.endsWith('/revoke') && path.includes('/devices/') && request.method === 'POST') { response.writeHead(204); response.end(); return; }
   if (path.includes('/devices/') && request.method === 'PATCH') return json(response, 200, { id: device.id, friendly_name: device.friendly_name, measurement_scope: 'energy_only' });
   if (path.endsWith('/alerts')) return json(response, 200, alerts);

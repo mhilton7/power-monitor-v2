@@ -20,8 +20,12 @@ Permission, role, user status, authentication, command, rate publication, backup
 
 Recommended default: Viewer reads dashboards/History; Member additionally operates explicitly granted non-destructive workflows; Administrator manages sensors/rates/operations but cannot defeat last-owner protection; Owner manages identity and all policy. Narrow custom roles are preferred for rate reviewers and backup operators.
 
+The browser enrollment workflow requires both `sensors.view` (to open Sensor settings and discover authorized scopes) and `sensors.enroll` (to create a one-time token). Grant both permissions to a custom sensor-installer role; neither implies billing access.
+
 ## Multi-home authorization
 
 Every user has one or more explicit `user_home_scopes`. `users.view` returns only identities that overlap the actor's homes, and exposes only the overlapping home identifiers. Because enablement, credentials, and role membership belong to the global identity, a `users.manage` mutation is allowed only when every target home is inside the actor's scope. The target's effective permissions must also be a subset of the actor's permissions. Role assignment and custom-role creation use the same no-escalation rule.
+
+The sensor-scoped device listing returns the actor's authorized home scopes even before the first device is enrolled. The browser automatically uses that scope only when exactly one exists; multiple homes require an explicit selection and zero homes remain fail-closed. Enrollment-token creation rechecks the submitted home against `user_home_scopes`, so the browser never supplies authority or infers a home from an existing device.
 
 Creating a user accepts an optional explicit `home_ids` subset. Omitting it assigns the actor's complete home scope, preserving the single-home default. The server rejects unknown or out-of-scope home IDs without revealing whether they exist. Last-owner protection is evaluated independently for every affected home while those home rows are locked, so concurrent changes cannot leave a home ownerless.
