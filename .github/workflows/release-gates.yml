@@ -176,24 +176,119 @@ jobs:
           exit-code: "1"
           format: json
           output: trivy-filesystem.json
-      - name: Verify an upgrade from the preceding V2 release when one exists
+      - name: Verify an upgrade from the latest public same-major V2 release
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           POSTGRES_PORT: ${{ job.services.postgres.ports['5432'] }}
         run: |
           set -Eeuo pipefail
           current_major="${GITHUB_REF_NAME#v}"
           current_major="${current_major%%.*}"
-          previous_tag="$(git tag --list "v${current_major}.*" --sort=-v:refname | grep -Ev "^${GITHUB_REF_NAME}$" | head -n 1 || true)"
-          if [[ -z "$previous_tag" ]]; then
-            jq -cn --arg current "$GITHUB_REF_NAME" \
-              '{clean_install:"passed",prior_v2:"not_applicable_initial_release",current:$current}' \
-              > migration-result.json
-            exit 0
+          major_prefix="v${current_major}."
+          release_metadata="$RUNNER_TEMP/powermeter-public-releases.json"
+          gh api --paginate --slurp \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            > "$release_metadata"
+          if ! previous_tag="$(
+            jq -er --arg current "$GITHUB_REF_NAME" --arg major_prefix "$major_prefix" '
+              [.[][]
+                | select(
+                    .draft == false
+                    and .published_at != null
+                    and .tag_name != $current
+                    and (.tag_name | startswith($major_prefix))
+                  )]
+              | sort_by([.published_at, .tag_name])
+              | last
+              | .tag_name
+            ' "$release_metadata"
+          )"; then
+            printf 'No prior non-draft public GitHub Release exists for major v%s\n' \
+              "$current_major" >&2
+            exit 1
           fi
+          [[ "$previous_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]
+          [[ "$previous_tag" == "$major_prefix"* ]]
+          [[ "$previous_tag" != "$GITHUB_REF_NAME" ]]
+          python - "$previous_tag" "$GITHUB_REF_NAME" <<'PY'
+          import sys
+
+          from packaging.version import InvalidVersion, Version
+
+          try:
+              previous = Version(sys.argv[1].removeprefix("v"))
+              current = Version(sys.argv[2].removeprefix("v"))
+          except InvalidVersion as error:
+              raise SystemExit(f"invalid release version: {error}") from error
+          if previous >= current:
+              raise SystemExit(
+                  f"public release {sys.argv[1]} is not older than {sys.argv[2]}"
+              )
+          PY
+          previous_ref="refs/tags/${previous_tag}"
+          git show-ref --verify --quiet "$previous_ref" || {
+            printf 'Public release tag is absent from the immutable checkout: %s\n' \
+              "$previous_tag" >&2
+            exit 1
+          }
+          local_tag_object="$(git rev-parse "$previous_ref")"
+          [[ "$local_tag_object" =~ ^[0-9a-f]{40,64}$ ]]
+          [[ "$(git cat-file -t "$local_tag_object")" == tag ]]
+
+          tag_ref_metadata="$RUNNER_TEMP/powermeter-previous-tag-ref.json"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/git/ref/tags/${previous_tag}" \
+            > "$tag_ref_metadata"
+          remote_tag_object="$(
+            jq -er --arg expected_ref "$previous_ref" '
+              select(.ref == $expected_ref and .object.type == "tag")
+              | .object.sha
+              | strings
+              | select(test("^[0-9a-f]{40,64}$"))
+            ' "$tag_ref_metadata"
+          )"
+          [[ "$local_tag_object" == "$remote_tag_object" ]]
+
+          tag_object_metadata="$RUNNER_TEMP/powermeter-previous-tag-object.json"
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "repos/${GITHUB_REPOSITORY}/git/tags/${remote_tag_object}" \
+            > "$tag_object_metadata"
+          remote_commit="$(
+            jq -er --arg expected_tag "$previous_tag" \
+              --arg expected_tag_object "$remote_tag_object" '
+              select(
+                .sha == $expected_tag_object
+                and .tag == $expected_tag
+                and .object.type == "commit"
+                and .verification.verified == true
+                and .verification.reason == "valid"
+                and (.verification.signature | type == "string" and length > 0)
+                and (.verification.payload | type == "string" and length > 0)
+              )
+              | .object.sha
+              | strings
+              | select(test("^[0-9a-f]{40,64}$"))
+            ' "$tag_object_metadata"
+          )"
+          local_commit="$(git rev-parse "${previous_ref}^{commit}")"
+          [[ "$(git cat-file -t "$local_commit")" == commit ]]
+          [[ "$local_commit" == "$remote_commit" ]]
+          [[ "$local_commit" != "$GITHUB_SHA" ]]
+          git merge-base --is-ancestor "$local_commit" "$GITHUB_SHA" || {
+            printf 'Public release commit is not an ancestor of the candidate: %s\n' \
+              "$previous_tag" >&2
+            exit 1
+          }
           previous_checkout="$RUNNER_TEMP/powermeter-previous"
           mkdir -p "$previous_checkout"
-          git archive "$previous_tag" | tar -x -C "$previous_checkout"
+          git archive --format=tar "$local_commit" | tar -x -C "$previous_checkout"
           PGPASSWORD=release-ci-restore-not-production psql \
             --host 127.0.0.1 --port "$POSTGRES_PORT" --username pm_restore_test \
             --dbname postgres --set ON_ERROR_STOP=1 \
