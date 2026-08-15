@@ -26,8 +26,8 @@ Missing, skipped without an approved reason, stale, or failed evidence blocks st
 
 The 2026-08-14 local candidate completed the feasible prepublication gates:
 101/105 portable Python tests passed with four expected environment skips;
-102/105 role-separated PostgreSQL tests passed with three expected skips; 13
-Vitest and 18 production Playwright tests passed; the PDF sandbox, release and
+102/105 role-separated PostgreSQL tests passed with three expected skips; 16
+Vitest and 19 production Playwright tests passed; the PDF sandbox, release and
 cross-repository contract validators passed; encrypted backup plus automatic
 and operator-style isolated restores passed; and the firmware candidate at
 `5dea90d91ecd5731b4286a5f67117741aa2ce539` passed 55 host, 36 fault,

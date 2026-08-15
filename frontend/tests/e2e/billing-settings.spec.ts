@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { session } from '../fixtures';
 import { mockApi } from './mocks';
 
 test.beforeEach(async ({ page }) => { await mockApi(page); });
@@ -69,4 +70,24 @@ test('sensor enrollment, configuration and signed firmware surfaces use concrete
   const deployRequest = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/deploy'));
   await page.getByRole('button', { name: 'Queue deployment' }).click();
   await deployRequest;
+});
+
+test('first sensor enrollment uses its authorized home without billing access or an existing device', async ({ page }) => {
+  const homeId = '00000000-0000-0000-0000-000000000010';
+  await page.unrouteAll({ behavior: 'wait' });
+  await mockApi(page, {
+    devicesOverride: [],
+    homeScopesOverride: [{ id: homeId, name: 'Home' }],
+    sessionOverride: { ...session.user, roles: ['Sensor installer'], permissions: ['sensors.view', 'sensors.enroll'] },
+  });
+  await page.goto('/settings');
+  await expect(page.getByText(/No sensors are enrolled yet/)).toBeVisible();
+  await page.getByRole('button', { name: 'Enroll sensor' }).click();
+  await expect(page.getByText('Enrollment home: Home')).toBeVisible();
+  await page.getByLabel('Friendly name').fill('Main panel');
+  const requestPromise = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/api/v1/enrollment-tokens'));
+  await page.getByRole('button', { name: 'Create token' }).click();
+  const request = await requestPromise;
+  expect(request.postDataJSON()).toMatchObject({ home_id: homeId, friendly_name: 'Main panel' });
+  await expect(page.getByText('single-use-enrollment-token-value-000000000000')).toBeVisible();
 });

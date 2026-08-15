@@ -5,6 +5,77 @@ import { apiResponse } from './fixtures';
 import { installFetchMock, renderWithProviders } from './render';
 
 describe('Settings', () => {
+  it('enrolls the first sensor with the only authorized home scope', async () => {
+    const homeId = '00000000-0000-0000-0000-000000000010';
+    let enrollment: Record<string, unknown> | undefined;
+    installFetchMock((path, method, body) => {
+      if (path.endsWith('/devices')) {
+        return { status: 200, body: { home_scopes: [{ id: homeId, name: 'Home' }], devices: [] } };
+      }
+      if (path.endsWith('/enrollment-tokens') && method === 'POST') {
+        if (typeof body !== 'string') throw new Error('Expected JSON enrollment body.');
+        enrollment = JSON.parse(body) as Record<string, unknown>;
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<SettingsPage />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Sensors' }));
+    expect(await screen.findByText(/No sensors are enrolled yet/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Enroll sensor' }));
+    expect(screen.getByText('Enrollment home: Home')).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText('Friendly name'), 'Main panel');
+    await userEvent.click(screen.getByRole('button', { name: 'Create token' }));
+    expect(await screen.findByText('single-use-enrollment-token-value-000000000000')).toBeInTheDocument();
+    expect(enrollment).toMatchObject({ home_id: homeId, friendly_name: 'Main panel' });
+  });
+
+  it('requires an explicit home selection when multiple sensor scopes are authorized', async () => {
+    const secondHomeId = '00000000-0000-0000-0000-000000000011';
+    let enrollment: Record<string, unknown> | undefined;
+    installFetchMock((path, method, body) => {
+      if (path.endsWith('/devices')) {
+        return {
+          status: 200,
+          body: {
+            home_scopes: [
+              { id: '00000000-0000-0000-0000-000000000010', name: 'Home' },
+              { id: secondHomeId, name: 'Home' },
+            ],
+            devices: [],
+          },
+        };
+      }
+      if (path.endsWith('/enrollment-tokens') && method === 'POST') {
+        if (typeof body !== 'string') throw new Error('Expected JSON enrollment body.');
+        enrollment = JSON.parse(body) as Record<string, unknown>;
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<SettingsPage />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Sensors' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Enroll sensor' }));
+    const create = screen.getByRole('button', { name: 'Create token' });
+    expect(create).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'Home (00000000-0000-0000-0000-000000000010)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: `Home (${secondHomeId})` })).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('Home'), secondHomeId);
+    await userEvent.type(screen.getByLabelText('Friendly name'), 'Workshop panel');
+    expect(create).toBeEnabled();
+    await userEvent.click(create);
+    await waitFor(() => expect(enrollment).toMatchObject({ home_id: secondHomeId }));
+  });
+
+  it('keeps enrollment fail-closed when no authorized home scope is returned', async () => {
+    installFetchMock((path, method) => path.endsWith('/devices')
+      ? { status: 200, body: { home_scopes: [], devices: [] } }
+      : apiResponse(path, method));
+    renderWithProviders(<SettingsPage />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Sensors' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Enroll sensor' }));
+    expect(screen.getByText(/No authorized sensor home scope is available/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create token' })).toBeDisabled();
+  });
+
   it('requires the exact typed confirmation before enabling full-account scope', async () => {
     let update: Record<string, unknown> | undefined;
     installFetchMock((path, method, body) => {

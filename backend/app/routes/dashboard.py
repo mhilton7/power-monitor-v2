@@ -919,6 +919,13 @@ async def list_devices(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
     homes = await _home_ids(session, user.id)
+    home_scopes = (
+        await session.execute(
+            select(Home.id, Home.name)
+            .where(Home.id.in_(homes))
+            .order_by(Home.name, Home.id)
+        )
+    ).all()
     devices = (await session.scalars(select(Device).where(Device.home_id.in_(homes)))).all()
     result: list[dict[str, object]] = []
     for device in devices:
@@ -1006,7 +1013,10 @@ async def list_devices(
                 else None,
             }
         )
-    return {"devices": result}
+    return {
+        "home_scopes": [{"id": home_id, "name": name} for home_id, name in home_scopes],
+        "devices": result,
+    }
 
 
 @router.post("/devices/{device_id}/commands", status_code=202)

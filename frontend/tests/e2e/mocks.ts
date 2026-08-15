@@ -1,10 +1,13 @@
 import type { Page, Route } from '@playwright/test';
-import { alerts, apiResponse, backupStatus, billing, circuits, dailyHistory, device, firmwareReleases, history, home, homeUtility, session, systemHealth } from '../fixtures';
+import { alerts, apiResponse, backupStatus, billing, circuits, dailyHistory, device, firmwareReleases, history, home, homeScopes, homeUtility, session, systemHealth } from '../fixtures';
 
 interface MockOptions {
   sessionExpired?: boolean;
   forbiddenCommands?: boolean;
   homeOverride?: Record<string, unknown>;
+  homeScopesOverride?: Array<{ id: string; name: string }>;
+  devicesOverride?: Array<typeof device>;
+  sessionOverride?: typeof session.user;
 }
 
 export async function mockApi(page: Page, options: MockOptions = {}) {
@@ -23,17 +26,21 @@ export async function mockApi(page: Page, options: MockOptions = {}) {
       return;
     }
     if (path.endsWith('/auth/bootstrap/status')) { await json(route, { required: false }); return; }
-    if (path.endsWith('/auth/me')) { await json(route, session.user); return; }
-    if (path.endsWith('/auth/login') || path.endsWith('/auth/bootstrap')) { await json(route, { user: session.user }); return; }
+    if (path.endsWith('/auth/me')) { await json(route, options.sessionOverride ?? session.user); return; }
+    if (path.endsWith('/auth/login') || path.endsWith('/auth/bootstrap')) { await json(route, { user: options.sessionOverride ?? session.user }); return; }
     if (path.endsWith('/auth/logout')) { await route.fulfill({ status: 204 }); return; }
-    if (path.endsWith('/settings/home-utility')) { await json(route, homeUtility); return; }
+    if (path.endsWith('/settings/home-utility')) {
+      if (options.sessionOverride && !options.sessionOverride.permissions.includes('billing.view')) { await problem(route, 403, 'Billing permission is required.'); return; }
+      await json(route, homeUtility);
+      return;
+    }
     if (path.endsWith('/home')) { await json(route, options.homeOverride ?? home); return; }
     if (path.endsWith('/enrollment-tokens') && method === 'POST') { await json(route, { token: 'single-use-enrollment-token-value-000000000000', expires_at: '2026-08-13T17:47:00Z' }, 201); return; }
     if (path.endsWith('/credentials/rotate') && path.includes('/devices/') && method === 'POST') { await json(route, { rotation: { rotation_id: '00000000-0000-0000-0000-000000000050', credential_fingerprint: 'b'.repeat(64), state: 'pending', overlap_expires_at: '2026-08-13T17:42:10Z', prepare_command_id: '00000000-0000-0000-0000-000000000051', commit_command_id: null, cancel_command_id: null } }, 202); return; }
     if (path.endsWith('/cancel') && path.includes('/credentials/rotations/') && method === 'POST') { await json(route, { rotation: { rotation_id: '00000000-0000-0000-0000-000000000050', credential_fingerprint: 'b'.repeat(64), state: 'pending', overlap_expires_at: '2026-08-13T17:42:10Z', prepare_command_id: '00000000-0000-0000-0000-000000000051', commit_command_id: null, cancel_command_id: '00000000-0000-0000-0000-000000000052' } }, 202); return; }
     if (path.endsWith('/circuits/verified-aggregates') && method === 'POST') { await json(route, { id: '00000000-0000-0000-0000-000000000040', name: 'Verified whole home', device_ids: ['device-main', 'device-secondary'] }, 201); return; }
     if (path.endsWith('/circuits')) { await json(route, circuits); return; }
-    if (path.endsWith('/devices')) { await json(route, { devices: [{ ...device, ...(formatPrepared ? { last_command: { id: '00000000-0000-0000-0000-000000000001', type: 'format_storage_prepare', state: 'succeeded', progress_percent: 100, result_code: 'ok', result_evidence: { prepare_command_id: '00000000-0000-0000-0000-000000000001', acknowledged_records_lost: 42, unacknowledged_records_lost: 5, ready: true } } } : {}) }] }); return; }
+    if (path.endsWith('/devices')) { await json(route, { home_scopes: options.homeScopesOverride ?? homeScopes, devices: options.devicesOverride ?? [{ ...device, ...(formatPrepared ? { last_command: { id: '00000000-0000-0000-0000-000000000001', type: 'format_storage_prepare', state: 'succeeded', progress_percent: 100, result_code: 'ok', result_evidence: { prepare_command_id: '00000000-0000-0000-0000-000000000001', acknowledged_records_lost: 42, unacknowledged_records_lost: 5, ready: true } } } : {}) }] }); return; }
     if (path.endsWith('/revoke') && path.includes('/devices/') && method === 'POST') { await route.fulfill({ status: 204 }); return; }
     if (path.includes('/devices/') && method === 'PATCH') { await json(route, { id: device.id, friendly_name: device.friendly_name, measurement_scope: 'energy_only' }); return; }
     if (path.endsWith('/alerts')) { await json(route, alerts); return; }

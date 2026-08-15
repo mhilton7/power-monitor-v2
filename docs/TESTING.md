@@ -110,7 +110,7 @@ certification.
   `f1e42bb9f0adac1760b88f18b962b36f681db6f22973bbb3891c5ca8b27b80af`;
   the parser returned `HOLIDAY_RULE_MISSING`, so no incomplete candidate was
   guessed or published.
-- Frontend lint/type/build checks passed, all 13 Vitest tests passed, and all 18
+- Frontend lint/type/build checks passed, all 16 Vitest tests passed, and all 19
   Playwright tests passed against the production build. The 1680x946 in-app
   browser acceptance check matched the supplied dashboard composition, emitted
   no console errors, and verified that Format SD commit remains unavailable

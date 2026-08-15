@@ -216,7 +216,10 @@ export const deviceDetailSchema = z.object({
   last_reboot_reason: z.string().nullable(),
   last_command: z.object({ id: z.string(), type: z.string(), state: z.string(), progress_percent: z.number().min(0).max(100), expires_at: z.string().datetime({ offset: true }).optional(), result_code: z.string().nullable().optional(), result_evidence: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional() }).nullable(),
 }).passthrough();
-export const devicesSchema = z.object({ devices: z.array(deviceDetailSchema) });
+export const devicesSchema = z.object({
+  home_scopes: z.array(z.object({ id: z.string().length(36), name: z.string().min(1) })).default([]),
+  devices: z.array(deviceDetailSchema),
+});
 
 export const commandSchema = z.object({
   command: z.object({ id: z.string(), type: z.string(), state: z.string(), expires_at: isoDate.optional() }).passthrough(),

@@ -87,6 +87,48 @@ async def _logged_in_client(email: str) -> AsyncClient:
 
 
 @pytest.mark.asyncio
+async def test_device_listing_exposes_only_authorized_home_scopes_before_enrollment(
+    owner_client: AsyncClient,
+) -> None:
+    owner_id, owner_home_id = await _owner_home()
+    _other_user_id, other_home_id, _account_id = await _create_home_owner(
+        "other-owner@example.com"
+    )
+
+    response = await owner_client.get("/api/v1/devices")
+    assert response.status_code == 200, response.text
+    assert response.json()["devices"] == []
+    assert response.json()["home_scopes"] == [{"id": owner_home_id, "name": "Test Home"}]
+    assert other_home_id not in {scope["id"] for scope in response.json()["home_scopes"]}
+
+    out_of_scope_token = await owner_client.post(
+        "/api/v1/enrollment-tokens",
+        json={
+            "home_id": other_home_id,
+            "friendly_name": "Wrong home sensor",
+            "ct_rating_a": "100",
+            "pzem_variant": "pzem004t-v4-classic-candidate",
+            "expires_minutes": 15,
+        },
+    )
+    assert out_of_scope_token.status_code == 404, out_of_scope_token.text
+
+    async with session_factory() as session:
+        await session.execute(
+            user_home_scopes.insert().values(user_id=owner_id, home_id=other_home_id)
+        )
+        await session.commit()
+
+    multiple = await owner_client.get("/api/v1/devices")
+    assert multiple.status_code == 200, multiple.text
+    assert multiple.json()["devices"] == []
+    assert multiple.json()["home_scopes"] == [
+        {"id": other_home_id, "name": "Home for other-owner@example.com"},
+        {"id": owner_home_id, "name": "Test Home"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_users_are_visible_by_overlap_but_global_mutations_require_full_scope(
     owner_client: AsyncClient,
 ) -> None:
