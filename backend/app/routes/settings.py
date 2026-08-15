@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
-from ..errors import IntegrityConflict, NotFound
+from ..errors import IntegrityConflict, InvalidRequest, NotFound
 from ..models import (
     Alert,
     AlertEvent,
@@ -26,10 +26,11 @@ from ..schemas.api import (
     AlertSilenceRequest,
     DeviceRevokeRequest,
     DeviceUpdateRequest,
+    HomeScopesResponse,
     HomeUtilityUpdateRequest,
     VerifiedAggregateRequest,
 )
-from ..security.auth import CurrentUser, require_permission
+from ..security.auth import CurrentUser, current_user, require_permission
 
 router = APIRouter(prefix="/api/v1", tags=["settings"])
 
@@ -38,10 +39,27 @@ async def _home_ids(session: AsyncSession, user_id: str) -> tuple[str, ...]:
     return tuple(
         (
             await session.scalars(
-                select(user_home_scopes.c.home_id).where(user_home_scopes.c.user_id == user_id)
+                select(user_home_scopes.c.home_id)
+                .where(user_home_scopes.c.user_id == user_id)
+                .order_by(user_home_scopes.c.home_id)
             )
         ).all()
     )
+
+
+async def _resolve_home_id(
+    session: AsyncSession, user_id: str, requested_home_id: str | None
+) -> str:
+    home_ids = await _home_ids(session, user_id)
+    if requested_home_id is not None:
+        if requested_home_id not in home_ids:
+            raise NotFound("home does not exist")
+        return requested_home_id
+    if not home_ids:
+        raise NotFound("home does not exist")
+    if len(home_ids) > 1:
+        raise InvalidRequest("home_id is required when the actor can access multiple homes")
+    return home_ids[0]
 
 
 async def _validate_account_measurement_scope(
@@ -85,13 +103,31 @@ async def _validate_account_measurement_scope(
         )
 
 
+@router.get("/home-scopes", response_model=HomeScopesResponse)
+async def list_home_scopes(
+    user: CurrentUser = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    rows = (
+        await session.execute(
+            select(Home.id, Home.name)
+            .join(user_home_scopes, user_home_scopes.c.home_id == Home.id)
+            .where(user_home_scopes.c.user_id == user.id)
+            .distinct()
+            .order_by(Home.name, Home.id)
+        )
+    ).all()
+    return {"home_scopes": [{"id": row.id, "name": row.name} for row in rows]}
+
+
 @router.get("/settings/home-utility")
 async def home_utility(
+    home_id: str | None = None,
     user: CurrentUser = Depends(require_permission("billing.view")),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
-    homes = await _home_ids(session, user.id)
-    home = await session.scalar(select(Home).where(Home.id.in_(homes)).limit(1))
+    scoped_home_id = await _resolve_home_id(session, user.id, home_id)
+    home = await session.get(Home, scoped_home_id)
     if home is None:
         raise NotFound("home does not exist")
     account = await session.scalar(select(UtilityAccount).where(UtilityAccount.home_id == home.id))
@@ -116,11 +152,12 @@ async def home_utility(
 async def update_home_utility(
     payload: HomeUtilityUpdateRequest,
     request: Request,
+    home_id: str | None = None,
     user: CurrentUser = Depends(require_permission("system.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
-    homes = await _home_ids(session, user.id)
-    home = await session.scalar(select(Home).where(Home.id.in_(homes)).limit(1).with_for_update())
+    scoped_home_id = await _resolve_home_id(session, user.id, home_id)
+    home = await session.scalar(select(Home).where(Home.id == scoped_home_id).with_for_update())
     if home is None:
         raise NotFound("home does not exist")
     account = await session.scalar(
@@ -163,7 +200,7 @@ async def update_home_utility(
         )
     )
     await session.commit()
-    return await home_utility(user, session)
+    return await home_utility(home_id=home.id, user=user, session=session)
 
 
 @router.patch("/devices/{device_id}")
@@ -222,11 +259,16 @@ async def update_device(
 
 @router.get("/circuits")
 async def list_circuits(
+    home_id: str | None = None,
     user: CurrentUser = Depends(require_permission("sensors.view")),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
-    homes = await _home_ids(session, user.id)
-    rows = (await session.scalars(select(Circuit).where(Circuit.home_id.in_(homes)))).all()
+    scoped_home_id = await _resolve_home_id(session, user.id, home_id)
+    rows = (
+        await session.scalars(
+            select(Circuit).where(Circuit.home_id == scoped_home_id).order_by(Circuit.id)
+        )
+    ).all()
     return {
         "circuits": [
             {

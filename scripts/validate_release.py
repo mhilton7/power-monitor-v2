@@ -11,8 +11,18 @@ from typing import Any
 
 import yaml
 
-EXPECTED_SERVICES = {"postgres", "migrate", "api", "worker", "frontend", "gateway", "backup"}
+EXPECTED_SERVICES = {
+    "initialize",
+    "postgres",
+    "migrate",
+    "api",
+    "worker",
+    "frontend",
+    "gateway",
+    "backup",
+}
 EXPECTED_USERS = {
+    "initialize": "0:0",
     "postgres": "70:70",
     "migrate": "10001:10001",
     "api": "10001:10001",
@@ -22,6 +32,7 @@ EXPECTED_USERS = {
     "backup": "568:568",
 }
 EXPECTED_NETWORKS = {
+    "initialize": set(),
     "postgres": {"database"},
     "migrate": {"database"},
     "api": {"database", "edge", "egress"},
@@ -42,6 +53,35 @@ APP_IMAGES = {
     "gateway": "ghcr.io/mhilton7/power-monitor-v2-gateway",
     "backup": "ghcr.io/mhilton7/power-monitor-v2-backup",
 }
+EXPECTED_SECRETS = {
+    "postgres_bootstrap_password": "postgres_bootstrap_password",
+    "postgres_migrator_password": "postgres_migrator_password",
+    "postgres_api_password": "postgres_api_password",
+    "postgres_worker_password": "postgres_worker_password",
+    "postgres_backup_password": "postgres_backup_password",
+    "postgres_restore_password": "postgres_restore_password",
+    "session_secret": "session_secret",
+    "field_encryption_key": "field_encryption_key",
+    "ota_manifest_key": "ota_manifest_key",
+    "backup_encryption_key": "backup_encryption_key",
+    "tls_cert": "tls.crt",
+    "tls_key": "tls.key",
+    "tls_ca": "tls-ca.crt",
+}
+EXPECTED_HOST_SOURCES = {
+    f"/mnt/Apps/PowerMeterV2/{name}"
+    for name in (
+        "postgres",
+        "config",
+        "firmware",
+        "backups",
+        "logs",
+        "rate-source-artifacts",
+        "caddy-data",
+        "caddy-config",
+        "secrets",
+    )
+}
 DIGEST_IMAGE = re.compile(r"^[^\s@]+:[^\s@]+@sha256:[0-9a-f]{64}$")
 SENTINEL_IMAGE = re.compile(r"^[^\s@]+:0\.0\.0-unpublished@sha256:UNPUBLISHED_[A-Z]+_DIGEST$")
 
@@ -51,6 +91,15 @@ def load(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{path} must be a YAML mapping")
     return value
+
+
+def _has_exact_secret_file_mapping(value: object) -> bool:
+    """Validate secret references without returning or formatting sensitive input."""
+    expected = {
+        name: {"file": f"/mnt/Apps/PowerMeterV2/secrets/{basename}"}
+        for name, basename in EXPECTED_SECRETS.items()
+    }
+    return value == expected
 
 
 def validate_compose(path: Path) -> list[str]:
@@ -86,7 +135,7 @@ def validate_compose(path: Path) -> list[str]:
         for key in required:
             if key not in service:
                 errors.append(f"{path}: {name} lacks {key}")
-        if name != "migrate" and "healthcheck" not in service:
+        if name not in {"initialize", "migrate"} and "healthcheck" not in service:
             errors.append(f"{path}: {name} lacks healthcheck")
         if service.get("read_only") is not True:
             errors.append(f"{path}: {name} root filesystem is not read-only")
@@ -100,6 +149,8 @@ def validate_compose(path: Path) -> list[str]:
             errors.append(f"{path}: {name} has unexpected network membership")
         if service.get("cap_drop") != ["ALL"]:
             errors.append(f"{path}: {name} must drop all capabilities")
+        if name != "initialize" and service.get("cap_add"):
+            errors.append(f"{path}: {name} must not add capabilities")
         if "no-new-privileges:true" not in service.get("security_opt", []):
             errors.append(f"{path}: {name} lacks no-new-privileges")
         if name != "gateway" and service.get("ports"):
@@ -116,13 +167,15 @@ def validate_compose(path: Path) -> list[str]:
                     errors.append(f"{path}: {name} {env_key} does not point to /run/secrets")
         for volume in service.get("volumes", []):
             if not isinstance(volume, dict) or volume.get("type") != "bind":
+                errors.append(f"{path}: {name} volume is not a long-form bind mount")
                 continue
             source = str(volume.get("source", ""))
-            if not source.startswith("/mnt/Apps/PowerMeterV2/"):
-                errors.append(f"{path}: {name} bind mount is outside the V2 dataset root")
+            if source not in EXPECTED_HOST_SOURCES:
+                errors.append(f"{path}: {name} bind mount is not an exact UI-created dataset root")
             if volume.get("bind", {}).get("create_host_path") is not False:
                 errors.append(f"{path}: {name} bind mount may create an unexpected host path")
     expected_application_images = {
+        "initialize": "api",
         "migrate": "api",
         "api": "api",
         "worker": "api",
@@ -133,24 +186,20 @@ def validate_compose(path: Path) -> list[str]:
     for service_name, component in expected_application_images.items():
         expected_repository = APP_IMAGES[component]
         expected_sentinel = (
-            f"{expected_repository}:0.0.0-unpublished@"
-            f"sha256:UNPUBLISHED_{component.upper()}_DIGEST"
+            f"{expected_repository}:0.0.0-unpublished@sha256:UNPUBLISHED_{component.upper()}_DIGEST"
         )
         image = str(services[service_name].get("image", ""))
         published_pattern = re.compile(
             rf"^{re.escape(expected_repository)}:[^\s@]+@sha256:[0-9a-f]{{64}}$"
         )
         if image != expected_sentinel and not published_pattern.fullmatch(image):
-            errors.append(
-                f"{path}: {service_name} must use the exact {component} image contract"
-            )
+            errors.append(f"{path}: {service_name} must use the exact {component} image contract")
     if data.get("networks", {}).get("database", {}).get("internal") is not True:
         errors.append(f"{path}: database network is not internal")
     gateway_ports = services["gateway"].get("ports", [])
     if (
         not isinstance(gateway_ports, list)
-        or
-        len(gateway_ports) != 1
+        or len(gateway_ports) != 1
         or not isinstance(gateway_ports[0], dict)
         or gateway_ports[0].get("target") != 8443
         or str(gateway_ports[0].get("published")) != "8443"
@@ -160,6 +209,8 @@ def validate_compose(path: Path) -> list[str]:
         errors.append(f"{path}: gateway must publish only target port 8443")
     if services["migrate"].get("image") != services["api"].get("image"):
         errors.append(f"{path}: migrate must reuse the API image")
+    if services["initialize"].get("image") != services["api"].get("image"):
+        errors.append(f"{path}: initialize must reuse the API image")
     if services["worker"].get("image") != services["api"].get("image"):
         errors.append(f"{path}: worker must reuse the API image")
     postgres_environment = services["postgres"].get("environment", {})
@@ -192,19 +243,94 @@ def validate_compose(path: Path) -> list[str]:
         "pm_restore_test"
     ):
         errors.append(f"{path}: backup lacks the isolated restore role")
-    if services["backup"].get("environment", {}).get(
-        "PM_RESTORE_DATABASE_PASSWORD_FILE"
-    ) != "/run/secrets/postgres_restore_password":
+    if (
+        services["backup"].get("environment", {}).get("PM_RESTORE_DATABASE_PASSWORD_FILE")
+        != "/run/secrets/postgres_restore_password"
+    ):
         errors.append(f"{path}: backup restore secret is incorrect")
+    initializer = services["initialize"]
+    if initializer.get("command") != [
+        "python",
+        "/opt/powermeter/host-initializer/initialize_host.py",
+    ]:
+        errors.append(f"{path}: initialize must use the embedded host initializer")
+    if initializer.get("network_mode") != "none":
+        errors.append(f"{path}: initialize must have no network namespace connectivity")
+    if set(initializer.get("cap_add", [])) != {"CHOWN", "FOWNER", "DAC_OVERRIDE"}:
+        errors.append(f"{path}: initialize has unexpected added capabilities")
+    expected_initializer_sources = EXPECTED_HOST_SOURCES
+    initializer_mounts = {
+        (item.get("source"), item.get("target"), item.get("read_only", False))
+        for item in initializer.get("volumes", [])
+        if isinstance(item, dict)
+    }
+    expected_initializer_mounts = {
+        (source, source.replace("/mnt/Apps/PowerMeterV2", "/host"), False)
+        for source in expected_initializer_sources
+    }
+    if len(initializer.get("volumes", [])) != len(expected_initializer_mounts) or (
+        initializer_mounts != expected_initializer_mounts
+    ):
+        errors.append(f"{path}: initialize must mount only the exact required host datasets")
+    initializer_secrets = {
+        (
+            item.get("source"),
+            item.get("target"),
+            str(item.get("uid")),
+            str(item.get("gid")),
+            item.get("mode"),
+        )
+        for item in initializer.get("secrets", [])
+        if isinstance(item, dict)
+    }
+    expected_initializer_secrets = {
+        (source, target, "0", "0", 0o400) for source, target in EXPECTED_SECRETS.items()
+    }
+    if initializer_secrets != expected_initializer_secrets:
+        errors.append(f"{path}: initialize must receive every secret individually")
+    for name, service in services.items():
+        if name == "initialize":
+            continue
+        if service.get("depends_on", {}).get("initialize") != {
+            "condition": "service_completed_successfully"
+        }:
+            errors.append(f"{path}: {name} is not gated by successful host initialization")
+        if any(
+            isinstance(item, dict)
+            and (
+                str(item.get("source", "")).rstrip("/") == "/mnt/Apps/PowerMeterV2/secrets"
+                or str(item.get("source", "")).startswith("/mnt/Apps/PowerMeterV2/secrets/")
+            )
+            for item in service.get("volumes", [])
+        ):
+            errors.append(f"{path}: {name} must not mount the secrets dataset")
     postgres_mounts = services["postgres"].get("volumes", [])
     if not any(
         isinstance(item, dict)
-        and item.get("source") == "/mnt/Apps/PowerMeterV2/config/postgres-init-roles.sh"
-        and item.get("target") == "/docker-entrypoint-initdb.d/10-powermeter-roles.sh"
+        and item.get("source") == "/mnt/Apps/PowerMeterV2/config"
+        and item.get("target") == "/docker-entrypoint-initdb.d"
         and item.get("read_only") is True
         for item in postgres_mounts
     ):
         errors.append(f"{path}: PostgreSQL role initializer bind is missing or writable")
+    expected_config_mounts = {
+        "postgres": "/docker-entrypoint-initdb.d",
+        "api": "/data/config",
+        "worker": "/data/config",
+        "gateway": "/etc/caddy",
+    }
+    for name, target in expected_config_mounts.items():
+        matching = [
+            item
+            for item in services[name].get("volumes", [])
+            if isinstance(item, dict) and item.get("source") == "/mnt/Apps/PowerMeterV2/config"
+        ]
+        if (
+            len(matching) != 1
+            or matching[0].get("target") != target
+            or matching[0].get("read_only") is not True
+        ):
+            errors.append(f"{path}: {name} must mount the config dataset read-only")
     worker_environment = services["worker"].get("environment", {})
     worker_health_file = "/tmp/worker-health.json"  # noqa: S108 - container-private tmpfs
     if worker_environment.get("PM_WORKER_HEALTH_FILE") != worker_health_file:
@@ -212,17 +338,18 @@ def validate_compose(path: Path) -> list[str]:
     if worker_health_file not in str(services["worker"].get("healthcheck", {})):
         errors.append(f"{path}: worker health check does not validate heartbeat evidence")
     api_environment = services["api"].get("environment", {})
-    if api_environment.get("PM_LOG_DIR") != "/data/logs":
+    if api_environment.get("PM_LOG_DIR") != "/data/logs/application":
         errors.append(f"{path}: API structured log directory is not configured")
     if str(api_environment.get("PM_LOG_RETENTION_DAYS")) != "${PM_LOG_RETENTION_DAYS:-90}":
         errors.append(f"{path}: API log retention does not default to 90 days")
     for name in ("api", "worker"):
         environment = services[name].get("environment", {})
-        if environment.get("PM_BACKUP_STATUS_DIR") != "/data/backup-status":
+        if environment.get("PM_BACKUP_STATUS_DIR") != "/data/backups/status":
             errors.append(f"{path}: {name} backup evidence directory is not configured")
-    if services["migrate"].get("restart") != "no":
-        errors.append(f"{path}: one-shot migrate must not restart")
-    for name in EXPECTED_SERVICES - {"migrate"}:
+    for name in ("initialize", "migrate"):
+        if services[name].get("restart") != "no":
+            errors.append(f"{path}: one-shot {name} must not restart")
+    for name in EXPECTED_SERVICES - {"initialize", "migrate"}:
         if services[name].get("restart") != "unless-stopped":
             errors.append(f"{path}: {name} must use unless-stopped restart policy")
     for name in ("api", "worker"):
@@ -232,19 +359,13 @@ def validate_compose(path: Path) -> list[str]:
             if isinstance(volume, dict)
         }
         if (
-            "/mnt/Apps/PowerMeterV2/backups/status",
-            "/data/backup-status",
+            "/mnt/Apps/PowerMeterV2/backups",
+            "/data/backups",
             True,
         ) not in mounts:
             errors.append(f"{path}: {name} lacks the read-only backup evidence mount")
-    secrets = data.get("secrets", {})
-    if not isinstance(secrets, dict) or not secrets:
-        errors.append(f"{path}: file secrets are missing")
-    else:
-        for name, secret in secrets.items():
-            source = secret.get("file") if isinstance(secret, dict) else None
-            if not str(source).startswith("/mnt/Apps/PowerMeterV2/secrets/"):
-                errors.append(f"{path}: secret {name} is outside the V2 secret dataset")
+    if not _has_exact_secret_file_mapping(data.get("secrets")):
+        errors.append(f"{path}: file secrets must match the exact required 13-file mapping")
     return errors
 
 
@@ -257,6 +378,7 @@ def validate_gateway(path: Path) -> list[str]:
         "/health/ready",
         "reverse_proxy api:8000",
         "reverse_proxy frontend:8080",
+        "/var/log/powermeter/gateway/gateway-access.json",
         "Strict-Transport-Security",
         "Content-Security-Policy",
     )
@@ -296,6 +418,7 @@ def validate_source_boundaries(root: Path) -> list[str]:
         "dist",
         "build",
         ".docker-tmp",
+        ".test-runtime",
     }
     for path in root.rglob("*"):
         if not path.is_file() or any(part in excluded for part in path.parts):

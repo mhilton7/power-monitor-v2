@@ -1,97 +1,58 @@
-# TrueNAS datasets and ACLs
+# TrueNAS datasets and runtime permissions
 
-The published YAML uses the fixed host root `/mnt/Apps/PowerMeterV2`. In
-TrueNAS, the first component below `/mnt` is the storage-pool name, so this
-bundle requires an existing pool named **Apps**. A dataset named `Apps` inside
-some other pool is not the same path. Do not hand-edit a signed release YAML to
-change the root.
+## UI-created ZFS precondition
 
-## Create the datasets in the TrueNAS UI
+Create `Apps/PowerMeterV2` and the nine child ZFS datasets listed in
+`INSTALLATION.md` through the TrueNAS UI. Use Generic, case-sensitive datasets
+with POSIX ACLs. Do not substitute ordinary directories. All Compose binds are
+fixed below `/mnt/Apps/PowerMeterV2` and use `create_host_path: false`.
 
-TrueNAS configuration changes should be made through its UI or API. In
-**Storage > Datasets**, select the `Apps` pool and create `PowerMeterV2` with:
+The initializer verifies that every fixed target is an explicit container
+mount. A container mount namespace cannot conclusively prove whether a host
+path is a ZFS dataset root rather than a same-filesystem directory, so the UI
+creation remains an operator-attested precondition until target TrueNAS
+deployment evidence is available.
 
-- **Dataset Preset:** Generic
-- **ACL Type:** POSIX (shown under Advanced Options)
-- **Case Sensitivity:** Sensitive
-- **Encryption:** inherit encrypted storage, or enable encryption here and
-  retain its recovery material offline
+## Exact post-initialization state
 
-Create these child datasets with the same Generic/POSIX choice:
+The digest-pinned API image runs `initialize` once as root with no network,
+read-only root filesystem, all capabilities dropped, and only `CHOWN`,
+`FOWNER`, and `DAC_OVERRIDE` added. It mounts only the nine fixed child datasets.
+No long-running service has these privileges.
 
-```text
-Apps/PowerMeterV2/postgres
-Apps/PowerMeterV2/config
-Apps/PowerMeterV2/firmware
-Apps/PowerMeterV2/backups
-Apps/PowerMeterV2/logs
-Apps/PowerMeterV2/rate-source-artifacts
-Apps/PowerMeterV2/bill-rate-source-artifacts
-Apps/PowerMeterV2/caddy-data
-Apps/PowerMeterV2/caddy-config
-Apps/PowerMeterV2/secrets
-```
+| Path below `/mnt/Apps/PowerMeterV2` | UID:GID | Mode / additional ACL |
+|---|---:|---|
+| `postgres` | `70:70` | `0700` |
+| `config` | `0:0` | `0755`; both files are `0:0`/`0440` with an exact read-only named-user ACL for only their runtime UID (`1000` for `Caddyfile`, `70` for `postgres-init-roles.sh`) |
+| `firmware` | `10001:10001` | `0750` |
+| `backups` | `568:568` | `0750`; access-only `10001:--x` for status traversal |
+| `backups/status` | `568:568` | `0750`; access/default `10001:r-x` |
+| `logs` | `0:0` | `0711` |
+| `logs/application` | `10001:10001` | `0750` |
+| `logs/gateway` | `1000:1000` | `0750` |
+| `rate-source-artifacts` | `10001:10001` | `0750` |
+| `caddy-data`, `caddy-config` | `1000:1000` | `0750` |
+| `secrets` | `0:0` | `0711`; exact named readers below |
 
-Do not create SMB, NFS, or WebDAV shares for these datasets. The **Apps**
-dataset preset creates an NFSv4 ACL and is intentionally not used here; the
-release's exact per-container named ACLs are POSIX ACLs. The hidden `ix-apps`
-dataset managed by TrueNAS remains separate from these application-data
-datasets.
+Secret files are root-owned with mode `0440`, owning group and other denied,
+and only these numeric readers:
 
-Verify the result from **System > Shell** without changing ZFS configuration:
+- UID 70: bootstrap password.
+- UIDs 70 and 10001: migrator, API, and worker database passwords.
+- UIDs 70 and 568: backup and isolated-restore database passwords.
+- UID 10001: session, field-encryption, and OTA-manifest keys.
+- UID 568: backup encryption key.
+- UID 1000: TLS leaf/chain, private key, and CA certificate.
 
-```sh
-zfs list -r -o name,mountpoint,encryption,keystatus Apps/PowerMeterV2
-```
+The temporary SMB stager access is intentionally removed by this exact ACL
+reset. Disable the temporary secrets share before app installation; the ACL
+reset is defense in depth, not a substitute for closing the share.
 
-Every listed child must have its own matching mount point and every encrypted
-dataset must be unlocked before the app starts.
+## Fail-closed behavior
 
-TrueNAS documents the current [dataset creation](https://www.truenas.com/docs/scale/datasets/managingdatasets/)
-and [POSIX ACL](https://www.truenas.com/docs/scale/datasets/permissions/configuringacls/)
-screens. Use the documentation version matching the installed TrueNAS release.
-
-## Required ownership
-
-PowerMeter V2 never requires world-writable storage. The numeric IDs are the
-container identities declared in the release YAML; they do not need matching
-named TrueNAS accounts.
-
-| Path below `/mnt/Apps/PowerMeterV2` | Owner UID:GID | Mode | Access |
-|---|---:|---:|---|
-| root | `0:0` | `0755` | traversal to child datasets |
-| `postgres` | `70:70` | `0700` | PostgreSQL only |
-| `config` | `0:0` | `0755`; files `0644` | administrator writes; containers read selected mounts |
-| `firmware` | `10001:10001` | `0750` | API and worker |
-| `backups` | `568:568` | `0750` | backup service only |
-| `backups/status` directory | `568:568` | `0750` plus UID `10001` read/default ACL | backup writes; API reads |
-| `logs` | `0:0` | `0711` | traversal only |
-| `logs/application` directory | `10001:10001` | `0750` | API and worker |
-| `logs/gateway` directory | `1000:1000` | `0750` | Caddy |
-| `rate-source-artifacts` | `10001:10001` | `0750` | API and worker |
-| `bill-rate-source-artifacts` | `10001:10001` | `0750` | API and worker |
-| `caddy-data` | `1000:1000` | `0750` | Caddy |
-| `caddy-config` | `1000:1000` | `0750` | Caddy |
-| `secrets` | `0:0` | `0711`; files use named ACLs | administrator only |
-
-After creating the secret and certificate files described in `SECRETS.md`, run
-the release's checked and attested preparation script from a temporary release
-asset directory:
-
-```sh
-sudo bash ./prepare-host.sh --assets "$PWD" --hostname power-monitor.home.arpa
-```
-
-The script refuses to create or guess ZFS datasets. It requires all 11 exact
-ZFS mount points, verifies the complete `SHA256SUMS`, installs `Caddyfile` and
-`postgres-init-roles.sh`, validates secret formats and the TLS chain/SAN/key,
-then applies and rechecks the table above. It never prints secret values.
-
-Secret files remain `root:root`, with owner read plus only the named container
-readers in `SECRETS.md`. On POSIX files, the ACL mask is displayed in the group
-mode bits, so `stat` commonly shows `0440` after a named reader is added even
-though `group::---` and `other::---`; inspect `getfacl`, not only the numeric
-mode.
-
-ZFS snapshots and replication complement the encrypted PostgreSQL logical
-backup and isolated restore test. They do not replace it.
+The initializer refuses a missing/non-mount path, symbolic link, hard-linked
+secret, extra secret/config entry, malformed or duplicate key material,
+encrypted TLS key, hostname/chain/key mismatch, or incomplete ACL verification.
+It never creates a missing host bind, never generates or replaces a secret,
+and never prints a secret value or hash. Every other service has an explicit
+`service_completed_successfully` dependency on it.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from itertools import pairwise
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -96,6 +97,8 @@ class DurableReading(BaseModel):
     def validate_time_and_energy(self) -> DurableReading:
         if self.monotonic_end_us <= self.monotonic_start_us:
             raise ValueError("monotonic interval must be ordered")
+        if self.sample_count > self.expected_sample_count:
+            raise ValueError("sample count cannot exceed expected sample count")
         if self.time_trusted:
             if self.interval_start_utc is None or self.interval_end_utc is None:
                 raise ValueError("trusted records require UTC interval timestamps")
@@ -155,6 +158,15 @@ class PermanentLossRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     protocol_id: Literal["pm-protocol/1.0.0"]
     ranges: list[PermanentLossRange] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def non_overlapping(self) -> PermanentLossRequest:
+        ordered = sorted(self.ranges, key=lambda item: (item.first_sequence, item.last_sequence))
+        if any(
+            current.first_sequence <= prior.last_sequence for prior, current in pairwise(ordered)
+        ):
+            raise ValueError("permanent-loss ranges must not overlap")
+        return self
 
 
 class CommandResult(BaseModel):

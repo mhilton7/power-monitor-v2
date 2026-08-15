@@ -8,11 +8,15 @@ test('History renders committed gaps, cost tooltips and non-overlapping time tic
   await expect(page.getByTestId('history-chart')).toBeVisible();
   await expect(page.getByText('Authenticated sensor evidence unavailable')).toBeVisible();
   await expect(page.getByText(/measured zero renders at zero/)).toBeVisible();
-  const ticks = page.locator('[data-testid="history-chart"] .recharts-xAxis .recharts-cartesian-axis-tick-value');
+  const ticks = page.locator('[data-testid="history-chart"] .recharts-xAxis-tick-labels text');
+  await expect(ticks).not.toHaveCount(0);
+  expect(await ticks.count()).toBeGreaterThanOrEqual(2);
   const boxes = await ticks.evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect()).filter((box) => box.width > 0));
   for (let index = 1; index < boxes.length; index += 1) {
     expect(boxes[index]!.left).toBeGreaterThanOrEqual(boxes[index - 1]!.right - 1);
   }
+  const areaPath = await page.locator('[data-testid="history-chart"] .recharts-area-area').getAttribute('d');
+  expect(areaPath?.match(/M/g)?.length).toBeGreaterThanOrEqual(2);
   await page.getByTestId('history-chart').locator('.recharts-wrapper').hover({ position: { x: 150, y: 180 }, force: true });
   await expect(page.getByText(/Estimated cost:/)).toBeVisible();
 });

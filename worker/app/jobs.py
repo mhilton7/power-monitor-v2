@@ -33,6 +33,7 @@ from backend.app.models import (
     NormalizedInterval,
     RateAssignment,
     RateCandidate,
+    RateCandidateReview,
     RateHoliday,
     RatePeriod,
     RatePlanVersion,
@@ -1029,77 +1030,97 @@ async def evaluate_operational_alerts(
     now: datetime | None = None,
 ) -> int:
     evaluated_at = now or datetime.now(UTC)
-    homes = (await session.scalars(select(Device.home_id).distinct())).all()
-    if not homes:
-        from backend.app.models import Home
-
-        homes = (await session.scalars(select(Home.id))).all()
-
-    candidate_ids = (
-        await session.scalars(
-            select(RateCandidate.id)
-            .join(
-                RateSourceRevision,
-                RateSourceRevision.id == RateCandidate.source_revision_id,
-            )
-            .where(RateCandidate.state == "review_required")
-            .limit(20)
-        )
-    ).all()
-    sync_runs = (
-        await session.scalars(select(RateSyncRun).order_by(RateSyncRun.started_at.desc()))
-    ).all()
-    latest_by_source: dict[str, RateSyncRun] = {}
-    for run in sync_runs:
-        latest_by_source.setdefault(run.source_id, run)
-    failed_syncs = [run for run in latest_by_source.values() if run.state == "failed"]
+    homes = (await session.scalars(select(Home.id).order_by(Home.id))).all()
 
     backup = _read_status_evidence(status_dir, "last-backup-attempt.json")
     restore = _read_status_evidence(status_dir, "last-restore-test-attempt.json")
-    common_observations = {
-        "rate_source_changed": AlertObservation(
-            active=bool(candidate_ids),
-            severity="warning",
-            evidence={"review_required_candidate_ids": list(candidate_ids)},
-            debounce_seconds=0,
-            observation_key=":".join(sorted(candidate_ids)) or None,
-        ),
-        "rate_sync_failed": AlertObservation(
-            active=bool(failed_syncs),
-            severity="warning",
-            evidence={
-                "failed_runs": [
-                    {"run_id": run.id, "source_id": run.source_id, "event_code": run.event_code}
-                    for run in failed_syncs
-                ]
-            },
-            debounce_seconds=0,
-            observation_key=":".join(sorted(run.id for run in failed_syncs)) or None,
-        ),
-        "backup_failed": AlertObservation(
-            active=backup is not None and backup.get("state") != "verified",
-            severity="critical",
-            evidence=backup or {"state": "not_yet_attempted"},
-            debounce_seconds=0,
-            observation_key=str(
-                (backup or {}).get("run_id") or (backup or {}).get("state") or "none"
-            ),
-        ),
-        "restore_test_failed": AlertObservation(
-            active=restore is not None and restore.get("state") != "verified",
-            severity="critical",
-            evidence=restore or {"state": "not_yet_attempted"},
-            debounce_seconds=0,
-            observation_key=str(
-                (restore or {}).get("run_id") or (restore or {}).get("state") or "none"
-            ),
-        ),
-    }
-    if set(common_observations) != OPERATIONAL_ALERT_TYPES:
-        raise RuntimeError("operational alert implementation does not cover the required type set")
     changed = 0
     for home_id in homes:
-        for alert_type, observation in common_observations.items():
+        candidate_ids = (
+            await session.scalars(
+                select(RateCandidate.id)
+                .join(
+                    RateSourceRevision,
+                    RateSourceRevision.id == RateCandidate.source_revision_id,
+                )
+                .where(
+                    RateCandidate.state == "review_required",
+                    select(RateSyncRun.id)
+                    .where(
+                        RateSyncRun.home_id == home_id,
+                        RateSyncRun.revision_id == RateSourceRevision.id,
+                    )
+                    .exists(),
+                    ~select(RateCandidateReview.id)
+                    .where(
+                        RateCandidateReview.home_id == home_id,
+                        RateCandidateReview.candidate_id == RateCandidate.id,
+                        RateCandidateReview.state.in_(("published", "activated", "rejected")),
+                    )
+                    .exists(),
+                )
+                .limit(20)
+            )
+        ).all()
+        sync_runs = (
+            await session.scalars(
+                select(RateSyncRun)
+                .where(RateSyncRun.home_id == home_id)
+                .order_by(RateSyncRun.started_at.desc(), RateSyncRun.id.desc())
+            )
+        ).all()
+        latest_by_source: dict[str, RateSyncRun] = {}
+        for run in sync_runs:
+            latest_by_source.setdefault(run.source_id, run)
+        failed_syncs = [run for run in latest_by_source.values() if run.state == "failed"]
+        observations = {
+            "rate_source_changed": AlertObservation(
+                active=bool(candidate_ids),
+                severity="warning",
+                evidence={"review_required_candidate_ids": list(candidate_ids)},
+                debounce_seconds=0,
+                observation_key=":".join(sorted(candidate_ids)) or None,
+            ),
+            "rate_sync_failed": AlertObservation(
+                active=bool(failed_syncs),
+                severity="warning",
+                evidence={
+                    "failed_runs": [
+                        {
+                            "run_id": run.id,
+                            "source_id": run.source_id,
+                            "event_code": run.event_code,
+                        }
+                        for run in failed_syncs
+                    ]
+                },
+                debounce_seconds=0,
+                observation_key=":".join(sorted(run.id for run in failed_syncs)) or None,
+            ),
+            "backup_failed": AlertObservation(
+                active=backup is not None and backup.get("state") != "verified",
+                severity="critical",
+                evidence=backup or {"state": "not_yet_attempted"},
+                debounce_seconds=0,
+                observation_key=str(
+                    (backup or {}).get("run_id") or (backup or {}).get("state") or "none"
+                ),
+            ),
+            "restore_test_failed": AlertObservation(
+                active=restore is not None and restore.get("state") != "verified",
+                severity="critical",
+                evidence=restore or {"state": "not_yet_attempted"},
+                debounce_seconds=0,
+                observation_key=str(
+                    (restore or {}).get("run_id") or (restore or {}).get("state") or "none"
+                ),
+            ),
+        }
+        if set(observations) != OPERATIONAL_ALERT_TYPES:
+            raise RuntimeError(
+                "operational alert implementation does not cover the required type set"
+            )
+        for alert_type, observation in observations.items():
             changed += await _apply_alert_observation(
                 session,
                 scope_key=f"home:{home_id}:{alert_type}",

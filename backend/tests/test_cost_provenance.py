@@ -22,6 +22,7 @@ from backend.app.models import (
     User,
     UtilityAccount,
 )
+from backend.app.services.rate_workflow import replace_rate_assignment
 from httpx import AsyncClient
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -146,13 +147,11 @@ async def test_repricing_preserves_old_cost_and_selects_only_new_rate(
             effective_start=datetime(2026, 1, 1, tzinfo=UTC),
             price=Decimal("0.10"),
         )
-        session.add(
-            RateAssignment(
-                utility_account_id=account.id,
-                rate_plan_version_id=first.id,
-                effective_start=first.effective_start,
-                assigned_by_user_id=user_id,
-            )
+        await replace_rate_assignment(
+            session,
+            account=account,
+            version=first,
+            actor_user_id=user_id,
         )
         await session.flush()
         interval = await _interval(
@@ -171,13 +170,11 @@ async def test_repricing_preserves_old_cost_and_selects_only_new_rate(
             effective_start=datetime(2026, 8, 1, tzinfo=UTC),
             price=Decimal("0.30"),
         )
-        session.add(
-            RateAssignment(
-                utility_account_id=account.id,
-                rate_plan_version_id=second.id,
-                effective_start=second.effective_start,
-                assigned_by_user_id=user_id,
-            )
+        await replace_rate_assignment(
+            session,
+            account=account,
+            version=second,
+            actor_user_id=user_id,
         )
         await session.flush()
         await session.execute(

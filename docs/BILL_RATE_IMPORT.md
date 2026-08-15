@@ -24,7 +24,11 @@ Customer/account/address/meter identity; meter readings; hourly/daily/tier/TOU/b
 8. The reviewer corrects allowed fields; validators enforce currency/unit, tier ordering, full non-overlapping period coverage, seasons, recurring semantics, and internal consistency.
 9. An official allowlisted source is cross-checked where available. A date on a bill remains a candidate until confirmed.
 10. Save/reject affects only the rate draft. Publish/assign is a separate permissioned action producing an immutable effective-dated rate version.
-11. Retention policy can delete the encrypted original while preserving only permitted lineage and its hash. Originals are excluded from ordinary backups, logs, diagnostics, exports, and telemetry.
+11. The original document bytes are released immediately after parsing and are
+    never written to persistent storage, even in encrypted form. Only permitted
+    rate facts, bounded evidence coordinates, parser provenance, byte/page
+    counts, and the artifact SHA-256 remain. Originals cannot enter backups,
+    logs, diagnostics, exports, or telemetry.
 
 ## Fail-closed production requirement
 

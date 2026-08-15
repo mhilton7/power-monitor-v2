@@ -177,9 +177,7 @@ async def test_rotation_never_exposes_secret_to_browser_and_requires_new_key_com
         "overlap_expires_at",
     }
     candidate_secret = bytes.fromhex(prepare["payload"]["device_secret_hex"])
-    assert prepare["payload"]["credential_fingerprint"] == public_rotation[
-        "credential_fingerprint"
-    ]
+    assert prepare["payload"]["credential_fingerprint"] == public_rotation["credential_fingerprint"]
 
     premature = await _heartbeat(owner_client, device_id=device_id, secret=candidate_secret)
     assert premature.status_code == 401
@@ -208,7 +206,8 @@ async def test_rotation_never_exposes_secret_to_browser_and_requires_new_key_com
         command
         for command in prepared.json()["commands"]
         if command["command_type"] == "rotate_device_credentials"
-        and set(command["payload"]) == {
+        and set(command["payload"])
+        == {
             "schema",
             "rotation_id",
             "credential_fingerprint",
@@ -274,8 +273,7 @@ async def test_rotation_cancel_is_bound_to_old_key_and_zeroizes_candidate(
     candidate_secret = bytes.fromhex(prepare["payload"]["device_secret_hex"])
 
     cancellation = await owner_client.post(
-        f"/api/v1/devices/{device_id}/credentials/rotations/"
-        f"{rotation['rotation_id']}/cancel",
+        f"/api/v1/devices/{device_id}/credentials/rotations/{rotation['rotation_id']}/cancel",
         json={"idempotency_key": "credential-rotation-cancel-001"},
     )
     assert cancellation.status_code == 202, cancellation.text

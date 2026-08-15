@@ -15,8 +15,12 @@
 7. Wait for one durable interval. Confirm it appears in History independently of the live card, then retry the same sequence and verify no duplicate is created.
 8. Configure a rate. Prefer a verified official SCE source candidate. A bill can be uploaded only through **Import rates from SCE bill PDF**; review allowed unit rates/rules and publish separately. Never use bill kWh, totals, readings, identity, or payment data.
 9. Confirm cost disclosure shows monitored scope, rate version, fixed/baseline/CCA configuration, completeness, missing intervals, and estimate limitations.
-10. Run diagnostics, an encrypted backup, and an isolated restore test using
-    `deploy/truenas/INSTALLATION.md`. Save the exact evidence run IDs,
-    timestamps, archive hash, migration revision, and restored table count.
+10. In authenticated **Settings > Backups & restore**, wait for the backup
+    service to report a recent successful encrypted backup and successful
+    isolated restore test. Open `/api/v1/backups/status` in the same
+    authenticated browser to save the exact evidence run IDs, UTC timestamps,
+    archive hash, migration revision, and restored table count. Use the TrueNAS
+    Apps UI for typed logs; normal verification requires no shell or container
+    console.
 
 The first production sensor and target TrueNAS deployment remain release-candidate status until hardware-in-loop and deployment evidence are recorded.

@@ -4,6 +4,138 @@
 name: power-meter-v2
 
 services:
+  initialize:
+    image: ghcr.io/mhilton7/power-monitor-v2-api:0.0.0-unpublished@sha256:UNPUBLISHED_API_DIGEST
+    user: "0:0"
+    command: ["python", "/opt/powermeter/host-initializer/initialize_host.py"]
+    environment:
+      PM_HOSTNAME: ${PM_HOSTNAME:-power-monitor.home.arpa}
+      TZ: UTC
+    secrets:
+      - source: postgres_bootstrap_password
+        target: postgres_bootstrap_password
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: postgres_migrator_password
+        target: postgres_migrator_password
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: postgres_api_password
+        target: postgres_api_password
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: postgres_worker_password
+        target: postgres_worker_password
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: postgres_backup_password
+        target: postgres_backup_password
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: postgres_restore_password
+        target: postgres_restore_password
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: session_secret
+        target: session_secret
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: field_encryption_key
+        target: field_encryption_key
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: ota_manifest_key
+        target: ota_manifest_key
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: backup_encryption_key
+        target: backup_encryption_key
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: tls_cert
+        target: tls.crt
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: tls_key
+        target: tls.key
+        uid: "0"
+        gid: "0"
+        mode: 0400
+      - source: tls_ca
+        target: tls-ca.crt
+        uid: "0"
+        gid: "0"
+        mode: 0400
+    volumes:
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/postgres
+        target: /host/postgres
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/config
+        target: /host/config
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/firmware
+        target: /host/firmware
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/backups
+        target: /host/backups
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/logs
+        target: /host/logs
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/rate-source-artifacts
+        target: /host/rate-source-artifacts
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/caddy-data
+        target: /host/caddy-data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/caddy-config
+        target: /host/caddy-config
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /mnt/Apps/PowerMeterV2/secrets
+        target: /host/secrets
+        bind:
+          create_host_path: false
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=0,gid=0,mode=0700
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    cpus: 0.5
+    mem_limit: 256m
+    restart: "no"
+    stop_grace_period: 30s
+
   postgres:
     image: postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4
     user: "70:70"
@@ -51,11 +183,14 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: /mnt/Apps/PowerMeterV2/config/postgres-init-roles.sh
-        target: /docker-entrypoint-initdb.d/10-powermeter-roles.sh
+        source: /mnt/Apps/PowerMeterV2/config
+        target: /docker-entrypoint-initdb.d
         read_only: true
         bind:
           create_host_path: false
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
     networks: [database]
     read_only: true
     tmpfs:
@@ -88,9 +223,9 @@ services:
         PM_PUBLIC_ORIGIN: https://${PM_HOSTNAME:-power-monitor.home.arpa}:8443
         PM_TIMEZONE: ${PM_TIMEZONE:-America/Los_Angeles}
         PM_LOG_LEVEL: ${PM_LOG_LEVEL:-INFO}
-        PM_LOG_DIR: /data/logs
+        PM_LOG_DIR: /data/logs/application
         PM_LOG_RETENTION_DAYS: ${PM_LOG_RETENTION_DAYS:-90}
-        PM_BACKUP_STATUS_DIR: /data/backup-status
+        PM_BACKUP_STATUS_DIR: /data/backups/status
         TZ: UTC
       PM_SERVICE_ROLE: migrate
       PM_DATABASE_USER: pm_migrator
@@ -102,6 +237,8 @@ services:
         gid: "10001"
         mode: 0440
     depends_on:
+      initialize:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     networks: [database]
@@ -161,7 +298,7 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: /mnt/Apps/PowerMeterV2/logs/application
+        source: /mnt/Apps/PowerMeterV2/logs
         target: /data/logs
         bind:
           create_host_path: false
@@ -171,17 +308,14 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: /mnt/Apps/PowerMeterV2/bill-rate-source-artifacts
-        target: /data/bill-rate-source-artifacts
-        bind:
-          create_host_path: false
-      - type: bind
-        source: /mnt/Apps/PowerMeterV2/backups/status
-        target: /data/backup-status
+        source: /mnt/Apps/PowerMeterV2/backups
+        target: /data/backups
         read_only: true
         bind:
           create_host_path: false
     depends_on:
+      initialize:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
     networks: [database, edge, egress]
@@ -231,7 +365,7 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: /mnt/Apps/PowerMeterV2/logs/application
+        source: /mnt/Apps/PowerMeterV2/logs
         target: /data/logs
         bind:
           create_host_path: false
@@ -241,17 +375,14 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: /mnt/Apps/PowerMeterV2/bill-rate-source-artifacts
-        target: /data/bill-rate-source-artifacts
-        bind:
-          create_host_path: false
-      - type: bind
-        source: /mnt/Apps/PowerMeterV2/backups/status
-        target: /data/backup-status
+        source: /mnt/Apps/PowerMeterV2/backups
+        target: /data/backups
         read_only: true
         bind:
           create_host_path: false
     depends_on:
+      initialize:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
     networks: [database, egress]
@@ -275,6 +406,9 @@ services:
   frontend:
     image: ghcr.io/mhilton7/power-monitor-v2-frontend:0.0.0-unpublished@sha256:UNPUBLISHED_FRONTEND_DIGEST
     user: "101:101"
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
     networks: [edge]
     read_only: true
     tmpfs:
@@ -319,13 +453,13 @@ services:
         mode: 0440
     volumes:
       - type: bind
-        source: /mnt/Apps/PowerMeterV2/config/Caddyfile
-        target: /etc/caddy/Caddyfile
+        source: /mnt/Apps/PowerMeterV2/config
+        target: /etc/caddy
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: /mnt/Apps/PowerMeterV2/logs/gateway
+        source: /mnt/Apps/PowerMeterV2/logs
         target: /var/log/powermeter
         bind:
           create_host_path: false
@@ -348,6 +482,8 @@ services:
     extra_hosts:
       - "${PM_HOSTNAME:-power-monitor.home.arpa}:127.0.0.1"
     depends_on:
+      initialize:
+        condition: service_completed_successfully
       api:
         condition: service_healthy
       frontend:
@@ -410,6 +546,8 @@ services:
         bind:
           create_host_path: false
     depends_on:
+      initialize:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
     networks: [database]

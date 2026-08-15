@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 from typing import Any, Literal
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
@@ -125,6 +127,155 @@ class RatePublishRequest(BaseModel):
         return self
 
 
+class RateCandidateReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    selected_plan_name: str = Field(min_length=1, max_length=120)
+    effective_start: datetime
+    effective_end: datetime | None = None
+    administrator_confirmed_effective_date: Literal[True]
+    administrator_confirmed_provenance: Literal[True]
+
+    @model_validator(mode="after")
+    def confirmed_dates(self) -> RateCandidateReviewRequest:
+        if self.effective_start.utcoffset() is None or (
+            self.effective_end is not None and self.effective_end.utcoffset() is None
+        ):
+            raise ValueError("effective dates must include a UTC offset")
+        if self.effective_end is not None and self.effective_end <= self.effective_start:
+            raise ValueError("effective date range is invalid")
+        return self
+
+
+class RateCandidateActivationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    utility_account_id: str = Field(min_length=36, max_length=36)
+
+
+class ManualRatePeriodRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    season: Literal["summer", "winter", "all"]
+    day_type: Literal["weekday", "weekend", "holiday", "all"]
+    period_name: str = Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9_-]+$")
+    start_minute: int = Field(ge=0, lt=1440)
+    end_minute: int = Field(gt=0, le=1440)
+    price_per_kwh: Decimal = Field(
+        gt=Decimal("0"), le=Decimal("5"), max_digits=18, decimal_places=8
+    )
+
+    @model_validator(mode="after")
+    def ordered_period(self) -> ManualRatePeriodRequest:
+        if self.end_minute <= self.start_minute:
+            raise ValueError("rate period end must be after its start")
+        return self
+
+
+class ManualRateCandidateRequest(BaseModel):
+    """Closed, deterministic manual fallback for administrator-sourced rate facts."""
+
+    model_config = ConfigDict(extra="forbid")
+    source_title: str = Field(min_length=3, max_length=160)
+    tariff_identifier: str = Field(
+        min_length=2,
+        max_length=120,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._()/+-]*$",
+    )
+    source_url: str | None = Field(default=None, min_length=12, max_length=500)
+    administrator_attests_official_source: Literal[True]
+    rate_plan_name: str = Field(min_length=1, max_length=120)
+    rate_class: str = Field(min_length=1, max_length=80)
+    effective_start: datetime
+    effective_end: datetime | None = None
+    daily_fixed_charge: Decimal = Field(
+        default=Decimal("0"),
+        ge=Decimal("0"),
+        le=Decimal("20"),
+        max_digits=18,
+        decimal_places=8,
+    )
+    monthly_fixed_charge: Decimal = Field(
+        default=Decimal("0"),
+        ge=Decimal("0"),
+        le=Decimal("500"),
+        max_digits=18,
+        decimal_places=8,
+    )
+    baseline_credit_per_kwh: Decimal = Field(
+        default=Decimal("0"),
+        ge=Decimal("0"),
+        le=Decimal("1"),
+        max_digits=18,
+        decimal_places=8,
+    )
+    periods: list[ManualRatePeriodRequest] = Field(min_length=1, max_length=200)
+
+    @field_validator("source_url")
+    @classmethod
+    def official_https_source_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlparse(value)
+        if (
+            parsed.scheme != "https"
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in (None, 443)
+            or parsed.fragment
+            or parsed.query
+            or (parsed.hostname or "").lower().rstrip(".") not in {"sce.com", "www.sce.com"}
+        ):
+            raise ValueError("manual provenance URL must be ordinary HTTPS on an official SCE host")
+        return value
+
+    @model_validator(mode="after")
+    def exact_dates_and_complete_schedule(self) -> ManualRateCandidateRequest:
+        if self.effective_start.utcoffset() is None or (
+            self.effective_end is not None and self.effective_end.utcoffset() is None
+        ):
+            raise ValueError("effective dates must include a UTC offset")
+        if self.effective_end is not None and self.effective_end <= self.effective_start:
+            raise ValueError("effective date range is invalid")
+        keys = [
+            (period.season, period.day_type, period.start_minute, period.end_minute)
+            for period in self.periods
+        ]
+        if len(keys) != len(set(keys)):
+            raise ValueError("manual rate periods contain duplicates")
+        for season in ("summer", "winter"):
+            for day_type in ("weekday", "weekend", "holiday"):
+                eligible = [
+                    period
+                    for period in self.periods
+                    if period.season in (season, "all") and period.day_type in (day_type, "all")
+                ]
+                if not eligible:
+                    raise ValueError("manual rate periods do not cover every season and day type")
+                specificity = max(
+                    int(period.season == season) + int(period.day_type == day_type)
+                    for period in eligible
+                )
+                selected = sorted(
+                    (
+                        period
+                        for period in eligible
+                        if int(period.season == season) + int(period.day_type == day_type)
+                        == specificity
+                    ),
+                    key=lambda period: (period.start_minute, period.end_minute),
+                )
+                if (
+                    selected[0].start_minute != 0
+                    or selected[-1].end_minute != 1440
+                    or any(
+                        first.end_minute != second.start_minute
+                        for first, second in pairwise(selected)
+                    )
+                ):
+                    raise ValueError(
+                        "manual rate periods must provide gap-free, non-overlapping full days"
+                    )
+        return self
+
+
 class RateCorrectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     field: Literal[
@@ -155,7 +306,7 @@ class RateCorrectionRequest(BaseModel):
                 value = Decimal(self.corrected_value)
             except Exception as exc:
                 raise ValueError("baseline credit must be a decimal unit rate") from exc
-            if not Decimal("0") <= value <= Decimal("10"):
+            if not value.is_finite() or not Decimal("0") <= value <= Decimal("10"):
                 raise ValueError("baseline credit is outside the allowed range")
         return self
 
@@ -243,6 +394,19 @@ class HomeUtilityUpdateRequest(BaseModel):
         except ZoneInfoNotFoundError as exc:
             raise ValueError("timezone is not recognized") from exc
         return value
+
+
+class HomeScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=36, max_length=36)
+    name: str
+
+
+class HomeScopesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    home_scopes: list[HomeScope]
 
 
 class DeviceUpdateRequest(BaseModel):

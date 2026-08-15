@@ -26,6 +26,14 @@ The browser enrollment workflow requires both `sensors.view` (to open Sensor set
 
 Every user has one or more explicit `user_home_scopes`. `users.view` returns only identities that overlap the actor's homes, and exposes only the overlapping home identifiers. Because enablement, credentials, and role membership belong to the global identity, a `users.manage` mutation is allowed only when every target home is inside the actor's scope. The target's effective permissions must also be a subset of the actor's permissions. Role assignment and custom-role creation use the same no-escalation rule.
 
-The sensor-scoped device listing returns the actor's authorized home scopes even before the first device is enrolled. The browser automatically uses that scope only when exactly one exists; multiple homes require an explicit selection and zero homes remain fail-closed. Enrollment-token creation rechecks the submitted home against `user_home_scopes`, so the browser never supplies authority or infers a home from an existing device.
+The authenticated, permission-independent `/api/v1/home-scopes` endpoint returns
+the actor's authorized homes directly from `user_home_scopes`, even before the
+first device is enrolled. Public rc.3 previously carried the same scopes inside
+the `sensors.view`-protected device listing; the dedicated endpoint decouples
+browser-wide home selection from sensor and billing permissions. The browser
+automatically uses a scope only when exactly one exists; multiple homes require
+an explicit selection and zero homes remain fail-closed. Enrollment-token
+creation rechecks the submitted home against `user_home_scopes`, so the browser
+never supplies authority or infers a home from an existing device.
 
 Creating a user accepts an optional explicit `home_ids` subset. Omitting it assigns the actor's complete home scope, preserving the single-home default. The server rejects unknown or out-of-scope home IDs without revealing whether they exist. Last-owner protection is evaluated independently for every affected home while those home rows are locked, so concurrent changes cannot leave a home ownerless.

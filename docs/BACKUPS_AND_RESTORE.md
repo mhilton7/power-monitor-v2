@@ -16,35 +16,35 @@ failed, and verified evidence. The UI/operations check compares verified
 timestamps with the configured schedule before treating evidence as current.
 Backup and restore-test failures generate debounced alerts.
 
-## Manual commands
+## Normal no-shell verification
 
-Run scripts as the configured backup identity (`568:568`). On TrueNAS, use the
-host-shell `docker exec --user 568:568` procedure in the release
-`INSTALLATION.md`; the Apps container-shell UI can open as root and must not be
-allowed to create root-owned archive/status files. Inside an already-correct
-backup-identity shell, the commands are:
+The backup service creates an initial verified encrypted backup and isolated
+restore evidence and then follows its configured schedule. In authenticated
+**Settings > Backups & restore**, require both the latest successful backup and
+latest successful isolated restore test to be recent for that schedule. For the
+complete machine-readable evidence, open
+`https://power-monitor.home.arpa:8443/api/v1/backups/status` in that same
+authenticated browser session and save the response securely. Record the run
+IDs, UTC timestamps, archive SHA-256, migration revision, and restored table
+count. A file in the archive dataset is not, by itself, a verified backup.
 
-```sh
-/opt/powermeter/backup.sh
-/opt/powermeter/restore.sh --archive /backups/archives/powermeter-<run>.dump.gpg --test-isolated
-```
+Use the TrueNAS Apps UI to inspect the backup workload's typed logs and health.
+Normal creation and verification do not require SSH, System Shell,
+`docker exec`, or a container console. Do not open an Apps container shell as
+root to run backup scripts: that can create archive/status files the configured
+backup identity (`568:568`) cannot manage.
 
-An operator-directed restore must target a new database and repeat its name in the confirmation:
+An operator-directed recovery is a separate, reviewed incident procedure. It
+must restore into a new isolated database, require an explicit target-name
+confirmation, validate that database, and use the release-specific cutover in
+`deploy/truenas/ROLLBACK.md`. In-place restore over the production database is
+refused. Do not repoint or hand-edit signed production YAML.
 
-```sh
-/opt/powermeter/restore.sh \
-  --archive /backups/archives/powermeter-<run>.dump.gpg \
-  --target-database powermeter_recovery_20260813 \
-  --confirm RESTORE-powermeter_recovery_20260813
-```
-
-In-place restore over the production database is refused. Validate the isolated
-database, but do not repoint or hand-edit the signed production YAML. A
-schema-incompatible release must provide a tested recovery/cutover procedure;
-see `deploy/truenas/ROLLBACK.md`. Keep the encryption key offline; loss makes
-archives unrecoverable. Ordinary backups contain database configuration/audit
-metadata but no raw secret files or retained customer bill PDFs. TrueNAS
-encrypted snapshots/replication are complementary, not a substitute.
+Keep the encryption key offline; loss makes archives unrecoverable. Ordinary
+backups contain database configuration/audit metadata but no raw secret files.
+Original customer bill PDFs and full OCR text are never persisted, so they
+cannot enter a backup. TrueNAS encrypted snapshots/replication are
+complementary, not a substitute.
 
 Default logical retention is 35 days and is configurable. Never delete the only known-good archive during an incident.
 

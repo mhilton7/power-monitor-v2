@@ -423,7 +423,9 @@ jobs:
           set -Eeuo pipefail
           cp deploy/caddy/Caddyfile release/assets/Caddyfile
           cp deploy/postgres/init-roles.sh release/assets/postgres-init-roles.sh
-          cp deploy/truenas/prepare-host.sh release/assets/prepare-host.sh
+          cp deploy/truenas/Stage-PowerMeterTrueNAS.ps1 \
+            release/assets/Stage-PowerMeterTrueNAS.ps1
+          cp deploy/truenas/initialize_host.py release/assets/initialize-host.py
           cp deploy/truenas/INSTALLATION.md release/assets/INSTALLATION.md
           cp deploy/truenas/DATASET_ACLS.md release/assets/DATASET_ACLS.md
           cp deploy/truenas/SECRETS.md release/assets/SECRETS.md
@@ -469,7 +471,8 @@ jobs:
             deployment-test-report.json deployment-test-report-authenticated.json \
             firmware-compatibility-report.json \
             hardware-certification-status.json Caddyfile postgres-init-roles.sh INSTALLATION.md \
-            prepare-host.sh DATASET_ACLS.md SECRETS.md UPGRADE.md ROLLBACK.md \
+            Stage-PowerMeterTrueNAS.ps1 initialize-host.py \
+            DATASET_ACLS.md SECRETS.md UPGRADE.md ROLLBACK.md \
             FIRST_RUN.md BACKUPS_AND_RESTORE.md RELEASE_NOTES.md SHA256SUMS; do
             test -s "release/assets/$file"
           done

@@ -164,6 +164,259 @@ export const billingSchema = z.object({
   drafts: z.array(rateDraftSchema).default([]),
 }).passthrough();
 
+const rateWorkflowStateSchema = z.enum(['review_required', 'reviewed', 'published', 'activated', 'rejected']);
+
+export const rateCandidateWorkflowSchema = z.object({
+  id: z.string().optional(),
+  state: rateWorkflowStateSchema,
+  selected_plan_name: z.string().nullable().optional(),
+  effective_start: isoDate.nullable().optional(),
+  effective_end: isoDate.nullable().optional(),
+  reviewed_at: isoDate.nullable().optional(),
+  published_at: isoDate.nullable().optional(),
+  activated_at: isoDate.nullable().optional(),
+  rate_plan_version_id: z.string().nullable().optional(),
+  utility_account_id: z.string().nullable().optional(),
+}).strict();
+
+export const rateCandidatePeriodSchema = z.object({
+  season: z.enum(['summer', 'winter', 'all']),
+  day_type: z.enum(['weekday', 'weekend', 'holiday', 'weekend_holiday', 'all_days', 'all']),
+  name: z.string(),
+  start_minute: z.number().int().min(0).max(1439),
+  end_minute: z.number().int().min(1).max(1440),
+  price_per_kwh: decimal,
+  currency: z.literal('USD'),
+  unit: z.literal('kWh'),
+  tier_min_kwh: nullableDecimal,
+  tier_max_kwh: nullableDecimal,
+}).strict();
+
+export const normalizedRatePlanSchema = z.object({
+  rate_plan_name: z.string(),
+  rate_class: z.string(),
+  pricing_model: z.enum(['time_of_use', 'time_of_use_plus_baseline_credit']),
+  daily_fixed_charge: decimal,
+  monthly_fixed_charge: decimal,
+  baseline_credit_per_kwh: decimal,
+  rate_components: z.enum(['sce_delivery_and_generation_combined', 'administrator_entered_combined_price']),
+  periods: z.array(rateCandidatePeriodSchema).min(1),
+}).strict();
+
+export const normalizedRateCandidateSchema = z.object({
+  schema: z.literal('sce-rate-candidate/1.0.0'),
+  utility_name: z.literal('Southern California Edison'),
+  timezone: z.literal('America/Los_Angeles'),
+  currency: z.literal('USD'),
+  season_definitions: z.object({
+    summer: z.object({ start_month: z.number().int().min(1).max(12), end_month: z.number().int().min(1).max(12) }).strict(),
+    winter: z.object({ start_month: z.number().int().min(1).max(12), end_month: z.number().int().min(1).max(12) }).strict(),
+  }).strict(),
+  holiday_rule: z.enum(['weekend_rates', 'administrator_entered_schedule']),
+  effective_start: isoDate.nullable(),
+  effective_end: isoDate.nullable(),
+  effective_date_confirmation_required: z.literal(true),
+  plans: z.array(normalizedRatePlanSchema).min(1),
+}).strict();
+
+const rateCandidateValidationSchema = z.object({
+  origin: z.literal('manual_administrator_entry').optional(),
+  parser_version: z.string(),
+  schema: z.literal('sce-rate-candidate/1.0.0'),
+  plan_count: z.number().int().positive().optional(),
+  period_count: z.number().int().positive().optional(),
+  seasons: z.array(z.enum(['summer', 'winter'])).optional(),
+  day_types: z.array(z.enum(['weekday', 'weekend', 'holiday'])).optional(),
+  coverage: z.literal('complete'),
+  price_unit: z.literal('USD/kWh'),
+  effective_date: z.enum(['administrator_confirmation_required', 'administrator_review_required']),
+  source_title: z.string().optional(),
+  tariff_identifier: z.string().optional(),
+  source_url: z.string().url().nullable().optional(),
+  canonical_input_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  canonical_input_bytes: z.number().int().positive().optional(),
+  provenance_confirmation: z.literal('administrator_attested_official_source').optional(),
+}).strict();
+
+const rateCandidateDiffSchema = z.object({
+  schema: z.literal('sce-rate-diff/1.0.0').optional(),
+  previous_candidate_id: z.string().nullable().optional(),
+  before: normalizedRateCandidateSchema.nullable().optional(),
+  after: normalizedRateCandidateSchema.optional(),
+  changes: z.array(z.object({ path: z.string() })).default([]),
+  change_count: z.number().int().nonnegative(),
+  truncated: z.boolean().optional(),
+}).strict();
+
+export const rateCandidateSchema = z.object({
+  id: z.string(),
+  state: z.enum(['review_required', 'approved', 'rejected', 'published']),
+  created_at: isoDate,
+  reviewed_at: isoDate.nullable(),
+  source: z.object({
+    id: z.string(),
+    name: z.string(),
+    url: z.string().url().nullable(),
+    revision_id: z.string(),
+    artifact_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    retrieved_at: isoDate,
+    parser_version: z.string(),
+  }).strict(),
+  normalized_rates: normalizedRateCandidateSchema,
+  validation_evidence: rateCandidateValidationSchema,
+  diff: rateCandidateDiffSchema,
+  manual_approval_required: z.literal(true),
+  workflow: rateCandidateWorkflowSchema,
+}).strict();
+
+export const rateCandidatesSchema = z.object({
+  home_id: z.string(),
+  candidates: z.array(rateCandidateSchema),
+}).strict();
+
+export const rateRunSummarySchema = z.object({
+  id: z.string(),
+  source_id: z.string(),
+  source_name: z.string().nullable(),
+  source_type: z.string().nullable(),
+  source_url: z.string().url().nullable(),
+  state: z.enum(['running', 'review_required', 'unchanged', 'failed']),
+  event_code: z.string(),
+  started_at: isoDate,
+  completed_at: isoDate.nullable(),
+  revision_id: z.string().nullable(),
+  error_code: z.string().nullable(),
+  initiator: z.enum(['user', 'scheduled_worker']).nullable(),
+}).strict();
+
+const activeRateSourceSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('not_configured') }).strict(),
+  z.object({
+    state: z.literal('active'),
+    utility_account_id: z.string(),
+    assignment_id: z.string(),
+    rate_plan_version_id: z.string(),
+    plan_name: z.string(),
+    effective_start: isoDate,
+    effective_end: isoDate.nullable(),
+    provenance: z.object({
+      source_artifact_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      origin: z.string(),
+      source_name: z.string().optional(),
+      source_url: z.string().url().nullable().optional(),
+      source_revision_id: z.string().optional(),
+      candidate_id: z.string().optional(),
+      review_id: z.string().optional(),
+    }).strict(),
+  }).strict(),
+]);
+
+const lastKnownGoodRateSourceSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('unavailable') }).strict(),
+  z.object({
+    state: z.literal('available'),
+    candidate_id: z.string(),
+    source_revision_id: z.string(),
+    source_artifact_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    retrieved_at: isoDate,
+    source_name: z.string(),
+    source_type: z.string(),
+    source_url: z.string().url().nullable(),
+    active_source_match: z.boolean(),
+  }).strict(),
+]);
+
+export const rateSourceStatusSchema = z.object({
+  home_id: z.string(),
+  scheduled: z.discriminatedUnion('state', [
+    z.object({ state: z.literal('not_configured') }).strict(),
+    z.object({
+      state: z.enum(['enabled', 'disabled']),
+      source_id: z.string(),
+      source_name: z.string(),
+      source_url: z.string().url(),
+      check_interval_hours: z.number().int().positive(),
+      next_check_at: isoDate.nullable(),
+    }).strict(),
+  ]),
+  last_run: rateRunSummarySchema.nullable(),
+  last_success: rateRunSummarySchema.nullable(),
+  last_failure: rateRunSummarySchema.nullable(),
+  active: activeRateSourceSchema,
+  last_known_good: lastKnownGoodRateSourceSchema,
+}).strict();
+
+export const rateSourceRunSchema = z.object({
+  id: z.string(),
+  source_id: z.string(),
+  source_name: z.string(),
+  source_type: z.string(),
+  state: z.enum(['running', 'review_required', 'unchanged', 'failed']),
+  event_code: z.string(),
+  correlation_id: z.string(),
+  started_at: isoDate,
+  completed_at: isoDate.nullable(),
+  requested_url: z.string().nullable(),
+  final_url: z.string().nullable(),
+  http_status: z.number().int().nullable(),
+  response_bytes: z.number().int().nonnegative().nullable(),
+  revision_id: z.string().nullable(),
+  error_code: z.string().nullable(),
+  evidence: z.record(z.string(), z.unknown()),
+}).strict();
+
+export const rateSourceRunsSchema = z.object({ home_id: z.string(), runs: z.array(rateSourceRunSchema) }).strict();
+
+export const rateCheckResultSchema = z.object({
+  run_id: z.string(),
+  state: z.enum(['review_required', 'unchanged', 'failed']),
+  event_code: z.string(),
+  revision_id: z.string().nullable(),
+  candidate_id: z.string().nullable(),
+  error_code: z.string().nullable(),
+}).strict();
+
+export const rateWorkflowResponseSchema = z.object({
+  home_id: z.string(),
+  candidate_id: z.string(),
+  workflow: rateCandidateWorkflowSchema,
+}).strict();
+
+export const ratePublishResponseSchema = rateWorkflowResponseSchema.extend({
+  rate_plan_version: z.object({
+    id: z.string(),
+    plan_id: z.string(),
+    plan_name: z.string(),
+    version: z.number().int().positive(),
+    effective_start: isoDate,
+    effective_end: isoDate.nullable(),
+    source_artifact_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    state: z.literal('published'),
+  }).strict(),
+}).strict();
+
+export const rateActivationResponseSchema = rateWorkflowResponseSchema.extend({
+  assignment: z.object({
+    id: z.string(),
+    utility_account_id: z.string(),
+    rate_plan_version_id: z.string(),
+    effective_start: isoDate,
+    effective_end: isoDate.nullable(),
+  }).strict(),
+}).strict();
+
+export const manualRateCandidateResponseSchema = z.object({
+  home_id: z.string(),
+  created: z.boolean(),
+  candidate_id: z.string(),
+  revision_id: z.string(),
+  source_id: z.string(),
+  run_id: z.string(),
+  state: z.literal('review_required'),
+  canonical_input_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  network_fetch_performed: z.literal(false),
+}).strict();
+
 export const alertSchema = z.object({
   id: z.string(),
   type: z.string(),
@@ -216,8 +469,18 @@ export const deviceDetailSchema = z.object({
   last_reboot_reason: z.string().nullable(),
   last_command: z.object({ id: z.string(), type: z.string(), state: z.string(), progress_percent: z.number().min(0).max(100), expires_at: z.string().datetime({ offset: true }).optional(), result_code: z.string().nullable().optional(), result_evidence: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional() }).nullable(),
 }).passthrough();
+
+export const homeScopeSchema = z.object({
+  id: z.string().length(36),
+  name: z.string(),
+}).strict();
+
+export const homeScopesSchema = z.object({
+  home_scopes: z.array(homeScopeSchema),
+}).strict();
+
 export const devicesSchema = z.object({
-  home_scopes: z.array(z.object({ id: z.string().length(36), name: z.string().min(1) })).default([]),
+  home_scopes: z.array(homeScopeSchema).default([]),
   devices: z.array(deviceDetailSchema),
 });
 
@@ -293,8 +556,14 @@ export type HomeData = z.infer<typeof homeSchema>;
 export type HistoryData = z.infer<typeof historySchema>;
 export type BillingData = z.infer<typeof billingSchema>;
 export type RateDraft = z.infer<typeof rateDraftSchema>;
+export type RateCandidate = z.infer<typeof rateCandidateSchema>;
+export type RateCandidates = z.infer<typeof rateCandidatesSchema>;
+export type RateCandidateWorkflow = z.infer<typeof rateCandidateWorkflowSchema>;
+export type RateSourceStatus = z.infer<typeof rateSourceStatusSchema>;
+export type RateCheckResult = z.infer<typeof rateCheckResultSchema>;
 export type Alert = z.infer<typeof alertSchema>;
 export type DeviceDetail = z.infer<typeof deviceDetailSchema>;
+export type HomeScope = z.infer<typeof homeScopeSchema>;
 export type Command = z.infer<typeof commandSchema>;
 export type SystemHealth = z.infer<typeof systemHealthSchema>;
 export type BackupStatus = z.infer<typeof backupStatusSchema>;

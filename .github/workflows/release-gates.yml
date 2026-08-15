@@ -80,7 +80,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api "repos/${GITHUB_REPOSITORY}" --jq '.visibility == "public"' | grep -Fx true
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Record successful secret scan
@@ -103,8 +103,12 @@ jobs:
           languages: python,javascript-typescript
           queries: security-extended
       - run: python -m pip install --disable-pip-version-check -e '.[dev]'
-      - run: python -m ruff check backend worker tests scripts
+      - run: python -m ruff check backend worker tests scripts deploy/truenas/initialize_host.py
+      - run: >-
+          python -m ruff format --check
+          backend/app backend/tests worker tests scripts deploy/truenas/initialize_host.py
       - run: python -m mypy backend worker
+      - run: python -m mypy --platform linux deploy/truenas/initialize_host.py
       - name: Clean database migration as pm_migrator
         run: PM_DATABASE_URL="$PM_MIGRATOR_DATABASE_URL" python -m alembic -c backend/alembic.ini upgrade head
       - name: Prove least-privilege production database roles
@@ -136,6 +140,17 @@ jobs:
       - run: python scripts/validate_contracts.py
       - run: bash scripts/verify_workflows.sh
       - run: bash -n backup/*.sh deploy/truenas/*.sh scripts/*.sh
+      - name: Parse the Windows SMB staging helper
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'deploy/truenas/Stage-PowerMeterTrueNAS.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) { throw ($errors | Out-String) }
       - run: python -m pip_audit --format=json --output=python-audit.json
       - name: Install exact frontend dependencies and Playwright Chromium
         shell: bash

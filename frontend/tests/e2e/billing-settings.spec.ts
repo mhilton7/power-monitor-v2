@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { session } from '../fixtures';
+import { homeScopes, session } from '../fixtures';
 import { mockApi } from './mocks';
 
 test.beforeEach(async ({ page }) => { await mockApi(page); });
@@ -17,8 +17,10 @@ test('rate-only PDF review excludes prohibited bill usage and comparison surface
 
 test('rate-source Check now and backup/system health evidence work', async ({ page }) => {
   await page.goto('/billing');
+  const checkRequest = page.waitForRequest((request) => request.url().includes('/rate-sources/check-now?'));
   await page.getByRole('button', { name: 'Check now' }).click();
-  await expect(page.getByText(/Sync run rate-run-1 queued/)).toBeVisible();
+  expect(new URL((await checkRequest).url()).searchParams.get('home_id')).toBe(homeScopes[0]!.id);
+  await expect(page.getByText(/Candidate .* requires explicit review/)).toBeVisible();
   await page.goto('/settings');
   await page.getByRole('button', { name: /Backups & restore/ }).click();
   await expect(page.getByText('Backup checksum')).toBeVisible();

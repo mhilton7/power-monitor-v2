@@ -1,116 +1,166 @@
-# PowerMeter V2 v0.1.0-rc.3
+# PowerMeter V2 v0.1.0-rc.4
 
-PowerMeter V2 is a greenfield central server coordinated with the independent
+PowerMeter V2 is a central, authenticated PZEM-004T monitoring system paired
+with the independent
 [`power-monitor-sensor-headless`](https://github.com/mhilton7/power-monitor-sensor-headless)
-firmware repository through the unchanged `pm-protocol/1.0.0`. Authenticated
-PZEM-004T sensor evidence is the only source of live measurements, History,
-energy, forecasts, completeness, and usage-based cost. Utility-bill PDFs remain
-rate-source documents only.
+firmware. The shared device contract remains `pm-protocol/1.0.0`.
+Authenticated sensor evidence remains the only source of live measurements,
+History, energy, completeness, forecasts, and usage-based cost. Utility-bill
+PDFs remain rate-source documents only.
 
-This file is the release-body input in source control; its presence alone does
-not prove a release workflow ran. The public prerelease and its attached
-evidence are authoritative. The tagged workflow may publish `v0.1.0-rc.3` only
-after all required nonphysical gates pass, the coordinated public firmware
-prerelease and contracts verify, every GHCR digest resolves anonymously, and
-the complete release artifact set is checksum-valid and attested.
+This source file is the release-body input for candidate `v0.1.0-rc.4`. This
+source copy alone is not publication evidence. Installation is authorized only after the
+signed tagged workflow publishes the complete checksummed and attested asset
+set, digest-pinned YAML, public multi-architecture images, deployment evidence,
+and coordinated firmware release.
 
-## Change from public v0.1.0-rc.1
+## What changed since public v0.1.0-rc.3
 
-The Sensors settings page can now create the first enrollment token before any
-device exists. `GET /api/v1/devices` returns only the authenticated actor's
-authorized home scopes. The browser uses the scope automatically only when
-exactly one exists, requires an explicit UUID-disambiguated choice when
-multiple scopes exist, and remains disabled when none exist. Token creation
-still rechecks `user_home_scopes` on the server; browser state never grants
-authority or guesses a home from an existing sensor. The browser workflow
-requires `sensors.view` and `sensors.enroll`, not billing access.
+### Home isolation and browser behavior
 
-No device request, response, HMAC, enrollment-token, or firmware storage
-contract changed. The shared identifier remains `pm-protocol/1.0.0`, and the
-database remains at Alembic revision `20260813_0007`; rc.3 adds no migration.
+- The authenticated API exposes only the actor's authorized home scopes.
+- Home, History, export, Billing, device, circuit, utility-setting, rate-check,
+  and bill-import queries bind an exact selected home UUID. An omitted home is
+  accepted only when exactly one authorized scope exists; ambiguous, absent,
+  or cross-home selections fail closed.
+- Dashboard timezone, account, rate, and per-device cost calculations now use
+  the exact home associated with the selected evidence instead of an unrelated
+  first row.
+- The browser auto-selects only a sole authorized home, requires an explicit
+  UUID-disambiguated choice for multiple homes, clears stale queries when the
+  actor or home changes, and never grants authority from client state.
+- Mobile navigation, dialogs, focus management, loading/error/empty states,
+  chart descriptions, gaps, brush targets, responsive containment, and
+  keyboard behavior were repaired and covered at the supported viewports.
 
-Rc.3 also repairs release coordination without changing runtime behavior. The
-release migration gate now chooses the latest same-major, non-draft public
-GitHub Release from authenticated GitHub release metadata, requires that exact
-tag in the checkout, and archives it. It cannot mistake an unpublished signed
-tag for an installable predecessor. The generated rc.3 OpenAPI document has
-SHA-256 `7caada9c6295f4c201fd7ce7d383822e6b5785a960022de8355e3b6acc9a4e2c`;
-the coordinated firmware rc.3 contract must declare that exact digest.
+### Bill-rate privacy and source reliability
 
-## Immutable rc.2 failure history
+- Original utility-bill bytes are released after bounded parsing and are never
+  persisted, logged, or returned, encrypted or otherwise. Only allowlisted
+  rate facts, provenance, validation status, and redacted diagnostics may be
+  retained. A database constraint prevents new original-artifact references.
+- Upgrade preflight rejects any historical retained-document reference for
+  operator review. It never deletes a document or rewrites evidence silently.
+- SCE refresh keeps the last known good candidate when parsing, storage, or the
+  official source fails. HTTP validators advance only after a usable candidate
+  exists; legacy `304` state without a parsed candidate receives one bounded
+  unconditional recovery request through the same SSRF and size controls.
+- Immutable source artifacts are file- and directory-synced before database
+  pointers advance. Missing official holiday or effective-date evidence is an
+  actionable failure, never fabricated rate data.
+- The exact-home candidate workflow now supports deterministic, database-
+  idempotent manual candidates plus explicit review, publication, activation,
+  and rejection. Candidate provenance is immutable. The only legal review
+  paths are `reviewed -> published -> activated` or `reviewed -> rejected`;
+  fetching, parsing, reviewing, publishing, or rejecting never auto-activates a
+  rate.
 
-The signed server tag `v0.1.0-rc.2` and failed release run
-[`31866197054`](https://github.com/mhilton7/power-monitor-v2/actions/runs/31866197054)
-are retained as immutable prepublication evidence. That run passed the server
-test, security, and forward-migration gate, then failed cross-repository
-validation because firmware rc.2 declared a stale
-`power-meter-v2.openapi.json` hash. Image publication and every downstream job
-were skipped. There is no server rc.2 GitHub Release, authorized GHCR image set,
-digest-pinned TrueNAS YAML, deployment smoke, or release asset set. Do not move
-or reuse the rc.2 tag, and do not present its partial workflow artifacts as a
-published release.
+### Ingestion and database integrity
 
-The signed public firmware rc.2 prerelease remains historical evidence only.
-It names server rc.2 and is not the coordinated firmware for this server rc.3
-candidate. Server rc.3 publication requires a distinct signed public firmware
-rc.3 release with the exact current contract hashes. Until rc.3 publishes,
-server rc.1 remains the installation authority.
+- Alembic head `20260815_0011` extends the frozen chain without rewriting an
+  applied migration. Revision 0008 enforces
+  `sample_count <= expected_sample_count` and prevents authenticated raw
+  readings from overlapping permanent-loss evidence or two loss ranges from
+  overlapping for one device. Revision 0009 adds the exact-home rate-candidate
+  review lifecycle. Revision 0010 makes authenticated permanent-loss rows
+  immutable against UPDATE and DELETE and repairs raw trigger ordering without
+  weakening the pre-existing raw-reading immutability guard. Revision 0011
+  enforces exact-home manual-candidate idempotency, immutable candidate
+  provenance and legal review transitions, a unique natural rate-plan identity
+  with serialized version allocation shared by bill and SCE publication, and
+  deterministic non-overlapping assignments with equal-start rejection.
+- The migrations take write-blocking table locks, preflight existing evidence,
+  and fail closed before installing PostgreSQL guards. Revision 0011 also locks
+  its rate workflow tables across preflight and guard installation. Conflicting
+  immutable evidence is preserved for review; it is never merged or deleted.
+- Application writers continue to serialize per device, and direct database
+  writes receive stable SQLSTATE and constraint failures.
 
-## Upgrade and rollback
+### TrueNAS no-shell installation
 
-An installed v0.1.0-rc.1 system upgrades in place by downloading and verifying
-the complete rc.3 release, stopping the app, running rc.3 `prepare-host.sh`, and
-replacing the complete TrueNAS Custom Config with the digest-pinned rc.3 YAML.
-Keep the existing ZFS datasets, application secrets, database credentials,
-backup key, TLS certificate/key, and trusted CA unchanged. Do not recreate
-datasets, rotate secrets, or update only one image.
+- The generated YAML contains eight services. A one-shot, network-isolated
+  `initialize` service reuses the exact API image digest, validates the staged
+  13 secret/TLS files, installs image-embedded configuration, and applies and
+  verifies the required owners, modes, and ACLs before PostgreSQL or any
+  long-running service starts.
+- Normal installation uses only the TrueNAS web UI, a temporary authenticated
+  SMB share, and the tracked Windows staging helper. SSH, the TrueNAS shell,
+  a container console, privileged mode, host networking, and the Docker socket
+  are not part of the normal path.
+- Operators create exactly nine Generic/POSIX child ZFS datasets below
+  `/mnt/Apps/PowerMeterV2`. The former `bill-rate-source-artifacts` dataset is
+  not mounted by rc.4; an existing rc.3 dataset is left untouched and should
+  remain unshared until an operator chooses a separately reviewed cleanup.
+- TLS verification remains strict for `power-monitor.home.arpa`, including
+  hostname, key match, current validity, and at least seven days of remaining
+  validity across the complete chain. This release requires the DNS hostname;
+  direct-IP HTTPS is not supported and verification must never be bypassed.
 
-v0.1.0-rc.1 is the prior public V2 candidate. The rc.1-to-rc.3 migration report
-proves only that an rc.1 database can upgrade forward to rc.3. The absence of a
-new Alembic revision does not prove that rc.1 binaries support a database touched
-by rc.3, and the report does not authorize swapping the rc.1 YAML or images
-back onto the current database. Rollback compatibility remains unproven. An
-rc.1 image/YAML rollback is not authorized unless a separate release-specific
-recovery test validates restoring or cloning the matching pre-upgrade database
-snapshot or verified backup and pairing rc.1 with that restored database. The
-GitHub-hosted deployment smoke performs a clean deployment and restarts but
-does not exercise rollback; its evidence records
-`not_exercised_github_hosted_smoke`. Follow `ROLLBACK.md` and do not report
-rollback as passed without that separate execution evidence.
+### Audit and release hardening
+
+- The Windows audit orchestrator resolves the repository root, records start
+  and end state, runs format/lint/type/test/build/security checks, refuses a
+  remote Docker endpoint, strips inherited `PM_*` values, and makes disposable
+  database/Compose work explicit. Its default mode never migrates a database.
+- Release evidence now requires the exact permission record set and rejects
+  duplicate, blank, contradictory, or extra records.
+- Gitleaks is pinned to the official Node 24 action revision. Production images
+  and Actions remain immutable-pinned; no production image uses `latest`.
+
+## Upgrade and rollback boundary
+
+Back up and verify the database, perform an isolated restore check, and take a
+recursive ZFS snapshot before installing rc.4. Keep all existing application
+secrets, database credentials, the backup encryption key, TLS material, and
+datasets. Do not recreate storage or rotate secrets during this upgrade.
+
+The migration chain through `20260815_0011` is intentionally fail-closed. The
+0008 preflight blocks an overlap in immutable reading/loss evidence or a
+historical retained-bill reference for review. Revision 0010 requires the exact
+legacy raw-reading immutability guard before changing trigger ordering.
+Revision 0011 stops on duplicate natural rate plans, invalid or overlapping
+assignments, or inconsistent candidate-review evidence and holds PostgreSQL
+write locks until its guards are installed. Do not bypass a guard, edit an
+applied migration, or delete evidence merely to continue.
+
+The release migration report proves only the forward upgrade from the latest
+lower same-major public release. It does not prove that rc.3 binaries can use a
+database touched by rc.4. Application-only rollback is not authorized. A
+rollback requires a separately validated restore or clone of the matching
+pre-upgrade snapshot or verified backup, paired with the exact older release
+assets. GitHub-hosted smoke records rollback as
+`not_exercised_github_hosted_smoke`.
 
 ## Release contents and firmware pairing
 
-A successfully published candidate includes:
+A successfully published rc.4 candidate includes:
 
-- immutable multi-architecture API, frontend, gateway, and backup images in
-  GHCR, each referenced by registry-reported SHA-256 digest;
-- a complete generated `power-monitor-v2-v0.1.0-rc.3.yaml` suitable for TrueNAS
-  **Apps > Install via YAML**;
-- `release-manifest.json`, per-image records, SPDX SBOMs, security results,
-  test/migration/deployment reports, checksums, and GitHub attestations;
-- `Caddyfile`, `postgres-init-roles.sh`, the checked `prepare-host.sh`, and
-  complete install, dataset/ACL, secret/TLS, first-run, backup/restore, upgrade,
-  and rollback guides;
-- the coordinated public `power-monitor-sensor-headless` v0.1.0-rc.3 identity
-  and explicit hardware-certification status.
+- four immutable multi-architecture GHCR images referenced by registry digest;
+- `power-monitor-v2-v0.1.0-rc.4.yaml` and `release-manifest.json`;
+- the Windows SMB staging helper and auditable initializer source;
+- checksums, strict attestations, SBOMs, vulnerability results, dependency and
+  test reports, migration evidence, and deployment-smoke evidence;
+- installation, secrets/TLS, dataset/ACL, backup/restore, upgrade, and rollback
+  instructions; and
+- an exact coordinated public firmware `v0.1.0-rc.4` release whose server
+  contract declares OpenAPI SHA-256
+  `f9b936468f5a696a0bee3e04edda021c12ab81dddc091cbb307face0be1de7b1`.
 
-Server v0.1.0-rc.3 must be paired with the coordinated firmware v0.1.0-rc.3
-release required by the tagged workflow. That pairing retains
-`pm-protocol/1.0.0`; it is not evidence that physical hardware passed.
+The signed server rc.2 tag and failed release run `31866197054` remain
+immutable prepublication evidence. There is no server rc.2 GitHub Release.
+Public server rc.3 remains the prior installation authority for its own attached
+seven-service assets and instructions. Neither historical release is modified
+or relabeled by rc.4.
 
-This is a release candidate, not a stable or physically certified product.
-`hardware-certification-status.json` remains `pending`. Marked-unit electrical
-interface verification, certificate/hostname behavior on hardware, OTA success
-and rollback, physical fault/recovery, and a measured soak of at least 72 hours
-must produce schema-valid machine evidence before stable promotion can open.
-Simulation, host tests, a successful ESP-IDF build, or publication of this
-prerelease cannot substitute for those physical results.
+This remains a prerelease candidate. Hardware status is honestly `pending`.
+Marked-unit electrical identity, physical TLS/HMAC behavior, OTA installation
+and rollback, outage/recovery cycling, and a continuous measured soak of at
+least 72 hours must produce schema-valid machine evidence before stable
+promotion can open. Simulation, host tests, CI, or candidate publication cannot
+substitute for those physical results.
 
-Review `release-manifest.json`, `RELEASE_NOTES.md`,
-`hardware-certification-status.json`, and `SHA256SUMS`, then follow the attached
-`INSTALLATION.md`. Never install the repository template containing
-`UNPUBLISHED_*`, substitute a floating image tag/local Docker ID, bypass TLS or
-PDF-sandbox readiness, or treat a utility bill as usage evidence.
-
-Release scope and gates are defined in `docs/RELEASE_PROCESS.md`; migration
-boundaries are in `docs/MIGRATION.md`.
+Review `release-manifest.json`, `hardware-certification-status.json`,
+`SHA256SUMS`, and the attached `INSTALLATION.md`. Never install the repository
+template containing `UNPUBLISHED_*`, substitute a floating image tag or local
+Docker ID, bypass TLS or PDF-sandbox readiness, or use a utility bill as usage
+evidence.

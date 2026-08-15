@@ -432,7 +432,11 @@ class RawReading(Base):
     __table_args__ = (
         UniqueConstraint("device_id", "sequence"),
         CheckConstraint("sequence > 0", name="sequence_positive"),
-        CheckConstraint("sample_count >= 0 AND expected_sample_count > 0", name="sample_count"),
+        CheckConstraint(
+            "sample_count >= 0 AND expected_sample_count > 0 "
+            "AND sample_count <= expected_sample_count",
+            name="sample_count",
+        ),
         CheckConstraint(
             "interval_energy_mwh IS NULL OR interval_energy_mwh >= 0", name="energy_nonnegative"
         ),
@@ -603,7 +607,75 @@ class RateCandidate(Base):
     reviewed_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    __table_args__ = (UniqueConstraint("source_revision_id"),)
+    home_id: Mapped[str | None] = mapped_column(
+        ForeignKey("homes.id", ondelete="RESTRICT"), index=True
+    )
+    canonical_input_sha256: Mapped[str | None] = mapped_column(String(64))
+    __table_args__ = (
+        UniqueConstraint("source_revision_id"),
+        UniqueConstraint("home_id", "canonical_input_sha256"),
+        CheckConstraint(
+            "(home_id IS NULL AND canonical_input_sha256 IS NULL) OR "
+            "(home_id IS NOT NULL AND canonical_input_sha256 IS NOT NULL)",
+            name="manual_identity_pair",
+        ),
+    )
+
+
+class RateCandidateReview(Base):
+    """An exact-home review lifecycle for a shared immutable rate candidate."""
+
+    __tablename__ = "rate_candidate_reviews"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    candidate_id: Mapped[str] = mapped_column(
+        ForeignKey("rate_candidates.id", ondelete="RESTRICT"), index=True
+    )
+    home_id: Mapped[str] = mapped_column(ForeignKey("homes.id", ondelete="RESTRICT"), index=True)
+    selected_plan_name: Mapped[str | None] = mapped_column(String(120))
+    effective_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    effective_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    state: Mapped[str] = mapped_column(String(24), nullable=False, default="reviewed")
+    reviewed_by_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    rate_plan_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("rate_plan_versions.id", ondelete="RESTRICT")
+    )
+    utility_account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("utility_accounts.id", ondelete="RESTRICT")
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("candidate_id", "home_id"),
+        CheckConstraint(
+            "state IN ('reviewed','published','activated','rejected')",
+            name="workflow_state",
+        ),
+        CheckConstraint(
+            "effective_end IS NULL OR effective_end > effective_start",
+            name="effective_range",
+        ),
+        CheckConstraint(
+            "(state = 'reviewed' AND selected_plan_name IS NOT NULL "
+            "AND effective_start IS NOT NULL AND rate_plan_version_id IS NULL "
+            "AND utility_account_id IS NULL AND published_at IS NULL "
+            "AND activated_at IS NULL) OR "
+            "(state = 'published' AND selected_plan_name IS NOT NULL "
+            "AND effective_start IS NOT NULL AND rate_plan_version_id IS NOT NULL "
+            "AND utility_account_id IS NULL AND published_at IS NOT NULL "
+            "AND activated_at IS NULL) OR "
+            "(state = 'activated' AND selected_plan_name IS NOT NULL "
+            "AND effective_start IS NOT NULL AND rate_plan_version_id IS NOT NULL "
+            "AND utility_account_id IS NOT NULL AND published_at IS NOT NULL "
+            "AND activated_at IS NOT NULL) OR "
+            "(state = 'rejected' AND rate_plan_version_id IS NULL "
+            "AND utility_account_id IS NULL AND published_at IS NULL "
+            "AND activated_at IS NULL)",
+            name="state_evidence",
+        ),
+    )
 
 
 class RatePlan(Base):
@@ -613,6 +685,7 @@ class RatePlan(Base):
     utility_name: Mapped[str] = mapped_column(String(120), nullable=False)
     rate_class: Mapped[str] = mapped_column(String(80), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (UniqueConstraint("name", "utility_name", "rate_class"),)
 
 
 class RatePlanVersion(Base):
@@ -685,6 +758,13 @@ class RateAssignment(Base):
     effective_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     effective_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     assigned_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    __table_args__ = (
+        UniqueConstraint("utility_account_id", "effective_start"),
+        CheckConstraint(
+            "effective_end IS NULL OR effective_end > effective_start",
+            name="effective_range",
+        ),
+    )
 
 
 class BillingCycle(Base):
@@ -716,6 +796,10 @@ class UtilityBillRateUpload(Base):
     artifact_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         UniqueConstraint("home_id", "artifact_sha256", name="uq_bill_rate_upload_home_artifact"),
+        CheckConstraint(
+            "encrypted_artifact_path IS NULL",
+            name="no_original_artifact",
+        ),
     )
 
 
@@ -977,6 +1061,7 @@ def _immutable(_mapper: object, _connection: object, target: object) -> None:
 
 for _model in (
     RawReading,
+    UnavailableSequenceRange,
     AuditEvent,
     IntervalCost,
     BillingEstimate,
@@ -994,11 +1079,86 @@ def _rate_candidate_evidence_immutable(
     from sqlalchemy import inspect
 
     state = inspect(target)
-    immutable_fields = ("source_revision_id", "normalized_rates", "diff", "validation_evidence")
+    immutable_fields = (
+        "source_revision_id",
+        "normalized_rates",
+        "diff",
+        "validation_evidence",
+        "home_id",
+        "canonical_input_sha256",
+    )
     if any(state.attrs[field].history.has_changes() for field in immutable_fields):
         raise ValueError(
             "rate-candidate source, normalized values, diff, and validation are immutable"
         )
+
+
+@event.listens_for(RateCandidate, "before_delete")
+def _rate_candidate_not_deletable(
+    _mapper: object, _connection: object, _target: RateCandidate
+) -> None:
+    raise ValueError("rate-candidate provenance cannot be deleted")
+
+
+@event.listens_for(RateCandidateReview, "before_update")
+def _published_rate_candidate_review_immutable(
+    _mapper: object, _connection: object, target: RateCandidateReview
+) -> None:
+    from sqlalchemy import inspect
+
+    state = inspect(target)
+    state_history = state.attrs.state.history
+    old_state = state_history.deleted[0] if state_history.deleted else target.state
+    changed = {
+        field
+        for field in (
+            "candidate_id",
+            "home_id",
+            "selected_plan_name",
+            "effective_start",
+            "effective_end",
+            "state",
+            "reviewed_by_user_id",
+            "reviewed_at",
+            "rate_plan_version_id",
+            "utility_account_id",
+            "published_at",
+            "activated_at",
+        )
+        if state.attrs[field].history.has_changes()
+    }
+    immutable_identity = {
+        "candidate_id",
+        "home_id",
+    }
+    if changed & immutable_identity:
+        raise ValueError("rate-candidate review identity is immutable")
+    new_state = target.state
+    if old_state == "reviewed" and new_state == "reviewed":
+        if changed - {
+            "selected_plan_name",
+            "effective_start",
+            "effective_end",
+            "reviewed_by_user_id",
+            "reviewed_at",
+        }:
+            raise ValueError("reviewed rate-candidate fields changed illegally")
+        return
+    legal_transition_fields = {
+        ("reviewed", "published"): {"state", "rate_plan_version_id", "published_at"},
+        ("published", "activated"): {"state", "utility_account_id", "activated_at"},
+        ("reviewed", "rejected"): {"state"},
+    }
+    allowed = legal_transition_fields.get((old_state, new_state))
+    if allowed is None or changed - allowed:
+        raise ValueError("rate-candidate review lifecycle transition is illegal")
+
+
+@event.listens_for(RateCandidateReview, "before_delete")
+def _rate_candidate_review_not_deletable(
+    _mapper: object, _connection: object, _target: RateCandidateReview
+) -> None:
+    raise ValueError("rate-candidate review provenance cannot be deleted")
 
 
 @event.listens_for(RatePlanVersion, "before_update")

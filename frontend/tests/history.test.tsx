@@ -6,9 +6,9 @@ import { installFetchMock, renderWithProviders } from './render';
 
 describe('History', () => {
   it('renders committed values, exact selected range, zero, and missing evidence separately', async () => {
-    installFetchMock((path) => path.endsWith('/devices')
+    installFetchMock((path) => path.includes('/devices?')
       ? { status: 200, body: { devices: [device] } }
-      : path.endsWith('/circuits') ? { status: 200, body: { circuits: [] } } : { status: 200, body: history });
+      : path.includes('/circuits?') ? { status: 200, body: { circuits: [] } } : { status: 200, body: history });
     renderWithProviders(<HistoryPage />);
     expect(await screen.findByTestId('history-chart')).toBeInTheDocument();
     expect(screen.getByText('18.74 kWh')).toBeInTheDocument();
@@ -22,8 +22,8 @@ describe('History', () => {
   it('queries only an explicitly verified aggregate when that scope is selected', async () => {
     const requested: string[] = [];
     installFetchMock((path) => {
-      if (path.endsWith('/devices')) return { status: 200, body: { devices: [device] } };
-      if (path.endsWith('/circuits')) return { status: 200, body: { circuits: [{ id: 'circuit-verified', home_id: device.home_id, name: 'Verified whole home', aggregate_mode: 'verified_sum' }] } };
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [device] } };
+      if (path.includes('/circuits?')) return { status: 200, body: { circuits: [{ id: 'circuit-verified', home_id: device.home_id, name: 'Verified whole home', aggregate_mode: 'verified_sum' }] } };
       if (path.includes('/history')) { requested.push(path); return { status: 200, body: { ...history, scope: { device_ids: ['device-main', 'device-secondary'], aggregate: true, circuit_id: 'circuit-verified' } } }; }
       return { status: 404, body: {} };
     });

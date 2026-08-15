@@ -563,6 +563,44 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HomeScope": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 36,
+            "minLength": 36,
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "HomeScope",
+        "type": "object"
+      },
+      "HomeScopesResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "home_scopes": {
+            "items": {
+              "$ref": "#/components/schemas/HomeScope"
+            },
+            "title": "Home Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "home_scopes"
+        ],
+        "title": "HomeScopesResponse",
+        "type": "object"
+      },
       "HomeUtilityUpdateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -710,6 +748,200 @@
         "title": "LoginRequest",
         "type": "object"
       },
+      "ManualRateCandidateRequest": {
+        "additionalProperties": false,
+        "description": "Closed, deterministic manual fallback for administrator-sourced rate facts.",
+        "properties": {
+          "administrator_attests_official_source": {
+            "const": true,
+            "title": "Administrator Attests Official Source",
+            "type": "boolean"
+          },
+          "baseline_credit_per_kwh": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "default": "0",
+            "title": "Baseline Credit Per Kwh"
+          },
+          "daily_fixed_charge": {
+            "anyOf": [
+              {
+                "maximum": 20.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "default": "0",
+            "title": "Daily Fixed Charge"
+          },
+          "effective_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective End"
+          },
+          "effective_start": {
+            "format": "date-time",
+            "title": "Effective Start",
+            "type": "string"
+          },
+          "monthly_fixed_charge": {
+            "anyOf": [
+              {
+                "maximum": 500.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "default": "0",
+            "title": "Monthly Fixed Charge"
+          },
+          "periods": {
+            "items": {
+              "$ref": "#/components/schemas/ManualRatePeriodRequest"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Periods",
+            "type": "array"
+          },
+          "rate_class": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Rate Class",
+            "type": "string"
+          },
+          "rate_plan_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Rate Plan Name",
+            "type": "string"
+          },
+          "source_title": {
+            "maxLength": 160,
+            "minLength": 3,
+            "title": "Source Title",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 12,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "tariff_identifier": {
+            "maxLength": 120,
+            "minLength": 2,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._()/+-]*$",
+            "title": "Tariff Identifier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_title",
+          "tariff_identifier",
+          "administrator_attests_official_source",
+          "rate_plan_name",
+          "rate_class",
+          "effective_start",
+          "periods"
+        ],
+        "title": "ManualRateCandidateRequest",
+        "type": "object"
+      },
+      "ManualRatePeriodRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "day_type": {
+            "enum": [
+              "weekday",
+              "weekend",
+              "holiday",
+              "all"
+            ],
+            "title": "Day Type",
+            "type": "string"
+          },
+          "end_minute": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 1440.0,
+            "title": "End Minute",
+            "type": "integer"
+          },
+          "period_name": {
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Period Name",
+            "type": "string"
+          },
+          "price_per_kwh": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 5.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Price Per Kwh"
+          },
+          "season": {
+            "enum": [
+              "summer",
+              "winter",
+              "all"
+            ],
+            "title": "Season",
+            "type": "string"
+          },
+          "start_minute": {
+            "exclusiveMaximum": 1440.0,
+            "minimum": 0.0,
+            "title": "Start Minute",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "season",
+          "day_type",
+          "period_name",
+          "start_minute",
+          "end_minute",
+          "price_per_kwh"
+        ],
+        "title": "ManualRatePeriodRequest",
+        "type": "object"
+      },
       "MfaConfirmRequest": {
         "additionalProperties": false,
         "properties": {
@@ -746,6 +978,68 @@
           "new_password"
         ],
         "title": "PasswordChangeRequest",
+        "type": "object"
+      },
+      "RateCandidateActivationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "utility_account_id": {
+            "maxLength": 36,
+            "minLength": 36,
+            "title": "Utility Account Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "utility_account_id"
+        ],
+        "title": "RateCandidateActivationRequest",
+        "type": "object"
+      },
+      "RateCandidateReviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "administrator_confirmed_effective_date": {
+            "const": true,
+            "title": "Administrator Confirmed Effective Date",
+            "type": "boolean"
+          },
+          "administrator_confirmed_provenance": {
+            "const": true,
+            "title": "Administrator Confirmed Provenance",
+            "type": "boolean"
+          },
+          "effective_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective End"
+          },
+          "effective_start": {
+            "format": "date-time",
+            "title": "Effective Start",
+            "type": "string"
+          },
+          "selected_plan_name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Selected Plan Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "selected_plan_name",
+          "effective_start",
+          "administrator_confirmed_effective_date",
+          "administrator_confirmed_provenance"
+        ],
+        "title": "RateCandidateReviewRequest",
         "type": "object"
       },
       "RateCorrectionRequest": {
@@ -1037,7 +1331,7 @@
   },
   "info": {
     "title": "PowerMeter V2 API",
-    "version": "0.1.0-rc.3"
+    "version": "0.1.0-rc.4"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2135,6 +2429,22 @@
         "operationId": "list_bill_rate_imports_api_v1_bill_rate_imports_get",
         "parameters": [
           {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
             "in": "header",
             "name": "X-CSRF-Token",
             "required": false,
@@ -2588,6 +2898,22 @@
         "operationId": "billing_overview_api_v1_billing_get",
         "parameters": [
           {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
             "in": "header",
             "name": "X-CSRF-Token",
             "required": false,
@@ -2654,6 +2980,22 @@
       "get": {
         "operationId": "list_circuits_api_v1_circuits_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
           {
             "in": "header",
             "name": "X-CSRF-Token",
@@ -2895,6 +3237,22 @@
       "get": {
         "operationId": "list_devices_api_v1_devices_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
           {
             "in": "header",
             "name": "X-CSRF-Token",
@@ -3888,6 +4246,22 @@
           },
           {
             "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
+            "in": "query",
             "name": "metric",
             "required": false,
             "schema": {
@@ -4041,6 +4415,22 @@
             }
           },
           {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
             "in": "header",
             "name": "X-CSRF-Token",
             "required": false,
@@ -4103,6 +4493,22 @@
       "get": {
         "operationId": "home_dashboard_api_v1_home_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
           {
             "in": "query",
             "name": "device_id",
@@ -4198,6 +4604,71 @@
         ]
       }
     },
+    "/api/v1/home-scopes": {
+      "get": {
+        "operationId": "list_home_scopes_api_v1_home_scopes_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeScopesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Home Scopes",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
     "/api/v1/rate-sources/candidates": {
       "get": {
         "operationId": "list_rate_source_candidates_api_v1_rate_sources_candidates_get",
@@ -4276,6 +4747,394 @@
           }
         },
         "summary": "List Rate Source Candidates",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/api/v1/rate-sources/candidates/{candidate_id}/activate": {
+      "post": {
+        "operationId": "activate_official_rate_candidate_api_v1_rate_sources_candidates__candidate_id__activate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RateCandidateActivationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Activate Official Rate Candidate Api V1 Rate Sources Candidates  Candidate Id  Activate Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Activate Official Rate Candidate",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/api/v1/rate-sources/candidates/{candidate_id}/publish": {
+      "post": {
+        "operationId": "publish_official_rate_candidate_api_v1_rate_sources_candidates__candidate_id__publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Publish Official Rate Candidate Api V1 Rate Sources Candidates  Candidate Id  Publish Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Official Rate Candidate",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/api/v1/rate-sources/candidates/{candidate_id}/reject": {
+      "post": {
+        "operationId": "reject_official_rate_candidate_api_v1_rate_sources_candidates__candidate_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reject Official Rate Candidate Api V1 Rate Sources Candidates  Candidate Id  Reject Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reject Official Rate Candidate",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/api/v1/rate-sources/candidates/{candidate_id}/review": {
+      "post": {
+        "operationId": "review_official_rate_candidate_api_v1_rate_sources_candidates__candidate_id__review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RateCandidateReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Review Official Rate Candidate Api V1 Rate Sources Candidates  Candidate Id  Review Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Review Official Rate Candidate",
         "tags": [
           "billing"
         ]
@@ -4364,6 +5223,99 @@
         ]
       }
     },
+    "/api/v1/rate-sources/manual-candidates": {
+      "post": {
+        "operationId": "create_manual_rate_source_candidate_api_v1_rate_sources_manual_candidates_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualRateCandidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Manual Rate Source Candidate Api V1 Rate Sources Manual Candidates Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Manual Rate Source Candidate",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
     "/api/v1/rate-sources/runs": {
       "get": {
         "operationId": "list_rate_source_runs_api_v1_rate_sources_runs_get",
@@ -4442,6 +5394,89 @@
           }
         },
         "summary": "List Rate Source Runs",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/api/v1/rate-sources/status": {
+      "get": {
+        "operationId": "rate_source_status_api_v1_rate_sources_status_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Rate Source Status Api V1 Rate Sources Status Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rate Source Status",
         "tags": [
           "billing"
         ]
@@ -4594,6 +5629,22 @@
         "operationId": "home_utility_api_v1_settings_home_utility_get",
         "parameters": [
           {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
             "in": "header",
             "name": "X-CSRF-Token",
             "required": false,
@@ -4658,6 +5709,22 @@
       "patch": {
         "operationId": "update_home_utility_api_v1_settings_home_utility_patch",
         "parameters": [
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
           {
             "in": "header",
             "name": "X-CSRF-Token",

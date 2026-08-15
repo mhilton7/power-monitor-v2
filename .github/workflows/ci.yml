@@ -85,9 +85,15 @@ jobs:
       - name: Install exact Python project dependencies
         run: python -m pip install --disable-pip-version-check -e '.[dev]'
       - name: Lint
-        run: python -m ruff check backend worker tests scripts
+        run: python -m ruff check backend worker tests scripts deploy/truenas/initialize_host.py
+      - name: Formatting
+        run: >-
+          python -m ruff format --check
+          backend/app backend/tests worker tests scripts deploy/truenas/initialize_host.py
       - name: Type check
         run: python -m mypy backend worker
+      - name: Type check the Linux-only TrueNAS initializer
+        run: python -m mypy --platform linux deploy/truenas/initialize_host.py
       - name: Clean database migration
         run: PM_DATABASE_URL="$PM_MIGRATOR_DATABASE_URL" python -m alembic -c backend/alembic.ini upgrade head
       - name: Prove least-privilege production database roles
@@ -198,6 +204,17 @@ jobs:
       - run: python scripts/validate_release.py
       - run: bash scripts/verify_workflows.sh
       - run: bash -n backup/*.sh deploy/truenas/*.sh scripts/*.sh
+      - name: Parse the Windows SMB staging helper
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'deploy/truenas/Stage-PowerMeterTrueNAS.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) { throw ($errors | Out-String) }
       - name: Verify fail-closed release renderer
         run: >-
           python scripts/render_truenas_release.py

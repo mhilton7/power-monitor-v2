@@ -12,7 +12,10 @@ export function AuthScreen({ bootstrap }: { bootstrap: boolean }) {
     mutationFn: async (form: FormData) => bootstrap
       ? api.bootstrap(formString(form, 'displayName'), formString(form, 'email'), formString(form, 'password'), formString(form, 'homeName'))
       : api.login(formString(form, 'email'), formString(form, 'password'), formString(form, 'totp') || undefined),
-    onSuccess: (session) => queryClient.setQueryData<Session>(['session'], session),
+    onSuccess: (session) => {
+      queryClient.removeQueries({ predicate: (entry) => entry.queryKey[0] !== 'session' });
+      queryClient.setQueryData<Session>(['session'], session);
+    },
     onError: (error) => {
       if (error instanceof Error && /mfa|one-time/i.test(error.message)) setMfaVisible(true);
     },

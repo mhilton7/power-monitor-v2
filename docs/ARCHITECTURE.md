@@ -27,7 +27,7 @@ Authenticated sensor intervals + rate version → estimated cost
 - API routes authenticate browser sessions or device HMAC independently. Server permissions and home/device scope apply even when a UI control is hidden.
 - PostgreSQL is the only database and is not exposed to the LAN. Database transactions define acknowledgment and idempotency boundaries. The empty-cluster bootstrap role becomes `NOLOGIN`; schema migration, API, worker, read-only backup, and isolated restore tests each use a distinct role and file secret. Runtime roles have DML but no schema-creation privilege, and the restore role cannot connect to production.
 - The worker owns scheduled rollups, cost runs, official-source checks, alert evaluation, and other leased jobs through PostgreSQL advisory locks.
-- Bill-rate extraction is a closed module within the existing API service, not an eighth service. Untrusted PDF bytes are read only after a bundled launcher applies Landlock filesystem confinement, seccomp network/system-call denial, rlimits, a cleared environment, closed descriptors, and a private tmpfs work directory. Its frozen parser-only runtime cannot read `/app`, `/data`, `/run/secrets`, or DB sockets. Its capped stdout can contain only a versioned closed rate-draft schema and cannot import ingestion, History, gap repair, calibration, rollup, or forecasting code. Publication is a separate permissioned action.
+- Bill-rate extraction is a closed module within the existing API service, not an additional service. Untrusted PDF bytes are read only after a bundled launcher applies Landlock filesystem confinement, seccomp network/system-call denial, rlimits, a cleared environment, closed descriptors, and a private tmpfs work directory. Its frozen parser-only runtime cannot read `/app`, `/data`, `/run/secrets`, or DB sockets. Its capped stdout can contain only a versioned closed rate-draft schema and cannot import ingestion, History, gap repair, calibration, rollup, or forecasting code. The API releases the original bytes and full OCR text after the bounded parse; neither can enter persistent storage, even encrypted. Publication is a separate permissioned action.
 
 ## Time, missing data, and money
 
@@ -48,8 +48,8 @@ The server is horizontally conservative: a single PostgreSQL database coordinate
 - PostgreSQL: accounts, permissions, devices, immutable readings, derived intervals/rollups/costs, rates, commands, alerts, audit metadata, and backup/restore evidence references.
 - Firmware dataset: administrator-approved OTA artifacts and compatibility metadata.
 - Rate-source dataset: immutable official-source artifacts and hashes.
-- Bill-rate-source dataset: encrypted originals only when retention is enabled; never ordinary support bundles or browser storage.
 - Backup dataset: encrypted logical dumps, hashes, manifests, and machine-readable restore-test evidence.
 - Logs dataset: structured JSON with typed event codes and redaction.
 
-Secrets are mounted as files and excluded from ordinary backups, diagnostics, and logs.
+There is no bill-original dataset or original-document retention mode. Secrets
+are mounted as files and excluded from ordinary backups, diagnostics, and logs.

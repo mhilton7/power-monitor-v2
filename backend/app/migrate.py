@@ -14,8 +14,7 @@ from .db import make_engine
 GRANT_STATEMENTS = (
     "REVOKE ALL ON SCHEMA public FROM PUBLIC",
     "GRANT USAGE ON SCHEMA public TO pm_api, pm_worker, pm_backup",
-    "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public "
-    "TO pm_api, pm_worker",
+    "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO pm_api, pm_worker",
     "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO pm_api, pm_worker",
     "GRANT SELECT ON ALL TABLES IN SCHEMA public TO pm_backup",
     "GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO pm_backup",

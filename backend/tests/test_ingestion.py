@@ -5,9 +5,21 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from backend.app.errors import IntegrityConflict
 from backend.app.main import session_factory
-from backend.app.models import Device, Home, NormalizedInterval, RawReading
-from backend.app.schemas.device import DurableReading, ReadingBatchRequest
-from backend.app.services.ingestion import ingest_batch
+from backend.app.models import (
+    Device,
+    Home,
+    NormalizedInterval,
+    RawReading,
+    UnavailableSequenceRange,
+)
+from backend.app.schemas.device import (
+    DurableReading,
+    PermanentLossRange,
+    PermanentLossRequest,
+    ReadingBatchRequest,
+)
+from backend.app.services.ingestion import ingest_batch, record_permanent_loss
+from pydantic import ValidationError
 from sqlalchemy import func, select
 
 
@@ -114,3 +126,165 @@ async def test_untrusted_time_never_becomes_history() -> None:
         await session.commit()
         assert await session.scalar(select(func.count(RawReading.id))) == 1
         assert await session.scalar(select(func.count(NormalizedInterval.id))) == 0
+
+
+def test_reading_rejects_completeness_above_one() -> None:
+    payload = record(1).model_dump()
+    payload["sample_count"] = 61
+    payload["expected_sample_count"] = 60
+
+    with pytest.raises(ValidationError, match="sample count cannot exceed"):
+        DurableReading.model_validate(payload)
+
+
+def test_permanent_loss_request_rejects_overlapping_ranges() -> None:
+    with pytest.raises(ValidationError, match="must not overlap"):
+        PermanentLossRequest(
+            protocol_id="pm-protocol/1.0.0",
+            ranges=[
+                PermanentLossRange(
+                    first_sequence=4,
+                    last_sequence=8,
+                    reason_code="storage_failure",
+                    evidence_sha256="a" * 64,
+                ),
+                PermanentLossRange(
+                    first_sequence=1,
+                    last_sequence=4,
+                    reason_code="record_crc",
+                    evidence_sha256="b" * 64,
+                ),
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_committed_permanent_loss_rejects_later_reading() -> None:
+    device_id = await make_device()
+    loss = PermanentLossRange(
+        first_sequence=1,
+        last_sequence=2,
+        reason_code="storage_failure",
+        evidence_sha256="a" * 64,
+    )
+    async with session_factory() as session:
+        result = await record_permanent_loss(session, device_id, [loss])
+        await session.commit()
+        assert result.accepted == 1
+        assert result.highest_contiguous_sequence == 2
+
+    async with session_factory() as session:
+        with pytest.raises(IntegrityConflict, match="permanent-loss evidence"):
+            await ingest_batch(
+                session,
+                device_id,
+                ReadingBatchRequest(protocol_id="pm-protocol/1.0.0", records=[record(1)]),
+            )
+        await session.rollback()
+        assert await session.scalar(select(func.count(RawReading.id))) == 0
+        assert await session.scalar(select(func.count(UnavailableSequenceRange.id))) == 1
+
+
+@pytest.mark.asyncio
+async def test_permanent_loss_is_idempotent_but_rejects_any_overlap() -> None:
+    device_id = await make_device()
+    loss = PermanentLossRange(
+        first_sequence=2,
+        last_sequence=4,
+        reason_code="segment_corrupt",
+        evidence_sha256="b" * 64,
+    )
+    async with session_factory() as session:
+        first = await record_permanent_loss(session, device_id, [loss])
+        await session.commit()
+        assert first.accepted == 1
+
+    async with session_factory() as session:
+        retry = await record_permanent_loss(session, device_id, [loss])
+        await session.commit()
+        assert retry.accepted == 0
+
+    overlapping = PermanentLossRange(
+        first_sequence=4,
+        last_sequence=6,
+        reason_code="segment_corrupt",
+        evidence_sha256="b" * 64,
+    )
+    async with session_factory() as session:
+        with pytest.raises(IntegrityConflict, match="overlaps prior evidence"):
+            await record_permanent_loss(session, device_id, [overlapping])
+
+
+@pytest.mark.asyncio
+async def test_permanent_loss_evidence_is_immutable_and_acknowledgement_stays_monotonic() -> None:
+    device_id = await make_device()
+    loss = PermanentLossRange(
+        first_sequence=1,
+        last_sequence=2,
+        reason_code="storage_failure",
+        evidence_sha256="d" * 64,
+    )
+    async with session_factory() as session:
+        result = await record_permanent_loss(session, device_id, [loss])
+        await session.commit()
+        assert result.highest_contiguous_sequence == 2
+
+    async with session_factory() as session:
+        stored = await session.scalar(
+            select(UnavailableSequenceRange).where(UnavailableSequenceRange.device_id == device_id)
+        )
+        assert stored is not None
+        stored.reason_code = "record_crc"
+        with pytest.raises(ValueError, match="UnavailableSequenceRange records are immutable"):
+            await session.flush()
+        await session.rollback()
+
+    async with session_factory() as session:
+        stored = await session.scalar(
+            select(UnavailableSequenceRange).where(UnavailableSequenceRange.device_id == device_id)
+        )
+        assert stored is not None
+        await session.delete(stored)
+        with pytest.raises(ValueError, match="UnavailableSequenceRange records are immutable"):
+            await session.flush()
+        await session.rollback()
+
+    async with session_factory() as session:
+        stored = await session.scalar(
+            select(UnavailableSequenceRange).where(UnavailableSequenceRange.device_id == device_id)
+        )
+        device = await session.get(Device, device_id)
+        assert stored is not None
+        assert stored.reason_code == "storage_failure"
+        assert stored.first_sequence == 1
+        assert stored.last_sequence == 2
+        assert device is not None
+        assert device.contiguous_ack == 2
+        assert device.maximum_sequence == 2
+
+
+@pytest.mark.asyncio
+async def test_permanent_loss_rejects_an_already_committed_reading() -> None:
+    device_id = await make_device()
+    async with session_factory() as session:
+        await ingest_batch(
+            session,
+            device_id,
+            ReadingBatchRequest(protocol_id="pm-protocol/1.0.0", records=[record(3)]),
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        with pytest.raises(IntegrityConflict, match="overlaps a committed reading"):
+            await record_permanent_loss(
+                session,
+                device_id,
+                [
+                    PermanentLossRange(
+                        first_sequence=2,
+                        last_sequence=4,
+                        reason_code="storage_failure",
+                        evidence_sha256="c" * 64,
+                    )
+                ],
+            )

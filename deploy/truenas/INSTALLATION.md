@@ -1,251 +1,199 @@
-# Install PowerMeter V2 on TrueNAS
+# PowerMeter V2 on TrueNAS: UI + SMB installation
 
-This is the complete operator path for a current TrueNAS Community Edition
-release that supports Docker Compose custom apps. The UI labels below match the
-current **Apps > Discover Apps > more_vert > Install via YAML** workflow. TrueNAS
-performs only basic YAML validation, so complete every preflight before saving
-the app. See the current [TrueNAS custom-app documentation](https://www.truenas.com/docs/scale/apps/installcustomappscreens/)
-if a later UI moves a control.
+This is the supported normal installation path. It uses Windows, one temporary
+authenticated SMB share, and the TrueNAS web UI. It does **not** require SSH,
+the TrueNAS shell, a container console, or a host-side preparation command.
 
-The repository file `power-monitor-v2.yaml` is a non-deployable source
-template. Its `UNPUBLISHED_*` values are intentional. Install only a generated,
-digest-pinned YAML downloaded from one GitHub release.
+> **Release boundary:** this no-shell procedure applies to the complete signed
+> v0.1.0-rc.4 release asset set and later releases that retain this contract.
+> The immutable rc.3 assets use their attached rc.3 instructions and do not
+> contain this initializer/staging helper. Never combine files from releases.
 
-## 1. Prerequisites
+The signed release YAML runs eight services. `initialize` first validates the
+staged inputs, installs the image-embedded Caddy/PostgreSQL configuration, and
+repairs/verifies the exact runtime permissions. It exits successfully before
+`postgres`, `migrate`, or any long-running service can start. `migrate` is the
+second one-shot service; the other six services remain running.
+Compatible sensors use `pm-protocol/1.0.0`; live/history/usage evidence remains
+authenticated PZEM-004T readings only.
+Bill uploads contribute closed-schema reusable rate facts only. Original PDF
+bytes and full OCR text are released after the bounded parse and are never
+stored, encrypted or otherwise; this release intentionally has no bill-original
+dataset.
 
-- A healthy TrueNAS system with its Apps service configured and internet access
-  to `ghcr.io` for the initial image pull.
-- A storage pool named `Apps`. The signed YAML uses the fixed host root
-  `/mnt/Apps/PowerMeterV2`.
-- An administrative workstation with GitHub CLI (`gh`), `sha256sum`, `jq`, and
-  an authenticated channel for transferring public release assets to TrueNAS.
-- Local DNS control for `power-monitor.home.arpa` (or the hostname supported by
-  the release) and the ability to distribute a private CA to browsers and
-  sensors.
-- TCP 8443 free on TrueNAS and restricted to the intended LAN/VPN. Do not expose
-  this service directly to the public internet.
+## 1. Verify the public release on Windows
 
-The server can be installed before a sensor is online, but it creates no usage,
-History, energy, or cost without authenticated PZEM-004T readings.
+Install GitHub CLI and Git for Windows, sign in with `gh auth login`, then use
+the complete release tag you intend to install:
 
-## 2. Download and authenticate one release
-
-On the administrative workstation, set the exact published tag and download
-all assets into a new empty directory. Do not mix files from different tags:
-
-```sh
-tag=v0.1.0-rc.3
-release_dir="powermeter-${tag}"
-test ! -e "$release_dir"
-mkdir "$release_dir"
-gh release download "$tag" --repo mhilton7/power-monitor-v2 --dir "$release_dir"
-cd "$release_dir"
+```powershell
+$Tag = Read-Host 'Enter the next signed PowerMeter release tag'
+if ($Tag -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*$') {
+    throw 'Expected a signed release-candidate tag'
+}
+$Release = Join-Path $HOME "powermeter-$Tag"
+New-Item -ItemType Directory -Path $Release -ErrorAction Stop | Out-Null
+gh release download $Tag --repo mhilton7/power-monitor-v2 --dir $Release
+$Sums = Join-Path $Release 'SHA256SUMS'
+$Expected = @{}
+foreach ($Line in Get-Content -LiteralPath $Sums) {
+    if ($Line -cnotmatch '^([0-9a-f]{64}) [ *]([A-Za-z0-9][A-Za-z0-9._-]*)$') {
+        throw 'Malformed SHA256SUMS line'
+    }
+    if ($Expected.ContainsKey($Matches[2])) { throw 'Duplicate SHA256SUMS asset' }
+    $Expected[$Matches[2]] = $Matches[1]
+}
+$Downloaded = @(Get-ChildItem -LiteralPath $Release -File |
+    Where-Object Name -cne 'SHA256SUMS' | ForEach-Object Name | Sort-Object)
+$Listed = @($Expected.Keys | Sort-Object)
+if (Compare-Object $Listed $Downloaded) { throw 'Release asset set mismatch' }
+foreach ($Asset in $Listed) {
+    $Path = Join-Path $Release $Asset
+    $Actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($Actual -cne $Expected[$Asset]) { throw "SHA-256 mismatch: $Asset" }
+    gh attestation verify $Path --repo mhilton7/power-monitor-v2
+    if ($LASTEXITCODE -ne 0) { throw "Attestation failed: $Asset" }
+}
 ```
 
-Verify every checksummed asset against GitHub's build provenance, then verify
-the checksum set locally:
+This requires the exact listed asset set and verifies every SHA-256 and
+attestation. Stop on any failure. Never replace an image digest or use `latest`.
 
-```sh
-while read -r _ asset; do
-  asset=${asset#\*}
-  test -f "$asset"
-  gh attestation verify "$asset" --repo mhilton7/power-monitor-v2
-done < SHA256SUMS
-sha256sum --check --strict SHA256SUMS
+## 2. Create the fixed ZFS datasets in the TrueNAS UI
+
+In **Datasets**, create `Apps/PowerMeterV2` as a Generic, case-sensitive ZFS
+dataset with POSIX ACLs. Under it, create these nine child ZFS datasets with the
+same settings:
+
+1. `postgres`
+2. `config`
+3. `firmware`
+4. `backups`
+5. `logs`
+6. `rate-source-artifacts`
+7. `caddy-data`
+8. `caddy-config`
+9. `secrets`
+
+The resulting fixed root is `/mnt/Apps/PowerMeterV2`. Each child must be a real
+ZFS dataset created in the UI, not a folder. The YAML uses
+`create_host_path: false`, so a missing child fails instead of being silently
+created. The initializer can prove that each fixed container mount exists, but
+container mount namespaces cannot prove the host-side ZFS dataset boundary;
+the UI creation above is therefore a mandatory operator precondition.
+
+Do not share the root or the other eight children. Never share `postgres`,
+`backups`, `logs`, or `config`.
+
+## 3. Temporarily stage only the secrets dataset over authenticated SMB
+
+Create a dedicated, non-administrator TrueNAS user such as
+`powermeter-stager`. In the dataset permission editor, give that user temporary
+write access to **only** `Apps/PowerMeterV2/secrets`; do not apply permissions
+recursively and do not alter the parent.
+
+In **Shares > Windows (SMB) Shares**, create one temporary share:
+
+- Path: `/mnt/Apps/PowerMeterV2/secrets`
+- Name: `PowerMeterV2-Secrets`
+- Guest access: disabled
+- Enabled: yes only during this staging step
+
+The local Windows source directory must contain exactly these 13 files and no
+subdirectories:
+
+```text
+postgres_bootstrap_password  postgres_migrator_password
+postgres_api_password        postgres_worker_password
+postgres_backup_password     postgres_restore_password
+session_secret               field_encryption_key
+ota_manifest_key             backup_encryption_key
+tls.crt                      tls.key
+tls-ca.crt
 ```
 
-Inspect the release identity and derive the exact YAML filename from the
-attested manifest:
+From the verified release directory run:
 
-```sh
-jq -e --arg version "${tag#v}" \
-  '.schema == "pm-server-release/1.0.0" and
-   .protocol == "pm-protocol/1.0.0" and .version == $version and
-   (.images | keys | sort) == ["api","backup","frontend","gateway"] and
-   .images.api.name == "ghcr.io/mhilton7/power-monitor-v2-api" and
-   .images.frontend.name == "ghcr.io/mhilton7/power-monitor-v2-frontend" and
-   .images.gateway.name == "ghcr.io/mhilton7/power-monitor-v2-gateway" and
-   .images.backup.name == "ghcr.io/mhilton7/power-monitor-v2-backup" and
-   ([.images[].digest] | all(test("^sha256:[0-9a-f]{64}$"))) and
-   (.release_status == "candidate_physical_certification_pending" or
-    .release_status == "stable_physical_certification_passed")' \
-  release-manifest.json
-compose_file=$(jq -er '.compose.file' release-manifest.json)
-test "$compose_file" = "$(basename "$compose_file")"
-test -s "$compose_file"
-! grep -q 'UNPUBLISHED\|:latest' "$compose_file"
+```powershell
+$Credential = Get-Credential -Message 'Dedicated PowerMeter SMB staging user'
+& .\Stage-PowerMeterTrueNAS.ps1 `
+    -SourceDirectory 'C:\PowerMeterV2\secrets' `
+    -TrueNasAddress '192.168.0.175' `
+    -ShareName 'PowerMeterV2-Secrets' `
+    -HostName 'power-monitor.home.arpa' `
+    -Credential $Credential
 ```
 
-For a release candidate, read `RELEASE_NOTES.md` and
-`hardware-certification-status.json` before continuing. Candidate status means
-the software artifacts passed their published gates; it does not claim physical
-certification of an ESP32/PZEM unit.
+The helper generates or rotates nothing. It validates the exact file set,
+decoded key independence, TLS hostname/expiry/strict chain/key match, performs
+same-share staged copies, and verifies the final bytes without printing values
+or hashes. Existing differing or partial destinations are rejected.
 
-## 3. Create storage, secrets, and TLS
+After its success line, immediately **disable or delete the SMB share in the
+TrueNAS UI**. Confirm guest access remains disabled. Do this before installing
+the app. The one-shot initializer will remove the temporary staging user's file
+access and install the exact per-service numeric ACLs. No long-running service
+ever receives the secrets directory; each receives only its declared files.
 
-Follow [DATASET_ACLS.md](DATASET_ACLS.md) to create the exact 11 ZFS datasets
-through **Storage > Datasets**. Use Generic/POSIX datasets, keep them encrypted
-and unshared, and do not create the paths as ordinary directories.
+## 4. Configure the supported DNS name
 
-Follow [SECRETS.md](SECRETS.md) to create the ten application/database secrets
-and three TLS files. Keep the backup key and private CA recovery material
-offline. Create a DNS A/AAAA record for `power-monitor.home.arpa` that points
-only to reachable TrueNAS LAN/VPN addresses, and install `tls-ca.crt` in each
-browser's trust store after comparing its fingerprint.
+Create a local DNS A record:
 
-Transfer the verified release directory to a temporary location on TrueNAS.
-For example, while TrueNAS SSH is deliberately enabled for administration:
-
-```sh
-cd ..
-scp -r "$release_dir" truenas_admin@truenas-host:/tmp/
+```text
+power-monitor.home.arpa -> 192.168.0.175
 ```
 
-Do not open an SMB/NFS share on the PowerMeter datasets just to transfer these
-public assets. In **System > Shell**, prepare and verify the host:
+The certificate must contain `power-monitor.home.arpa` in its DNS SAN. The
+supported application URL is `https://power-monitor.home.arpa:8443`.
+Direct-IP HTTPS is not supported by this release contract; the initializer and
+gateway require the DNS hostname. Never bypass hostname or CA verification.
+Trust only the staged `tls-ca.crt` in the intended workstation/user trust store.
 
-```sh
-tag=v0.1.0-rc.3
-cd "/tmp/powermeter-${tag}"
-sudo bash ./prepare-host.sh --assets "$PWD" --hostname power-monitor.home.arpa
-sudo ss -H -ltn 'sport = :8443'
+## 5. Paste the complete signed YAML
+
+Open **Apps > Discover Apps > Custom App > Install via YAML**. Use app name
+`powermeter-v2`. Open the release file named
+`power-monitor-v2-<tag>.yaml`, copy the **complete** file, paste it into the YAML
+editor without changes, and save.
+
+Do not paste a compact example, an excerpt, a Windows path, or an SMB UNC path.
+The only published port must be TCP 8443. The four PowerMeter images must keep
+their release tags and immutable SHA-256 digests.
+
+In **Apps > Installed > powermeter-v2 > Workloads/Logs**, expect:
+
+1. `initialize` exits with code 0 and reports 9 mounts, 13 preserved files,
+   and two embedded configuration assets.
+2. `postgres` becomes healthy.
+3. `migrate` exits with code 0.
+4. `api`, `worker`, `frontend`, `gateway`, and `backup` become healthy.
+
+Any initializer or migration failure intentionally blocks all dependent
+services. Correct the named input or missing dataset; never bypass the check.
+
+## 6. Verify from Windows and complete first run
+
+Open `https://power-monitor.home.arpa:8443`, without accepting a browser
+warning. Complete the one-time owner setup. From PowerShell, with the CA trusted:
+
+```powershell
+Resolve-DnsName power-monitor.home.arpa
+Test-NetConnection 192.168.0.175 -Port 8443
+Invoke-RestMethod 'https://power-monitor.home.arpa:8443/healthz'
+Invoke-RestMethod 'https://power-monitor.home.arpa:8443/health/live'
+Invoke-RestMethod 'https://power-monitor.home.arpa:8443/health/ready'
 ```
 
-`prepare-host.sh` must end with `TrueNAS host preparation passed`. The `ss`
-command must print nothing before first installation. The script verifies all
-release checksums, dataset mount points, exact UID/GID and ACLs, secret formats,
-certificate SAN/chain/expiry/key match, and installs the verified `Caddyfile`
-and `postgres-init-roles.sh` as `root:root` mode `0644`.
+Use the TrueNAS app UI for routine service status and logs. Keep the temporary
+SMB share disabled. Removing the app does not authorize deletion of any
+dataset; preserve the database, backup key, and off-system verified backups.
 
-## 4. Install the generated YAML
-
-1. In TrueNAS, confirm **Apps Service Running** and that the desired Apps pool
-   is selected. The hidden Apps service dataset and `/mnt/Apps/PowerMeterV2`
-   application datasets are separate.
-2. Open **Apps > Discover Apps**.
-3. Open the three-dot **more_vert** menu beside **Custom App** and select
-   **Install via YAML**. Do not use the single-container guided wizard.
-4. Enter the application name `power-meter-v2`.
-5. Paste the complete contents of the verified file named by `$compose_file`
-   into **Custom Config**. Do not paste `power-monitor-v2.yaml` from Git, alter
-   an image, replace a digest, or inline a secret.
-6. Click **Save** once and allow the initial multi-architecture image pulls and
-   PostgreSQL initialization to finish.
-
-Expected order is: `postgres` becomes healthy; one-shot `migrate` exits with
-status 0; then `api`, `worker`, `frontend`, `gateway`, and `backup` become
-healthy. The backup container immediately creates a verified encrypted backup
-and isolated restore test, so first health can take several minutes. Migration
-failure blocks application startup by design.
-
-Use **Apps > Installed > power-meter-v2** to inspect each container's status and
-logs. A read-only host-shell view is also available:
-
-```sh
-midclt call app.get_instance power-meter-v2 | jq '{name,state,active_workloads}'
-sudo docker ps \
-  --filter label=com.docker.compose.project=ix-power-meter-v2 \
-  --format 'table {{.Label "com.docker.compose.service"}}\t{{.Status}}\t{{.Image}}'
-```
-
-If the Docker filter returns nothing, use the TrueNAS Installed Apps UI and its
-container logs; do not guess an internal project name or start a second Compose
-project manually.
-
-## 5. Verify HTTPS and the security boundary
-
-From a workstation that trusts only the intended CA for this test:
-
-```sh
-origin=https://power-monitor.home.arpa:8443
-curl --fail --cacert tls-ca.crt "$origin/healthz"
-curl --fail --cacert tls-ca.crt "$origin/health/live" | jq -e '.status == "live"'
-curl --fail --cacert tls-ca.crt "$origin/health/ready" |
-  jq -e '.status == "ready" and .database == "ready" and .pdf_sandbox == "enforced"'
-curl --fail --cacert tls-ca.crt "$origin/api/v1/auth/bootstrap/status" |
-  jq -e '.required == true'
-```
-
-Do not use `curl -k`, accept a browser warning, or substitute an IP address.
-Force a fresh parser-sandbox proof from the TrueNAS host as the API UID:
-
-```sh
-api_id=$(sudo docker ps \
-  --filter label=com.docker.compose.project=ix-power-meter-v2 \
-  --filter label=com.docker.compose.service=api --format '{{.ID}}')
-test "$(printf '%s\n' "$api_id" | grep -c .)" -eq 1
-sudo docker exec --user 10001:10001 "$api_id" \
-  python -m backend.app.bill_rate_import.sandbox_check |
-  jq -e '.schema_id == "pm-pdf-sandbox-health/1.0.0" and .pdf_sandbox == "enforced"'
-```
-
-Readiness intentionally fails if the host kernel cannot enforce Landlock ABI
-3+, seccomp, or the hardened `/tmp` boundary. Do not bypass that gate.
-
-## 6. Complete first-run bootstrap
-
-1. Open `https://power-monitor.home.arpa:8443` and create the one-time owner
-   with a unique password. Confirm bootstrap status then becomes `false`.
-2. Configure the home's IANA timezone, billing-cycle day, and monitored scope.
-   A one-CT device remains `energy_only`; never label it whole-home or solar
-   aggregate without verified hardware coverage.
-3. Use the compatible firmware release recorded in the server release assets.
-   Create a short-lived enrollment token and provision the headless sensor by
-   USB with the same hostname and CA. Normal firmware operation is outbound
-   HTTPS only; there is no sensor web server.
-4. Confirm an authenticated PZEM heartbeat, then wait for a committed interval.
-   Missing data must remain unavailable and a measured zero must remain zero.
-5. Configure and review a rate plan. A bill PDF may contribute reusable prices
-   and cost rules only; bill usage, readings, totals, balances, identity, and
-   payments never create History or energy.
-6. Review the authenticated **System health** view. It must report database
-   reachability and exact verified backup/restore run evidence.
-
-## 7. Force a backup and isolated restore test
-
-Run these commands from the TrueNAS host. The explicit UID prevents a root
-container shell from creating files the scheduled backup service cannot manage:
-
-```sh
-backup_id=$(sudo docker ps \
-  --filter label=com.docker.compose.project=ix-power-meter-v2 \
-  --filter label=com.docker.compose.service=backup --format '{{.ID}}')
-test "$(printf '%s\n' "$backup_id" | grep -c .)" -eq 1
-manifest=$(sudo docker exec --user 568:568 "$backup_id" /opt/powermeter/backup.sh)
-case "$manifest" in /backups/archives/*.dump.gpg.manifest.json) ;; *) exit 1 ;; esac
-archive=${manifest%.manifest.json}
-sudo docker exec --user 568:568 "$backup_id" /opt/powermeter/restore.sh \
-  --archive "$archive" --test-isolated | jq -e '.state == "verified"'
-for evidence in last-backup-attempt last-successful-backup \
-  last-restore-test-attempt last-successful-restore-test; do
-  sudo jq -e '.state == "verified" and (.run_id | length > 0) and
-    (.sha256 | test("^[0-9a-f]{64}$"))' \
-    "/mnt/Apps/PowerMeterV2/backups/status/${evidence}.json"
-done
-```
-
-Record the returned run IDs, completion timestamps, archive SHA-256, migration
-revision, and table count. File existence alone is not restore evidence. See
-[BACKUPS_AND_RESTORE.md](BACKUPS_AND_RESTORE.md) for operator-directed recovery
-into a new database. The file is included in each release asset set and also
-lives under `docs/` in the source repository.
-
-## 8. Final network and safety boundary
-
-Only gateway TCP 8443 is published. PostgreSQL has no host port and uses an
-internal Docker network. Browser code communicates only with the same-origin
-gateway. Sensors make outbound authenticated HTTPS requests only.
-
-The application is monitoring-only and contains no relay, contactor, or load
-control. Mains wiring and CT installation must be de-energized and completed by
-a qualified person under the equipment instructions and local code. Do not
-claim the sensor is physically certified unless the exact marked unit and
-firmware have a passed machine-readable HIL/72-hour record.
-
-After validation, remove the temporary public release directory from `/tmp`
-and disable SSH if it was enabled only for installation. Do not remove the
-offline backup key, CA recovery material, release manifest, or verified YAML.
-
-For future changes, use [UPGRADE.md](UPGRADE.md) and [ROLLBACK.md](ROLLBACK.md).
-Never update only an image tag or use TrueNAS's generic image-update indicator
-for this digest-pinned app.
+In authenticated **Settings > Backups & restore**, wait for and require both a
+recent successful encrypted backup and a successful isolated restore test.
+Then open
+`https://power-monitor.home.arpa:8443/api/v1/backups/status` in the same
+authenticated browser and save the machine-readable response. Record the
+backup and restore run IDs, UTC timestamps, archive SHA-256, migration revision,
+and restored table count. A present archive without successful restore evidence
+is not verified. These normal verification steps use the browser and TrueNAS
+Apps UI only; they do not require SSH, System Shell, or a container console.

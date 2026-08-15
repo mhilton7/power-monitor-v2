@@ -37,7 +37,7 @@ dependency, memory, stack, test, migration, and release reports. These preserved
 local values are historical test evidence, not substitutes for the public
 rc.1 release's attached `SHA256SUMS`, attestations, or downloadable assets.
 
-## Historical rc.2 and current coordinated target
+## Historical rc.2 failure and coordinated public rc.3
 
 The signed, public firmware
 [`v0.1.0-rc.2`](https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.2)
@@ -49,14 +49,19 @@ before server publication because firmware rc.2 declared a stale
 YAML, or deployment smoke was produced. The signed tags are immutable and must
 not be moved or relabeled.
 
-The current server rc.3 coordination target is a distinct firmware rc.3 release
-that names server `v0.1.0-rc.3` and declares the generated OpenAPI SHA-256
+The distinct coordinated public firmware rc.3 release names server
+`v0.1.0-rc.3` and declares the generated OpenAPI SHA-256
 `7caada9c6295f4c201fd7ce7d383822e6b5785a960022de8355e3b6acc9a4e2c`.
-It must retain `pm-protocol/1.0.0`. The server release audit must verify that
-public firmware rc.3 release, its contracts, checksums, attestations, and
-cross-links before publishing server assets. This document does not copy rc.1
-or rc.2 test totals or asset hashes onto rc.3 and does not invent final rc.3
-asset values before that audit completes.
+It retains `pm-protocol/1.0.0`; the server rc.3 release gate verified its public
+contracts, checksums, attestations, and cross-links before publication.
+
+Candidate firmware rc.4 is a release-identity and traceability update for the
+audited server rc.4 source. It must name server `v0.1.0-rc.4` and declare the
+exact generated OpenAPI SHA-256
+`f9b936468f5a696a0bee3e04edda021c12ab81dddc091cbb307face0be1de7b1`.
+Firmware runtime behavior and `pm-protocol/1.0.0` remain unchanged. Firmware
+rc.4 must be signed, published, and independently verified before the matching
+server tag is created; neither public rc.3 release may be rewritten.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

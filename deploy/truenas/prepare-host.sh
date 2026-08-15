@@ -75,7 +75,6 @@ readonly -a dataset_paths=(
   "$base/backups"
   "$base/logs"
   "$base/rate-source-artifacts"
-  "$base/bill-rate-source-artifacts"
   "$base/caddy-data"
   "$base/caddy-config"
   "$base/secrets"
@@ -101,21 +100,21 @@ reset_directory "$base/firmware" 10001 10001 0750
 reset_directory "$base/backups" 568 568 0750
 reset_directory "$base/logs" 0 0 0711
 reset_directory "$base/rate-source-artifacts" 10001 10001 0750
-reset_directory "$base/bill-rate-source-artifacts" 10001 10001 0750
 reset_directory "$base/caddy-data" 1000 1000 0750
 reset_directory "$base/caddy-config" 1000 1000 0750
 reset_directory "$base/secrets" 0 0 0711
 
 install -d -o 568 -g 568 -m 0750 "$base/backups/status"
 reset_directory "$base/backups/status" 568 568 0750
+setfacl -m u:10001:--x -- "$base/backups"
 setfacl -m u:10001:r-x,d:u:10001:r-x -- "$base/backups/status"
 install -d -o 10001 -g 10001 -m 0750 "$base/logs/application"
 reset_directory "$base/logs/application" 10001 10001 0750
 install -d -o 1000 -g 1000 -m 0750 "$base/logs/gateway"
 reset_directory "$base/logs/gateway" 1000 1000 0750
 
-install -o 0 -g 0 -m 0644 -- "$assets/Caddyfile" "$base/config/Caddyfile"
-install -o 0 -g 0 -m 0644 -- \
+install -o 0 -g 0 -m 0400 -- "$assets/Caddyfile" "$base/config/Caddyfile"
+install -o 0 -g 0 -m 0400 -- \
   "$assets/postgres-init-roles.sh" "$base/config/postgres-init-roles.sh"
 cmp --silent -- "$assets/Caddyfile" "$base/config/Caddyfile" ||
   fail "installed Caddyfile differs from the verified release asset"
@@ -180,7 +179,7 @@ if [[ "$backup_key_valid" != true && "$(awk '{print NF}' <<<"$value")" -lt 6 ]];
   fail "backup_encryption_key must be 32+ random Base64 bytes or at least six Diceware words"
 fi
 
-set_secret_acl() {
+set_read_acl() {
   local path="$1"
   shift
   local acl_entries=""
@@ -194,19 +193,22 @@ set_secret_acl() {
   setfacl -m "$acl_entries" -- "$path"
 }
 
-set_secret_acl "$base/secrets/postgres_bootstrap_password" 70
+set_read_acl "$base/config/Caddyfile" 1000
+set_read_acl "$base/config/postgres-init-roles.sh" 70
+
+set_read_acl "$base/secrets/postgres_bootstrap_password" 70
 for secret_name in postgres_migrator_password postgres_api_password postgres_worker_password; do
-  set_secret_acl "$base/secrets/$secret_name" 70 10001
+  set_read_acl "$base/secrets/$secret_name" 70 10001
 done
 for secret_name in postgres_backup_password postgres_restore_password; do
-  set_secret_acl "$base/secrets/$secret_name" 70 568
+  set_read_acl "$base/secrets/$secret_name" 70 568
 done
 for secret_name in "${application_secret_names[@]}"; do
-  set_secret_acl "$base/secrets/$secret_name" 10001
+  set_read_acl "$base/secrets/$secret_name" 10001
 done
-set_secret_acl "$base/secrets/backup_encryption_key" 568
+set_read_acl "$base/secrets/backup_encryption_key" 568
 for secret_name in "${tls_secret_names[@]}"; do
-  set_secret_acl "$base/secrets/$secret_name" 1000
+  set_read_acl "$base/secrets/$secret_name" 1000
 done
 
 assert_named_readers() {
@@ -227,6 +229,8 @@ assert_named_readers "$base/secrets/postgres_bootstrap_password" 70
 for secret_name in postgres_migrator_password postgres_api_password postgres_worker_password; do
   assert_named_readers "$base/secrets/$secret_name" 10001 70
 done
+assert_named_readers "$base/config/Caddyfile" 1000
+assert_named_readers "$base/config/postgres-init-roles.sh" 70
 for secret_name in postgres_backup_password postgres_restore_password; do
   assert_named_readers "$base/secrets/$secret_name" 568 70
 done
@@ -279,7 +283,6 @@ for directory_record in \
   "$base/logs/application|10001:10001|750" \
   "$base/logs/gateway|1000:1000|750" \
   "$base/rate-source-artifacts|10001:10001|750" \
-  "$base/bill-rate-source-artifacts|10001:10001|750" \
   "$base/caddy-data|1000:1000|750" \
   "$base/caddy-config|1000:1000|750" \
   "$base/secrets|0:0|711"; do
@@ -290,8 +293,20 @@ for directory_record in \
     fail "wrong mode on $path"
 done
 
+for config_record in \
+  "$base/config/Caddyfile|0:0|440" \
+  "$base/config/postgres-init-roles.sh|0:0|440"; do
+  IFS='|' read -r path expected_owner expected_mode <<<"$config_record"
+  [[ "$(stat -c '%u:%g' -- "$path")" == "$expected_owner" ]] ||
+    fail "wrong owner on $path"
+  [[ "$(stat -c '%a' -- "$path")" == "$expected_mode" ]] ||
+    fail "wrong mode on $path"
+done
+
 getfacl -cpn -- "$base/backups/status" | grep -Fx 'user:10001:r-x' >/dev/null ||
   fail "API read ACL is missing on backups/status"
+getfacl -cpn -- "$base/backups" | grep -Fx 'user:10001:--x' >/dev/null ||
+  fail "API traversal ACL is missing on backups"
 getfacl -cpn -- "$base/backups/status" | grep -Fx 'default:user:10001:r-x' >/dev/null ||
   fail "API default read ACL is missing on backups/status"
 

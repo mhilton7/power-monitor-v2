@@ -60,6 +60,15 @@ async def ingest_batch(
         )
     ).all()
     existing = {row.sequence: row for row in existing_rows}
+    loss_ranges = (
+        await session.scalars(
+            select(UnavailableSequenceRange).where(
+                UnavailableSequenceRange.device_id == device_id,
+                UnavailableSequenceRange.first_sequence <= max(sequences),
+                UnavailableSequenceRange.last_sequence >= min(sequences),
+            )
+        )
+    ).all()
     accepted = 0
     identical = 0
 
@@ -81,6 +90,12 @@ async def ingest_batch(
             raise IntegrityConflict(
                 f"sequence {record.sequence} belongs to reset generation "
                 f"{record.reset_generation}; expected {device.reset_generation}"
+            )
+        if any(
+            loss.first_sequence <= record.sequence <= loss.last_sequence for loss in loss_ranges
+        ):
+            raise IntegrityConflict(
+                f"sequence {record.sequence} is covered by authenticated permanent-loss evidence"
             )
         row = RawReading(
             device_id=device_id,
@@ -179,6 +194,15 @@ async def record_permanent_loss(
             ):
                 raise IntegrityConflict("permanent-loss range conflicts with prior evidence")
             continue
+        overlap = await session.scalar(
+            select(UnavailableSequenceRange.id).where(
+                UnavailableSequenceRange.device_id == device_id,
+                UnavailableSequenceRange.first_sequence <= item.last_sequence,
+                UnavailableSequenceRange.last_sequence >= item.first_sequence,
+            )
+        )
+        if overlap is not None:
+            raise IntegrityConflict("permanent-loss range overlaps prior evidence")
         session.add(
             UnavailableSequenceRange(
                 device_id=device_id,

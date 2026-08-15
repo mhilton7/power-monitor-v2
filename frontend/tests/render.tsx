@@ -2,8 +2,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, type RenderOptions } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { SessionProvider } from '../src/auth/SessionContext';
+import { HomeScopeProvider } from '../src/home/HomeScopeProvider';
 import type { Session } from '../src/api/schemas';
-import { apiResponse, session } from './fixtures';
+import { apiResponse, homeScopes, session } from './fixtures';
 
 export function installFetchMock(handler?: (path: string, method: string, body: BodyInit | null | undefined) => { status: number; body?: unknown; contentType?: string }) {
   const mock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -21,10 +22,11 @@ export function installFetchMock(handler?: (path: string, method: string, body: 
   return mock;
 }
 
-export function renderWithProviders(ui: React.ReactElement, options?: RenderOptions & { currentSession?: Session }) {
+export function renderWithProviders(ui: React.ReactElement, options?: RenderOptions & { currentSession?: Session; homeScopes?: Array<{ id: string; name: string }> }) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  queryClient.setQueryData(['home-scopes'], { home_scopes: options?.homeScopes ?? homeScopes });
   return {
     queryClient,
-    ...render(<QueryClientProvider client={queryClient}><SessionProvider session={options?.currentSession ?? session}><MemoryRouter>{ui}</MemoryRouter></SessionProvider></QueryClientProvider>, options),
+    ...render(<QueryClientProvider client={queryClient}><SessionProvider session={options?.currentSession ?? session}><HomeScopeProvider><MemoryRouter>{ui}</MemoryRouter></HomeScopeProvider></SessionProvider></QueryClientProvider>, options),
   };
 }

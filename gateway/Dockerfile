@@ -72,7 +72,8 @@ RUN set -eux; \
     chmod 0755 /usr/bin/caddy; \
     chmod 0644 /usr/share/powermeter-gateway/* \
       /usr/share/licenses/powermeter-gateway/*; \
-    install -d -o 1000 -g 1000 -m 0750 /var/log/powermeter; \
+    install -d -o 1000 -g 1000 -m 0750 \
+      /var/log/powermeter /var/log/powermeter/gateway; \
     chown -R 1000:1000 /data /config; \
     chmod 0750 /data /config; \
     /usr/sbin/setcap -r /usr/bin/caddy 2>/dev/null || true; \

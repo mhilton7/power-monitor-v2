@@ -23,4 +23,4 @@ tag. The coordinated server target remains on
 `codex/greenfield-power-meter-v2`. Publication state and exact local evidence
 are recorded in `docs/RELEASE_PROCESS.md` and `docs/TESTING.md`.
 
-Legacy inspection identified old `/mnt/Apps/Power/...` dataset paths, a broad model with bill/usage/reconciliation features, and historical operational patterns. V2 uses isolated `/mnt/Apps/PowerMeterV2/...` paths and rejects blind data/code migration. See `docs/MIGRATION.md`.
+Legacy inspection identified a separate V1 dataset root, a broad model with bill/usage/reconciliation features, and historical operational patterns. V2 uses isolated `/mnt/Apps/PowerMeterV2/...` paths and rejects blind data/code migration. See `docs/MIGRATION.md`.

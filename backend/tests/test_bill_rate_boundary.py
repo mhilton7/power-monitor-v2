@@ -116,6 +116,12 @@ async def test_bill_upload_route_creates_zero_usage_history_or_rollups(
     assert response.status_code == 201, response.text
     body = response.json()
     assert "usage_source_notice" in body
+    invalid_rate = await owner_client.patch(
+        f"/api/v1/bill-rate-imports/{body['extraction']['id']}",
+        json={"field": "baseline_credit_rate", "corrected_value": "NaN"},
+    )
+    assert invalid_rate.status_code == 422, invalid_rate.text
+    assert invalid_rate.json()["code"] == "VALIDATION_ERROR"
     async with session_factory() as session:
         assert await session.scalar(select(func.count(RawReading.id))) == 0
         assert await session.scalar(select(func.count(NormalizedInterval.id))) == 0

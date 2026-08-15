@@ -20,9 +20,9 @@ def _canonical(name: str) -> str:
 def test_production_dependencies_are_exact_and_present_in_lock() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     lock: dict[str, str] = {}
-    for raw_line in (ROOT / "backend" / "requirements.lock").read_text(
-        encoding="utf-8"
-    ).splitlines():
+    for raw_line in (
+        (ROOT / "backend" / "requirements.lock").read_text(encoding="utf-8").splitlines()
+    ):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -42,15 +42,38 @@ def test_production_dependencies_are_exact_and_present_in_lock() -> None:
     assert len(lock) >= len(project["dependencies"]), "transitive closure was not locked"
 
 
+def test_development_dependencies_shared_with_production_lock_use_the_same_pin() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    lock = {
+        _canonical(name): version
+        for line in (ROOT / "backend" / "requirements.lock")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip() and not line.startswith("#")
+        for name, version in [line.split("==", maxsplit=1)]
+    }
+
+    shared = []
+    for value in project["optional-dependencies"]["dev"]:
+        requirement = Requirement(value)
+        canonical = _canonical(requirement.name)
+        if canonical not in lock:
+            continue
+        pins = list(requirement.specifier)
+        assert len(pins) == 1 and pins[0].operator == "==", value
+        assert pins[0].version == lock[canonical], value
+        shared.append(canonical)
+
+    assert "pyyaml" in shared
+
+
 def test_release_version_metadata_is_consistent() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     package = json.loads((ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
-    package_lock = json.loads(
-        (ROOT / "frontend" / "package-lock.json").read_text(encoding="utf-8")
-    )
+    package_lock = json.loads((ROOT / "frontend" / "package-lock.json").read_text(encoding="utf-8"))
 
-    assert VERSION == "0.1.0-rc.3"
-    assert project["version"] == "0.1.0rc3"
+    assert VERSION == "0.1.0-rc.4"
+    assert project["version"] == "0.1.0rc4"
     assert package["version"] == VERSION
     assert package_lock["version"] == VERSION
     assert package_lock["packages"][""]["version"] == VERSION
@@ -69,5 +92,5 @@ def test_release_version_metadata_is_consistent() -> None:
         hashlib.sha256(
             (ROOT / "shared/openapi/power-meter-v2.openapi.json").read_bytes()
         ).hexdigest()
-        == "7caada9c6295f4c201fd7ce7d383822e6b5785a960022de8355e3b6acc9a4e2c"
+        == "f9b936468f5a696a0bee3e04edda021c12ab81dddc091cbb307face0be1de7b1"
     )

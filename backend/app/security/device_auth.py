@@ -46,15 +46,15 @@ async def authenticate_device_request(
     now = datetime.now(UTC)
     credentials = (
         await session.scalars(
-        select(DeviceCredential)
-        .join(Device, Device.id == DeviceCredential.device_id)
-        .where(
-            DeviceCredential.device_id == headers.device_id,
-            DeviceCredential.revoked_at.is_(None),
-            Device.revoked_at.is_(None),
-            DeviceCredential.state.in_(("active", "prepared", "retiring")),
-        )
-        .order_by(DeviceCredential.key_version.desc())
+            select(DeviceCredential)
+            .join(Device, Device.id == DeviceCredential.device_id)
+            .where(
+                DeviceCredential.device_id == headers.device_id,
+                DeviceCredential.revoked_at.is_(None),
+                Device.revoked_at.is_(None),
+                DeviceCredential.state.in_(("active", "prepared", "retiring")),
+            )
+            .order_by(DeviceCredential.key_version.desc())
         )
     ).all()
     credentials = [

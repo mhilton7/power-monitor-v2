@@ -34,7 +34,7 @@ DIGEST_C = "sha256:" + "3" * 64
 DIGEST_D = "sha256:" + "4" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
-VERSION = "0.1.0-rc.3"
+VERSION = "0.1.0-rc.4"
 
 
 @pytest.fixture
@@ -151,27 +151,57 @@ def _write_success_evidence(prefix: Path) -> None:
         {"service": service, "state": "running", "health": "healthy", "exit_code": 0}
         for service in ("postgres", "api", "worker", "frontend", "gateway", "backup")
     ]
+    compose_records.extend(
+        {"service": service, "state": "exited", "health": None, "exit_code": 0}
+        for service in ("initialize", "migrate")
+    )
     _write(
         prefix.with_name(prefix.name + "-compose-ps.jsonl"),
         "".join(json.dumps(record) + "\n" for record in compose_records),
     )
-    permission_paths = (
-        "postgres",
-        "config",
-        "firmware",
-        "logs/application",
-        "logs/gateway",
-        "rate-source-artifacts",
-        "bill-rate-source-artifacts",
-        "backups",
-        "secrets",
-    )
+    base = "/mnt/Apps/PowerMeterV2"
+    permission_records = [
+        f"directory|{base}/postgres|70:70|700",
+        f"directory|{base}/config|0:0|755",
+        f"directory|{base}/firmware|10001:10001|750",
+        f"directory|{base}/backups|568:568|750",
+        f"directory|{base}/backups/status|568:568|750",
+        f"directory|{base}/logs|0:0|711",
+        f"directory|{base}/logs/application|10001:10001|750",
+        f"directory|{base}/logs/gateway|1000:1000|750",
+        f"directory|{base}/rate-source-artifacts|10001:10001|750",
+        f"directory|{base}/caddy-data|1000:1000|750",
+        f"directory|{base}/caddy-config|1000:1000|750",
+        f"directory|{base}/secrets|0:0|711",
+        f"config|{base}/config/Caddyfile|0:0|440",
+        f"config|{base}/config/postgres-init-roles.sh|0:0|440",
+        f"acl|{base}/config/Caddyfile|exact-caddy-read-only",
+        f"acl|{base}/config/postgres-init-roles.sh|exact-postgres-read-only",
+        f"acl|{base}/backups|exact-api-traverse-only",
+        f"acl|{base}/backups/status|exact-api-read-default",
+    ]
+    readers = {
+        "postgres_bootstrap_password": "70",
+        "postgres_migrator_password": "70,10001",
+        "postgres_api_password": "70,10001",
+        "postgres_worker_password": "70,10001",
+        "postgres_backup_password": "70,568",
+        "postgres_restore_password": "70,568",
+        "session_secret": "10001",
+        "field_encryption_key": "10001",
+        "ota_manifest_key": "10001",
+        "backup_encryption_key": "568",
+        "tls.crt": "1000",
+        "tls.key": "1000",
+        "tls-ca.crt": "1000",
+    }
+    for name, allowed in readers.items():
+        permission_records.extend(
+            (f"secret|{base}/secrets/{name}|0:0|440", f"readers|{name}|{allowed}")
+        )
     _write(
         prefix.with_name(prefix.name + "-permissions.txt"),
-        "".join(
-            f"drwx------ owner:group /mnt/Apps/PowerMeterV2/{path}\n"
-            for path in permission_paths
-        ),
+        "\n".join(permission_records) + "\n",
     )
 
 
@@ -284,6 +314,30 @@ def test_deployment_evidence_validator_accepts_only_complete_exact_sets(
         )
 
 
+@pytest.mark.parametrize("mutation", ["unsafe_extra", "duplicate", "blank"])
+def test_deployment_permissions_evidence_requires_one_exact_record_set(
+    evidence_dir: Path,
+    mutation: str,
+) -> None:
+    prefix = evidence_dir / f"permissions-{mutation}"
+    _write_success_evidence(prefix)
+    path = prefix.with_name(prefix.name + "-permissions.txt")
+    original = path.read_text(encoding="utf-8")
+    first = original.splitlines()[0]
+    if mutation == "unsafe_extra":
+        changed = original + "secret|/mnt/Apps/PowerMeterV2/secrets/tls.key|0:0|777\n"
+        match = "exact corrected state"
+    elif mutation == "duplicate":
+        changed = original + first + "\n"
+        match = "duplicate record"
+    else:
+        changed = original + "\n"
+        match = "blank record"
+    _write(path, changed)
+    with pytest.raises(EvidenceError, match=match):
+        _validate(prefix, outcome="success")
+
+
 def test_deployment_failure_health_allowlist_checks_every_jsonl_record(
     evidence_dir: Path,
 ) -> None:
@@ -334,8 +388,7 @@ def test_deployment_log_sanitizer_is_bounded_and_emits_no_raw_text() -> None:
     assert secret not in encoded
     assert "PRIVATE KEY" not in encoded
     assert all(
-        set(record) == {"line_number", "service", "timestamp", "event"}
-        for record in records
+        set(record) == {"line_number", "service", "timestamp", "event"} for record in records
     )
     assert records[-1] == {
         "line_number": MAX_LOG_LINES,
@@ -407,8 +460,7 @@ def test_compose_separates_database_roles_and_application_secrets() -> None:
             assert environment["PM_DATABASE_USER"] == role
             assert environment["PM_DATABASE_PASSWORD_FILE"].endswith(secret)
             mounted = {
-                entry if isinstance(entry, str) else entry["source"]
-                for entry in service["secrets"]
+                entry if isinstance(entry, str) else entry["source"] for entry in service["secrets"]
             }
             assert secret in mounted
         migrate_secrets = services["migrate"]["secrets"]
@@ -425,9 +477,7 @@ def test_compose_separates_database_roles_and_application_secrets() -> None:
     development_override = (ROOT / "compose.dev.yaml").read_text(encoding="utf-8")
     assert "postgresql+asyncpg://powermeter:" not in development_override
     assert "secrets: []" not in development_override
-    local_secret_script = (ROOT / "scripts/create_local_secrets.ps1").read_text(
-        encoding="utf-8"
-    )
+    local_secret_script = (ROOT / "scripts/create_local_secrets.ps1").read_text(encoding="utf-8")
     for name in (
         "postgres_bootstrap_password",
         "postgres_migrator_password",
@@ -535,7 +585,7 @@ def certification() -> dict[str, object]:
 def test_release_template_requires_exact_sentinels_and_real_digests() -> None:
     template = (ROOT / "deploy/truenas/power-monitor-v2.yaml").read_text(encoding="utf-8")
     output = render(template, VERSION, DIGEST_A, DIGEST_B, DIGEST_D, DIGEST_C)
-    assert output.count(f"power-monitor-v2-api:{VERSION}@{DIGEST_A}") == 3
+    assert output.count(f"power-monitor-v2-api:{VERSION}@{DIGEST_A}") == 4
     assert output.count(f"power-monitor-v2-gateway:{VERSION}@{DIGEST_D}") == 1
     assert "UNPUBLISHED" not in output
     validate_compose(load_yaml(output), published=True)
@@ -578,6 +628,23 @@ def test_static_release_validation_binds_each_exact_component_sentinel(
     path.write_text(wrong, encoding="utf-8")
     errors = validate_static_compose(path)
     assert any("gateway must use the exact gateway image contract" in error for error in errors)
+
+
+def test_static_release_validation_never_echoes_secret_mapping_details(
+    evidence_dir: Path,
+) -> None:
+    compose = yaml.safe_load(
+        (ROOT / "deploy/truenas/power-monitor-v2.yaml").read_text(encoding="utf-8")
+    )
+    compose["secrets"]["tls_key"]["file"] = "SENSITIVE_FIXTURE_DO_NOT_LOG"
+    path = evidence_dir / "invalid-secret-mapping.yaml"
+    path.write_text(yaml.safe_dump(compose), encoding="utf-8")
+
+    errors = validate_static_compose(path)
+
+    assert errors == [f"{path}: file secrets must match the exact required 13-file mapping"]
+    assert "SENSITIVE_FIXTURE_DO_NOT_LOG" not in errors[0]
+    assert "tls_key" not in errors[0]
 
 
 def test_release_artifact_verifier_accepts_exact_four_image_binding(

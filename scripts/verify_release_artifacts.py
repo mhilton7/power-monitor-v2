@@ -57,7 +57,7 @@ def verify_release_artifacts(manifest_path: Path) -> None:
     if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
         raise ValueError("release manifest version is invalid")
     component_services = {
-        "api": ("migrate", "api", "worker"),
+        "api": ("initialize", "migrate", "api", "worker"),
         "frontend": ("frontend",),
         "gateway": ("gateway",),
         "backup": ("backup",),

@@ -4,8 +4,10 @@ Local server gates from repository root:
 
 ```powershell
 python -m pip install -e '.[dev]'
-python -m ruff check backend worker tests scripts
+python -m ruff check backend/app backend/tests worker tests scripts deploy/truenas/initialize_host.py
+python -m ruff format --check backend/app backend/tests worker tests scripts deploy/truenas/initialize_host.py
 python -m mypy backend worker
+python -m mypy --platform linux deploy/truenas/initialize_host.py
 python -m pytest --junitxml=release-test-results.xml
 npm --prefix frontend ci
 npm --prefix frontend run check
@@ -22,7 +24,7 @@ actual registry digests after push.
 docker build --file backup/Dockerfile --tag pm-backup:test .
 python scripts/render_truenas_release.py --template deploy/truenas/power-monitor-v2.yaml `
   --output release/power-monitor-v2-test.yaml --manifest release/release-manifest-test.json `
-  --version 0.1.0-rc.3 --revision 0123456789abcdef0123456789abcdef01234567 `
+  --version 0.1.0-rc.4 --revision 0123456789abcdef0123456789abcdef01234567 `
   --api-digest sha256:<published-api-digest> `
   --frontend-digest sha256:<published-frontend-digest> `
   --gateway-digest sha256:<published-gateway-digest> `
@@ -31,16 +33,24 @@ docker compose -f release/power-monitor-v2-test.yaml config --quiet
 python scripts/verify_release_artifacts.py --manifest release/release-manifest-test.json
 ```
 
+The rc.4 value above is a local post-rc.3 render example, not a tag or
+publication claim. The checked-in template cannot become installable until a
+new coordinated release supplies real registry digests and passes every gate.
+
 Release workflow gates cover backend unit/integration and PostgreSQL migration
 tests; frontend checks; shared protocol vectors; Compose/hardening checks;
 dependency/secret/CodeQL/container scans; SBOM/provenance; a clean digest-pinned
 deployment with TLS, SSE, upload limits, restarts, encrypted backup, and actual
 isolated restore; and firmware release compatibility. The migration gate uses
-authenticated GitHub release metadata to select the latest same-major,
-non-draft public V2 Release, requires that exact tag in the checkout, and then
-exercises only the forward path from that release's database to the current
-release. It fails closed instead of treating a newer unpublished or failed tag
-as an installable predecessor. It does not run prior binaries against the
+authenticated GitHub release metadata to select the most recently published
+non-draft same-major public V2 Release other than the current tag. It then
+requires that exact signed tag in the checkout and requires its semantic
+version to be older before exercising the forward path from that release's
+database to the current release. Publication-date ordering that selects a
+same-major version which is not older fails closed; the gate does not silently
+fall through to a different release. Failed tags without a public Release are
+not candidates. It exercises only the forward path and does not run prior
+binaries against the
 post-upgrade database or prove rollback compatibility. The GitHub-hosted
 clean-deployment smoke does not exercise application rollback and records
 `not_exercised_github_hosted_smoke`, never a rollback pass. Target upgrade and
@@ -71,7 +81,24 @@ Firmware host/fault/simulation/HIL tests live in the independent firmware reposi
 
 Every evidence report records schema, version, full revision, UTC generation time, outcome, exact command/environment, input/output checksums, test counts, failures/skips, and physical/simulated classification. A release gate must not be reported passed from missing, stale, or unparsable evidence.
 
-## Local validation snapshot
+## Current audit-candidate local evidence
+
+On 2026-08-15, the full backend suite on real PostgreSQL 17 passed 135 tests
+with 3 expected environment skips. An isolated database upgraded cleanly
+through `20260815_0011`; an 0011 downgrade to 0010 and return to head passed;
+and all 20 rate-workflow concurrency/direct-SQL tests passed. That workflow
+evidence covers database-backed exact-home manual idempotency, shared serialized
+bill/SCE plan-version allocation, non-overlapping assignments with equal-start
+rejection, immutable candidate provenance, and the only legal review paths:
+`reviewed -> published -> activated` or `reviewed -> rejected`. Ruff
+lint/format passed and mypy reported no issues in 81 source files.
+
+Frontend lint, strict TypeScript, production build, 24/24 Vitest tests, and
+36/36 Chromium Playwright tests passed. No whole-repository aggregate count is
+claimed. These are local candidate results, not tagged CI, target TrueNAS,
+publication, or physical hardware evidence.
+
+## Historical pre-rc.3 local validation snapshot
 
 On 2026-08-13/14, before publication, the implementation was exercised locally.
 This snapshot is development evidence. It is not a signed tag or GitHub release,
@@ -179,18 +206,17 @@ certification.
 
 ### Gates that remain closed
 
-- Signed public server/firmware rc.1 releases and signed public firmware rc.2
-  are historical evidence. The signed server rc.2 tag's run `31866197054`
-  failed the cross-repository OpenAPI-hash check before server images or release
-  assets were published. Current coordinated firmware/server rc.3 publication
-  remains pending.
-- Public rc.1 GHCR digests, attestations, generated TrueNAS YAML, and release
-  smoke are version-specific historical evidence. There is no server rc.2
-  image set or YAML, and rc.3 images, anonymous digest resolution, attestations,
-  real-digest YAML, and smoke do not exist until its release workflow passes.
-  The checked-in template correctly retains `UNPUBLISHED_*` sentinels.
-- The target-TrueNAS rc.3 clean install, forward upgrade, restored rollback,
-  restart, and permission suite has not run.
+- Signed public server/firmware rc.1 and rc.3 releases, plus signed public
+  firmware rc.2, are historical evidence. The signed server rc.2 tag's run
+  `31866197054` failed the cross-repository OpenAPI-hash check before server
+  images or release assets were published.
+- Public rc.1/rc.3 GHCR digests, attestations, generated TrueNAS YAML, and
+  release smokes are version-specific historical evidence. There is no server
+  rc.2 image set or YAML. The post-rc.3 eight-service/no-shell source changes
+  remain unpublished and the checked-in template correctly retains
+  `UNPUBLISHED_*` sentinels pending a new coordinated tag.
+- The target-TrueNAS clean install, forward upgrade, restored rollback,
+  restart, and permission suite has not run for the post-rc.3 initializer model.
 - No marked-unit PZEM/ESP32-S3/SD identity, electrical, TLS/HMAC, OTA rollback,
   physical-cycle, USB-recovery, or continuous 72-hour soak evidence exists.
   Simulation cannot satisfy those gates, so stable promotion remains blocked.

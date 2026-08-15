@@ -13,6 +13,8 @@ describe('authentication screens', () => {
       return { status: 404, body: {} };
     });
     const client = new QueryClient();
+    client.setQueryData(['home-scopes'], { home_scopes: [{ id: 'prior-user-home', name: 'Private' }] });
+    client.setQueryData(['billing', 'prior-user-home'], { private: 'prior-user-data' });
     render(<QueryClientProvider client={client}><AuthScreen bootstrap={false} /></QueryClientProvider>);
     await userEvent.type(screen.getByLabelText('Email'), 'alex@example.test');
     await userEvent.type(screen.getByLabelText('Password'), 'a-strong-server-password');
@@ -23,6 +25,10 @@ describe('authentication screens', () => {
       return value.includes('/auth/login');
     });
     expect(request?.[1]).toMatchObject({ method: 'POST', credentials: 'same-origin' });
+    await waitFor(() => {
+      expect(client.getQueryData(['home-scopes'])).toBeUndefined();
+      expect(client.getQueryData(['billing', 'prior-user-home'])).toBeUndefined();
+    });
   });
 
   it('supports first-run owner setup with a protected password field', () => {

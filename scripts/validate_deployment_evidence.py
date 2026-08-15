@@ -20,8 +20,18 @@ FAILURE_SUFFIXES = (
     "-failure-health.jsonl",
     "-failure-log-events.jsonl",
 )
-SERVICE_NAMES = {"postgres", "migrate", "api", "worker", "frontend", "gateway", "backup"}
+SERVICE_NAMES = {
+    "initialize",
+    "postgres",
+    "migrate",
+    "api",
+    "worker",
+    "frontend",
+    "gateway",
+    "backup",
+}
 RUNNING_SERVICE_NAMES = {"postgres", "api", "worker", "frontend", "gateway", "backup"}
+ONE_SHOT_SERVICE_NAMES = {"initialize", "migrate"}
 CONTAINER_ID_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
@@ -90,10 +100,21 @@ AUTHENTICATED_REPORT_KEYS = {
     "cost_rule",
     "command",
 }
-SUCCESS_SERVICES = ["api", "backup", "frontend", "gateway", "migrate", "postgres", "worker"]
+SUCCESS_SERVICES = [
+    "api",
+    "backup",
+    "frontend",
+    "gateway",
+    "initialize",
+    "migrate",
+    "postgres",
+    "worker",
+]
 SUCCESS_CHECKS = [
     "exact service set",
     "digest-pinned image startup",
+    "one-shot host initializer first run",
+    "one-shot host initializer idempotent rerun",
     "TLS chain and hostname",
     "liveness and readiness",
     "API image PDF sandbox self-test",
@@ -107,9 +128,9 @@ SUCCESS_CHECKS = [
     "authenticated system health",
     "SSE proxy streaming",
     "oversize PDF rejection",
-    "per-service restarts",
+    "per-service restarts without initializer restart",
     "migration rerun",
-    "full-stack restart",
+    "full-stack runtime restart without initializer restart",
     "bind-mount access",
     "encrypted backup",
     "isolated restore",
@@ -455,19 +476,55 @@ def _validate_permissions(path: Path) -> None:
         value = path.read_text(encoding="utf-8")
     except UnicodeError as exc:
         raise EvidenceError(f"permissions evidence is not UTF-8: {path}") from exc
-    required_paths = {
-        "/mnt/Apps/PowerMeterV2/postgres",
-        "/mnt/Apps/PowerMeterV2/config",
-        "/mnt/Apps/PowerMeterV2/firmware",
-        "/mnt/Apps/PowerMeterV2/logs/application",
-        "/mnt/Apps/PowerMeterV2/logs/gateway",
-        "/mnt/Apps/PowerMeterV2/rate-source-artifacts",
-        "/mnt/Apps/PowerMeterV2/bill-rate-source-artifacts",
-        "/mnt/Apps/PowerMeterV2/backups",
-        "/mnt/Apps/PowerMeterV2/secrets",
+    base = "/mnt/Apps/PowerMeterV2"
+    required_records = {
+        f"directory|{base}/postgres|70:70|700",
+        f"directory|{base}/config|0:0|755",
+        f"directory|{base}/firmware|10001:10001|750",
+        f"directory|{base}/backups|568:568|750",
+        f"directory|{base}/backups/status|568:568|750",
+        f"directory|{base}/logs|0:0|711",
+        f"directory|{base}/logs/application|10001:10001|750",
+        f"directory|{base}/logs/gateway|1000:1000|750",
+        f"directory|{base}/rate-source-artifacts|10001:10001|750",
+        f"directory|{base}/caddy-data|1000:1000|750",
+        f"directory|{base}/caddy-config|1000:1000|750",
+        f"directory|{base}/secrets|0:0|711",
+        f"config|{base}/config/Caddyfile|0:0|440",
+        f"config|{base}/config/postgres-init-roles.sh|0:0|440",
+        f"acl|{base}/config/Caddyfile|exact-caddy-read-only",
+        f"acl|{base}/config/postgres-init-roles.sh|exact-postgres-read-only",
+        f"acl|{base}/backups|exact-api-traverse-only",
+        f"acl|{base}/backups/status|exact-api-read-default",
     }
-    if any(path_value not in value for path_value in required_paths):
-        raise EvidenceError(f"permissions evidence is missing a required dataset: {path}")
+    readers = {
+        "postgres_bootstrap_password": "70",
+        "postgres_migrator_password": "70,10001",
+        "postgres_api_password": "70,10001",
+        "postgres_worker_password": "70,10001",
+        "postgres_backup_password": "70,568",
+        "postgres_restore_password": "70,568",
+        "session_secret": "10001",
+        "field_encryption_key": "10001",
+        "ota_manifest_key": "10001",
+        "backup_encryption_key": "568",
+        "tls.crt": "1000",
+        "tls.key": "1000",
+        "tls-ca.crt": "1000",
+    }
+    for name, allowed in readers.items():
+        required_records.add(f"secret|{base}/secrets/{name}|0:0|440")
+        required_records.add(f"readers|{name}|{allowed}")
+    lines = value.splitlines()
+    if any(not line for line in lines):
+        raise EvidenceError(f"permissions evidence contains a blank record: {path}")
+    actual_records = set(lines)
+    if len(actual_records) != len(lines):
+        raise EvidenceError(f"permissions evidence contains a duplicate record: {path}")
+    if actual_records != required_records:
+        raise EvidenceError(
+            f"permissions evidence does not contain the exact corrected state: {path}"
+        )
 
 
 def validate(
@@ -536,11 +593,22 @@ def validate(
                 )
             if service in compose_services:
                 raise EvidenceError(f"success Compose evidence repeats a service: {compose_path}")
-            if record["state"] != "running" or record["health"] != "healthy":
-                raise EvidenceError(f"success Compose service is not healthy: {compose_path}")
+            if service in RUNNING_SERVICE_NAMES:
+                if record["state"] != "running" or record["health"] != "healthy":
+                    raise EvidenceError(f"success Compose service is not healthy: {compose_path}")
+            elif service in ONE_SHOT_SERVICE_NAMES and (
+                record["state"] != "exited"
+                or record["exit_code"] != 0
+                or record["health"] is not None
+            ):
+                raise EvidenceError(
+                    f"success one-shot service did not exit cleanly: {compose_path}"
+                )
             compose_services.add(service)
-        if not RUNNING_SERVICE_NAMES.issubset(compose_services):
-            raise EvidenceError(f"Compose evidence is missing a running service: {compose_path}")
+        if compose_services != SERVICE_NAMES:
+            raise EvidenceError(
+                f"Compose evidence is missing an exact service record: {compose_path}"
+            )
         _validate_permissions(prefix.with_name(prefix.name + "-permissions.txt"))
         return
 
