@@ -151,6 +151,10 @@ jobs:
           test -s release/promotion/server-candidate/postgres-init-roles.sh
           cmp deploy/postgres/init-roles.sh \
             release/promotion/server-candidate/postgres-init-roles.sh
+          cmp deploy/truenas/Stage-PowerMeterTrueNAS.ps1 \
+            release/promotion/server-candidate/Stage-PowerMeterTrueNAS.ps1
+          cmp deploy/truenas/initialize_host.py \
+            release/promotion/server-candidate/initialize-host.py
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ env.FIRMWARE_REPOSITORY }}
@@ -292,6 +296,10 @@ jobs:
           test -s release/promotion/stable/postgres-init-roles.sh
           cmp release/promotion/server-candidate/postgres-init-roles.sh \
             release/promotion/stable/postgres-init-roles.sh
+          cmp release/promotion/server-candidate/Stage-PowerMeterTrueNAS.ps1 \
+            release/promotion/stable/Stage-PowerMeterTrueNAS.ps1
+          cmp release/promotion/server-candidate/initialize-host.py \
+            release/promotion/stable/initialize-host.py
           (cd release/promotion/stable && sha256sum -- * > SHA256SUMS)
       - uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:

@@ -78,7 +78,6 @@ services:
       - application-logs:/data/logs
       - firmware:/data/firmware
       - rate-artifacts:/data/rate-source-artifacts
-      - bill-rate-artifacts:/data/bill-rate-source-artifacts
     depends_on:
       migrate: {condition: service_completed_successfully}
     networks: [database, application]
@@ -104,7 +103,7 @@ services:
     volumes:
       - backup-status:/data/backup-status:ro
       - application-logs:/data/logs
-    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     depends_on:
       migrate: {condition: service_completed_successfully}
     networks: [database]
@@ -190,7 +189,6 @@ volumes:
   postgres-data: {}
   firmware: {}
   rate-artifacts: {}
-  bill-rate-artifacts: {}
   backup-status: {}
   application-logs: {}
   backups: {}

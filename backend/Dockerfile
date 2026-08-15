@@ -58,7 +58,7 @@ RUN install -d \
 
 FROM python:3.13.14-alpine3.23@sha256:9fdbf2e3e82628351513560b121e2ee6ce31cac212be9e070c5a5e2769fb5e76
 
-ARG VERSION=0.1.0-rc.3
+ARG VERSION=0.1.0-rc.4
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="PowerMeter V2 API and worker" \
       org.opencontainers.image.description="Authenticated PZEM-only PowerMeter V2 services" \
@@ -73,11 +73,13 @@ ENV PYTHONUNBUFFERED=1 \
     PATH=/usr/local/bin:/usr/bin:/bin
 
 RUN /sbin/apk add --no-cache \
+       acl=2.3.2-r1 \
+       openssl=3.5.7-r0 \
        tesseract-ocr=5.5.1-r0 \
        tesseract-ocr-data-eng=5.5.1-r0 \
        font-dejavu=2.37-r6 \
     && install -d -o 10001 -g 10001 /app /data /data/logs /data/firmware \
-       /data/rate-source-artifacts /data/bill-rate-source-artifacts
+       /data/rate-source-artifacts
 
 COPY --from=builder /install /usr/local
 COPY --from=builder /sandbox-runtime /opt/pm-pdf-sandbox/runtime
@@ -85,6 +87,12 @@ WORKDIR /app
 COPY --chown=10001:10001 backend ./backend
 COPY --chown=10001:10001 worker ./worker
 COPY --chown=0:0 backend/app/bill_rate_import/sandbox_entry.py /opt/pm-pdf-sandbox/entry.py
+COPY --chown=0:0 --chmod=0555 deploy/truenas/initialize_host.py \
+    /opt/powermeter/host-initializer/initialize_host.py
+COPY --chown=0:0 --chmod=0444 deploy/caddy/Caddyfile \
+    /opt/powermeter/host-assets/Caddyfile
+COPY --chown=0:0 --chmod=0444 deploy/postgres/init-roles.sh \
+    /opt/powermeter/host-assets/postgres-init-roles.sh
 
 USER 10001:10001
 EXPOSE 8000

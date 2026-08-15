@@ -1,72 +1,91 @@
 # Upgrade PowerMeter V2 on TrueNAS
 
-Upgrade by replacing the complete verified YAML. Never edit only an image tag,
-accept a generic image-update suggestion, use a floating tag, or combine assets
-from two releases.
+> This UI-only flow applies to the complete signed v0.1.0-rc.4 release asset
+> set and later releases that retain this contract. Immutable rc.3 assets
+> retain their attached rc.3 procedure. Never mix release asset sets.
+
+Upgrade by replacing the complete verified YAML in the TrueNAS app editor.
+Never edit one image tag/digest, accept a generic image-update suggestion, use
+`latest`, or combine assets from two releases.
 
 ## Before the maintenance window
 
-1. Download the new server release into a new empty directory and repeat every
-   attestation, `SHA256SUMS`, manifest, protocol, and sentinel check in
-   `INSTALLATION.md`.
-2. Read the server release notes, migration report, security report, and the
-   compatible firmware identity. Confirm the current server/firmware pairing
-   still uses `pm-protocol/1.0.0`.
-3. Retain the previous release directory, attested manifest, generated YAML,
-   `Caddyfile`, PostgreSQL role script, and all exact image digests. Record the
-   current application version and database migration revision.
-4. Run a fresh encrypted backup and isolated restore test using the commands in
-   `INSTALLATION.md`. Stop if either final status is not `verified`; record both
-   run IDs and the archive hash.
-5. In **Data Protection > Periodic Snapshot Tasks** (or **Storage > Datasets >
-   Snapshots** for a one-time snapshot), create a recursive snapshot of
-   `Apps/PowerMeterV2` named for the UTC time and old version. Ensure it remains
-   inside equally protected encrypted storage. A snapshot supplements, but
-   does not replace, the verified logical backup.
+1. On Windows, download the new release into a new empty directory and perform
+   the exact SHA256SUMS and GitHub-attestation verification in `INSTALLATION.md`.
+2. Read its release notes, migration/security/deployment reports, firmware
+   compatibility, and hardware-certification status. Require the declared
+   `pm-protocol/1.0.0` pairing.
+3. Retain the complete previous release, including its generated YAML,
+   manifest, image digests, checksum set, and operator guides.
+4. In PowerMeter **System health**, require a recent verified encrypted backup
+   and isolated restore result. Preserve the backup key offline.
+5. In the TrueNAS UI, create and retain a recursive, encrypted snapshot of
+   `Apps/PowerMeterV2` named with the old version and UTC time. A snapshot
+   supplements rather than replaces the verified logical backup.
 
-## Apply the upgrade
+The coordinated rc.4 migration chain advances through `20260815_0011` and is
+fail-closed. The 0008 preflight can
+stop when existing immutable ingestion evidence conflicts, including a raw
+reading whose sequence was also recorded as permanent loss or overlapping
+permanent-loss ranges for one device. It never deletes, merges, or rewrites
+that evidence automatically. It also stops if a legacy database row references
+a retained original bill document; the new runtime forbids all persistent
+original-bill storage, including encrypted storage, and does not silently
+delete an operator's legacy file. Complete and verify the backup and snapshot
+above before applying rc.4. If either preflight stops, leave the prior datasets
+intact and preserve the exact failure for reviewed recovery; do not edit
+evidence or delete a referenced file merely to make the migration pass.
 
-1. Schedule downtime and stop `power-meter-v2` from **Apps > Installed**.
-2. Transfer the complete new verified release directory to a temporary TrueNAS
-   path. Run its host preparation script while the app is stopped:
+Revision 0011 also stops before changing data if it finds duplicate natural
+rate-plan identities, invalid or overlapping assignments, or inconsistent
+candidate-review lifecycle evidence. On PostgreSQL it takes write locks before
+those preflights and holds them through guard installation. Do not merge plans,
+rewrite review provenance, or trim assignment ranges merely to continue; keep
+the prior release intact and use a reviewed recovery decision.
 
-   ```sh
-   cd /tmp/powermeter-vNEW_VERSION
-   sudo bash ./prepare-host.sh --assets "$PWD" --hostname power-monitor.home.arpa
-   ```
+Unchanged secrets are not restaged and the secrets dataset is not reshared.
+Never rotate a database/application/TLS value merely to upgrade. If a future
+release explicitly requires coordinated new inputs, its release-specific guide
+must provide a reviewed UI/SMB procedure and compatibility evidence.
 
-   This atomically installs the release's Caddy configuration and role script
-   and rechecks the existing datasets, secrets, TLS, ownership, and ACLs. The
-   role script initializes only an empty PostgreSQL cluster; migrations, not
-   edits to that script, update existing clusters.
-3. In **Apps > Installed**, select `power-meter-v2`, choose **Edit**, replace the
-   entire **Custom Config** with the new generated YAML, and save. If the UI
-   keeps the app stopped after editing, start it once.
-4. Watch the service order. `postgres` must become healthy and the one-shot
-   `migrate` container must exit 0 before the other services start. Preserve
-   logs and stop the procedure if migration fails; do not repeatedly redeploy.
+An rc.3 installation can also have a legacy `bill-rate-source-artifacts`
+dataset. Rc.4 does not mount or write it, and the upgrade never deletes it.
+Leave it unmounted and unshared; do not export or decrypt its contents. Its
+separate retention or deletion requires an explicit operator decision outside
+this upgrade rather than an automated migration.
+
+## Apply through the TrueNAS UI
+
+1. Schedule downtime and stop `powermeter-v2` under **Apps > Installed**.
+2. Choose **Edit**, replace the entire **Custom Config** with the complete new
+   digest-pinned YAML, and save. Start the app if the UI leaves it stopped.
+3. Watch **Workloads/Logs**. The new image's `initialize` service must validate
+   all existing inputs, atomically install its two embedded configuration
+   assets, repair/verify ACLs, and exit 0. PostgreSQL must then become healthy;
+   `migrate` must exit 0; the six runtime services must become healthy.
+4. Stop on any initializer or migration failure. Preserve the logs and prior
+   datasets; do not repeatedly redeploy, broaden permissions, or bypass a gate.
+
+Because the initializer image/digest changes with the release, Compose creates
+the new one-shot service for the upgrade. Routine runtime restarts do not rerun
+it. Its operations are content-preserving for secrets and idempotent for exact
+configuration/metadata.
 
 ## Prove the upgraded instance
 
-Repeat the installation health checks and require:
+Using the browser, Windows PowerShell HTTPS checks, PowerMeter UI, and TrueNAS
+app UI, require:
 
-- verified TLS chain/hostname, `/healthz`, liveness, readiness, database, and
-  PDF sandbox;
-- owner login and permission enforcement;
-- an authenticated PZEM heartbeat, SSE live update, committed History interval,
-  and idempotent retry of an already accepted sequence;
-- unchanged historical cost provenance across the upgrade and a current exact
-  rate fixture;
-- command delivery and firmware inventory;
-- redacted diagnostics;
-- successful restart of each long-running service and one full app stop/start;
-- a new encrypted backup and isolated restore test under the new version.
+- strict TLS chain and `power-monitor.home.arpa` hostname verification;
+- `/healthz`, liveness, readiness, database, and PDF sandbox readiness;
+- owner login and permission isolation;
+- authenticated PZEM heartbeat, committed History, SSE, and idempotent retry;
+- unchanged historical cost provenance and current rate fixture;
+- command delivery, firmware inventory, and redacted diagnostics;
+- successful restarts of each long-running service without rerunning the
+  initializer; and
+- a new verified encrypted backup and isolated restore result.
 
-Record the old/new tags, revisions, image digests, migration revisions, snapshot
-name, test time, backup/restore run IDs, and operator. Keep the prior release
-assets, snapshot, logical archive, and old backup key for the documented
-rollback window.
-
-Server upgrade does not authorize an automatic firmware change. Deploy OTA only
-when the server release manifest identifies a compatible signed firmware
-release and the firmware's protocol/config/storage compatibility permits it.
+Record old/new tags, revisions, image digests, migration revisions, snapshot,
+backup/restore run IDs, UTC time, and operator. A server upgrade does not
+authorize firmware OTA unless the signed manifests explicitly coordinate it.

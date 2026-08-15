@@ -23,13 +23,37 @@ SENTINELS = {
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_REFERENCE_RE = re.compile(r"^[^\s@]+:[^\s@]+@sha256:[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$")
-EXPECTED_SERVICES = {"postgres", "migrate", "api", "worker", "frontend", "gateway", "backup"}
+EXPECTED_SERVICES = {
+    "initialize",
+    "postgres",
+    "migrate",
+    "api",
+    "worker",
+    "frontend",
+    "gateway",
+    "backup",
+}
 EXPECTED_DATABASE_ROLES = {
     "migrate": ("pm_migrator", "postgres_migrator_password"),
     "api": ("pm_api", "postgres_api_password"),
     "worker": ("pm_worker", "postgres_worker_password"),
     "backup": ("pm_backup", "postgres_backup_password"),
 }
+EXPECTED_INITIALIZER_MOUNTS = {
+    f"/mnt/Apps/PowerMeterV2/{name}": f"/host/{name}"
+    for name in (
+        "postgres",
+        "config",
+        "firmware",
+        "backups",
+        "logs",
+        "rate-source-artifacts",
+        "caddy-data",
+        "caddy-config",
+        "secrets",
+    )
+}
+EXPECTED_HOST_SOURCES = set(EXPECTED_INITIALIZER_MOUNTS)
 
 
 class ReleaseError(ValueError):
@@ -70,8 +94,90 @@ def validate_compose(compose: dict[str, Any], *, published: bool) -> None:
             raise ReleaseError(f"service {name} must not be privileged")
         if any("docker.sock" in str(v) for v in service.get("volumes", [])):
             raise ReleaseError(f"service {name} must not mount the Docker socket")
+        if any(
+            not isinstance(volume, dict)
+            or volume.get("type") != "bind"
+            or volume.get("bind", {}).get("create_host_path") is not False
+            for volume in service.get("volumes", [])
+        ):
+            raise ReleaseError(
+                f"service {name} volumes must be long-form bind mounts with "
+                "create_host_path disabled"
+            )
+        if any(
+            isinstance(volume, dict) and volume.get("source") not in EXPECTED_HOST_SOURCES
+            for volume in service.get("volumes", [])
+        ):
+            raise ReleaseError(f"service {name} may bind only an exact UI-created dataset root")
         if name in service.get("depends_on", {}):
             raise ReleaseError(f"service {name} must not depend on itself")
+    initializer = services["initialize"]
+    if initializer.get("image") != services["api"].get("image"):
+        raise ReleaseError("initialize must reuse the exact API image")
+    if initializer.get("user") != "0:0" or initializer.get("network_mode") != "none":
+        raise ReleaseError("initialize must be isolated root with no network")
+    if initializer.get("command") != [
+        "python",
+        "/opt/powermeter/host-initializer/initialize_host.py",
+    ]:
+        raise ReleaseError("initialize must use the embedded host initializer")
+    if initializer.get("cap_drop") != ["ALL"] or set(initializer.get("cap_add", [])) != {
+        "CHOWN",
+        "FOWNER",
+        "DAC_OVERRIDE",
+    }:
+        raise ReleaseError("initialize must have only the exact file-metadata capabilities")
+    initializer_mounts = {
+        (volume.get("source"), volume.get("target"), volume.get("read_only", False))
+        for volume in initializer.get("volumes", [])
+        if isinstance(volume, dict)
+    }
+    if (
+        len(initializer.get("volumes", [])) != len(EXPECTED_INITIALIZER_MOUNTS)
+        or (
+            initializer_mounts
+            != {(source, target, False) for source, target in EXPECTED_INITIALIZER_MOUNTS.items()}
+        )
+        or any(
+            not isinstance(volume, dict)
+            or volume.get("type") != "bind"
+            or volume.get("bind", {}).get("create_host_path") is not False
+            for volume in initializer.get("volumes", [])
+        )
+    ):
+        raise ReleaseError("initialize must have only the exact writable host dataset mounts")
+    for name, service in services.items():
+        if name != "initialize" and service.get("depends_on", {}).get("initialize") != {
+            "condition": "service_completed_successfully"
+        }:
+            raise ReleaseError(f"service {name} is not gated by successful host initialization")
+        if name != "initialize" and any(
+            isinstance(volume, dict)
+            and (
+                str(volume.get("source", "")).rstrip("/") == "/mnt/Apps/PowerMeterV2/secrets"
+                or str(volume.get("source", "")).startswith("/mnt/Apps/PowerMeterV2/secrets/")
+            )
+            for volume in service.get("volumes", [])
+        ):
+            raise ReleaseError(f"service {name} must not mount the secrets dataset")
+    expected_config_mounts = {
+        "postgres": "/docker-entrypoint-initdb.d",
+        "api": "/data/config",
+        "worker": "/data/config",
+        "gateway": "/etc/caddy",
+    }
+    for name, target in expected_config_mounts.items():
+        matching = [
+            volume
+            for volume in services[name].get("volumes", [])
+            if isinstance(volume, dict) and volume.get("source") == "/mnt/Apps/PowerMeterV2/config"
+        ]
+        if (
+            len(matching) != 1
+            or matching[0].get("target") != target
+            or matching[0].get("read_only") is not True
+        ):
+            raise ReleaseError(f"service {name} must mount the config dataset read-only")
     gateway_ports = services["gateway"].get("ports", [])
     if (
         not isinstance(gateway_ports, list)
@@ -132,7 +238,7 @@ def render(
     text = template
     for old, new in replacements.items():
         count = text.count(old)
-        expected = 3 if "-api:" in old else 1
+        expected = 4 if "-api:" in old else 1
         if count != expected:
             raise ReleaseError(f"expected {expected} occurrence(s) of {old}, found {count}")
         text = text.replace(old, new)

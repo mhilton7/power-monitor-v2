@@ -29,13 +29,28 @@ compose() {
   PM_HOSTNAME="$hostname" docker compose -f "$COMPOSE_FILE" "$@"
 }
 
+wait_healthy() {
+  local service="$1" container_id attempt
+  container_id="$(compose ps --quiet "$service")"
+  [[ "$container_id" =~ ^[0-9a-f]{64}$ ]]
+  for attempt in {1..72}; do
+    if docker inspect "$container_id" | jq -e \
+      '.[0].State.Running == true and .[0].State.Health.Status == "healthy"' >/dev/null; then
+      return 0
+    fi
+    sleep 5
+  done
+  printf 'service did not become healthy after restart: %s\n' "$service" >&2
+  return 1
+}
+
 project_compose_state() {
   jq -c '
     (if type == "array" then .[] else . end) |
     {service:.Service,state:.State,health:(if .Health == "" then null else .Health end),exit_code:.ExitCode} |
     . as $record |
     select(
-      (["postgres","migrate","api","worker","frontend","gateway","backup"] | index($record.service)) != null and
+      (["initialize","postgres","migrate","api","worker","frontend","gateway","backup"] | index($record.service)) != null and
       (["created","running","paused","restarting","removing","exited","dead"] | index($record.state)) != null and
       ($record.health == null or (["starting","healthy","unhealthy"] | index($record.health)) != null) and
       ($record.exit_code | type) == "number"
@@ -88,7 +103,7 @@ collect_failure_diagnostics() {
   fi
   : > "$failure_health"
   if [[ "$runner_authorized" == "true" ]]; then
-    for service in postgres migrate api worker frontend gateway backup; do
+    for service in initialize postgres migrate api worker frontend gateway backup; do
       container_id="$(compose ps --all --quiet "$service" 2>/dev/null | head -n 1)"
       [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || continue
       readiness="null"
@@ -207,29 +222,20 @@ readonly cookie_jar
 [[ ! -e "$base" ]]
 base_owned=true
 sudo install -d -o 0 -g 0 -m 0755 "$base"
-sudo install -d -o 70 -g 70 -m 0700 "$base/postgres"
-sudo install -d -o 0 -g 0 -m 0755 "$base/config"
-sudo install -d -o 10001 -g 10001 -m 0750 \
-  "$base/firmware" "$base/logs/application" \
-  "$base/rate-source-artifacts" "$base/bill-rate-source-artifacts"
-sudo install -d -o 568 -g 568 -m 0750 "$base/backups" "$base/backups/status"
-sudo setfacl -m u:10001:rX,d:u:10001:rX "$base/backups/status"
-sudo install -d -o 1000 -g 1000 -m 0750 \
-  "$base/logs/gateway" "$base/caddy-data" "$base/caddy-config"
-sudo install -d -o 0 -g 0 -m 0711 "$base/secrets"
-sudo install -o 0 -g 0 -m 0644 deploy/caddy/Caddyfile "$base/config/Caddyfile"
-sudo install -o 0 -g 0 -m 0644 deploy/postgres/init-roles.sh \
-  "$base/config/postgres-init-roles.sh"
+for dataset in postgres config firmware backups logs rate-source-artifacts \
+  caddy-data caddy-config secrets; do
+  sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0770 "$base/$dataset"
+done
 
 umask 077
 for name in bootstrap migrator api worker backup restore; do
-  openssl rand -hex 32 > "$work/postgres_${name}_password"
+  printf '%s' "$(openssl rand -hex 32)" > "$work/postgres_${name}_password"
 done
-openssl rand -base64 48 > "$work/session_secret"
-openssl rand -base64 32 > "$work/field_encryption_key"
-openssl rand -base64 32 > "$work/ota_manifest_key"
-openssl rand -base64 48 > "$work/backup_encryption_key"
-openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 2 \
+printf '%s' "$(openssl rand -base64 32)" > "$work/session_secret"
+printf '%s' "$(openssl rand -base64 32)" > "$work/field_encryption_key"
+printf '%s' "$(openssl rand -base64 32)" > "$work/ota_manifest_key"
+printf '%s' "$(openssl rand -base64 48)" > "$work/backup_encryption_key"
+openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 30 \
   -subj '/CN=PowerMeter V2 Release Test Root' \
   -addext 'basicConstraints=critical,CA:TRUE,pathlen:0' \
   -addext 'keyUsage=critical,keyCertSign,cRLSign' \
@@ -245,7 +251,7 @@ printf '%s\n' \
   'subjectKeyIdentifier=hash' \
   'authorityKeyIdentifier=keyid:always' \
   > "$work/tls.ext"
-openssl x509 -req -sha256 -days 2 -in "$work/tls.csr" \
+openssl x509 -req -sha256 -days 30 -in "$work/tls.csr" \
   -CA "$work/tls-ca.crt" -CAkey "$work/tls-ca.key" -CAcreateserial \
   -extfile "$work/tls.ext" -out "$work/tls.crt"
 openssl verify -x509_strict -purpose sslserver -CAfile "$work/tls-ca.crt" \
@@ -255,26 +261,20 @@ for name in postgres_bootstrap_password postgres_migrator_password \
   postgres_api_password postgres_worker_password postgres_backup_password \
   postgres_restore_password session_secret field_encryption_key ota_manifest_key \
   backup_encryption_key tls.crt tls.key tls-ca.crt; do
-  sudo install -o 0 -g 0 -m 0400 "$work/$name" "$base/secrets/$name"
+  sudo install -o "$(id -u)" -g "$(id -g)" -m 0660 "$work/$name" "$base/secrets/$name"
 done
-sudo setfacl -m u:70:r "$base/secrets/postgres_bootstrap_password"
-sudo setfacl -m u:70:r,u:10001:r \
-  "$base/secrets/postgres_migrator_password" \
-  "$base/secrets/postgres_api_password" \
-  "$base/secrets/postgres_worker_password"
-sudo setfacl -m u:70:r,u:568:r \
-  "$base/secrets/postgres_backup_password" \
-  "$base/secrets/postgres_restore_password"
-sudo setfacl -m u:10001:r "$base/secrets/session_secret" \
-  "$base/secrets/field_encryption_key" "$base/secrets/ota_manifest_key"
-sudo setfacl -m u:568:r "$base/secrets/backup_encryption_key"
-sudo setfacl -m u:1000:r "$base/secrets/tls.crt" \
-  "$base/secrets/tls.key" "$base/secrets/tls-ca.crt"
 
 compose config --quiet
 mapfile -t services < <(compose config --services | sort)
-[[ "${services[*]}" == "api backup frontend gateway migrate postgres worker" ]]
+[[ "${services[*]}" == "api backup frontend gateway initialize migrate postgres worker" ]]
 compose up --detach --wait --wait-timeout 360
+initializer_id="$(compose ps --all --quiet initialize)"
+readonly initializer_id
+[[ "$initializer_id" =~ ^[0-9a-f]{64}$ ]]
+docker inspect "$initializer_id" | jq -e \
+  '.[0].State.Status == "exited" and .[0].State.ExitCode == 0' >/dev/null
+initializer_finished_at="$(docker inspect --format '{{.State.FinishedAt}}' "$initializer_id")"
+readonly initializer_finished_at
 
 curl_transport_common=(--silent --show-error --connect-timeout 5 --max-time 30 \
   --resolve "${hostname}:8443:127.0.0.1" --cacert "$work/tls-ca.crt")
@@ -332,12 +332,25 @@ jq -e '.code == "BILL_RATE_IMPORT_REJECTED"' "$work/upload-response.json" >/dev/
 
 for service in postgres api worker frontend gateway backup; do
   compose restart "$service"
-  compose up --detach --wait --wait-timeout 360
+  wait_healthy "$service"
 done
-compose run --rm migrate
-compose stop
-compose start
-compose up --detach --wait --wait-timeout 360
+compose run --rm initialize
+[[ "$(compose ps --all --quiet initialize)" == "$initializer_id" ]]
+docker inspect "$initializer_id" | jq -e \
+  '.[0].State.Status == "exited" and .[0].State.ExitCode == 0' >/dev/null
+[[ "$(docker inspect --format '{{.State.FinishedAt}}' "$initializer_id")" == "$initializer_finished_at" ]]
+compose run --rm --no-deps migrate
+[[ "$(compose ps --all --quiet initialize)" == "$initializer_id" ]]
+[[ "$(docker inspect --format '{{.State.FinishedAt}}' "$initializer_id")" == "$initializer_finished_at" ]]
+compose stop postgres api worker frontend gateway backup
+compose start postgres api worker frontend gateway backup
+for service in postgres api worker frontend gateway backup; do
+  wait_healthy "$service"
+done
+[[ "$(compose ps --all --quiet initialize)" == "$initializer_id" ]]
+docker inspect "$initializer_id" | jq -e \
+  '.[0].State.Status == "exited" and .[0].State.ExitCode == 0' >/dev/null
+[[ "$(docker inspect --format '{{.State.FinishedAt}}' "$initializer_id")" == "$initializer_finished_at" ]]
 
 curl "${curl_common[@]}" "$endpoint/healthz" >/dev/null
 for evidence in last-backup-attempt last-successful-backup \
@@ -348,8 +361,73 @@ archive_path="$(sudo find "$base/backups/archives" -maxdepth 1 -type f -name 'po
 readonly archive_path
 [[ -n "$archive_path" ]]
 
-compose ps --format json | project_compose_state > "$work/compose-ps.jsonl"
-sudo find "$base" -maxdepth 3 -printf '%M %u:%g %p\n' | sort > "$work/permissions.txt"
+compose ps --all --format json | project_compose_state > "$work/compose-ps.jsonl"
+: > "$work/permissions.txt"
+record_metadata() {
+  local path="$1" owner="$2" mode="$3" kind="$4"
+  [[ "$(sudo stat -c '%u:%g' -- "$path")" == "$owner" ]]
+  [[ "$(sudo stat -c '%a' -- "$path")" == "$mode" ]]
+  printf '%s|%s|%s|%s\n' "$kind" "$path" "$owner" "$mode" >> "$work/permissions.txt"
+}
+assert_exact_acl() {
+  local path="$1" expected="$2" actual
+  actual="$(sudo getfacl -cpn -- "$path" | sed '/^$/d' | LC_ALL=C sort)"
+  [[ "$actual" == "$(printf '%s\n' "$expected" | LC_ALL=C sort)" ]]
+}
+record_secret() {
+  local name="$1"
+  shift
+  local readers=("$@") expected reader rendered=""
+  expected=$'user::r--\ngroup::---\nmask::r--\nother::---'
+  for reader in "${readers[@]}"; do
+    expected+=$'\n'"user:${reader}:r--"
+    rendered+="${rendered:+,}${reader}"
+  done
+  record_metadata "$base/secrets/$name" "0:0" "440" secret
+  assert_exact_acl "$base/secrets/$name" "$expected"
+  printf 'readers|%s|%s\n' "$name" "$rendered" >> "$work/permissions.txt"
+}
+
+for record in \
+  "postgres|70:70|700" \
+  "config|0:0|755" \
+  "firmware|10001:10001|750" \
+  "backups|568:568|750" \
+  "backups/status|568:568|750" \
+  "logs|0:0|711" \
+  "logs/application|10001:10001|750" \
+  "logs/gateway|1000:1000|750" \
+  "rate-source-artifacts|10001:10001|750" \
+  "caddy-data|1000:1000|750" \
+  "caddy-config|1000:1000|750" \
+  "secrets|0:0|711"; do
+  IFS='|' read -r relative owner mode <<< "$record"
+  record_metadata "$base/$relative" "$owner" "$mode" directory
+done
+sudo cmp --silent deploy/caddy/Caddyfile "$base/config/Caddyfile"
+sudo cmp --silent deploy/postgres/init-roles.sh "$base/config/postgres-init-roles.sh"
+record_metadata "$base/config/Caddyfile" "0:0" "644" config
+record_metadata "$base/config/postgres-init-roles.sh" "0:0" "644" config
+backups_acl=$'user::rwx\nuser:10001:--x\ngroup::r-x\nmask::r-x\nother::---'
+assert_exact_acl "$base/backups" "$backups_acl"
+printf 'acl|%s|exact-api-traverse-only\n' "$base/backups" >> "$work/permissions.txt"
+status_acl=$'user::rwx\nuser:10001:r-x\ngroup::r-x\nmask::r-x\nother::---\ndefault:user::rwx\ndefault:user:10001:r-x\ndefault:group::r-x\ndefault:mask::r-x\ndefault:other::---'
+assert_exact_acl "$base/backups/status" "$status_acl"
+printf 'acl|%s|exact-api-read-default\n' "$base/backups/status" >> "$work/permissions.txt"
+record_secret postgres_bootstrap_password 70
+for name in postgres_migrator_password postgres_api_password postgres_worker_password; do
+  record_secret "$name" 70 10001
+done
+for name in postgres_backup_password postgres_restore_password; do
+  record_secret "$name" 70 568
+done
+for name in session_secret field_encryption_key ota_manifest_key; do
+  record_secret "$name" 10001
+done
+record_secret backup_encryption_key 568
+for name in tls.crt tls.key tls-ca.crt; do
+  record_secret "$name" 1000
+done
 jq -cn \
   --arg version "$GITHUB_REF_NAME" --arg revision "$GITHUB_SHA" \
   --arg completed_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
@@ -358,7 +436,7 @@ jq -cn \
   --argjson restore "$(sudo cat "$base/backups/status/last-successful-restore-test.json")" \
   --argjson authenticated "$(cat "$authenticated_evidence")" \
   --argjson pdf_sandbox "$(cat "$work/pdf-sandbox.json")" \
-  '{schema:"pm-deployment-test/1.0.0",version:$version,revision:$revision,completed_at:$completed_at,status:"passed",services:($services|split(" ")),checks:["exact service set","digest-pinned image startup","TLS chain and hostname","liveness and readiness","API image PDF sandbox self-test","authenticated owner login","authenticated sensor enrollment","authenticated PZEM heartbeat and reading","PZEM-only History","reviewed rate-only PDF","worker-produced sensor cost","authenticated command round trip","authenticated system health","SSE proxy streaming","oversize PDF rejection","per-service restarts","migration rerun","full-stack restart","bind-mount access","encrypted backup","isolated restore"],rollback:"not_exercised_github_hosted_smoke",pdf_sandbox:$pdf_sandbox,authenticated_sensor_evidence:$authenticated,backup:$backup,restore_test:$restore}' \
+  '{schema:"pm-deployment-test/1.0.0",version:$version,revision:$revision,completed_at:$completed_at,status:"passed",services:($services|split(" ")),checks:["exact service set","digest-pinned image startup","one-shot host initializer first run","one-shot host initializer idempotent rerun","TLS chain and hostname","liveness and readiness","API image PDF sandbox self-test","authenticated owner login","authenticated sensor enrollment","authenticated PZEM heartbeat and reading","PZEM-only History","reviewed rate-only PDF","worker-produced sensor cost","authenticated command round trip","authenticated system health","SSE proxy streaming","oversize PDF rejection","per-service restarts without initializer restart","migration rerun","full-stack runtime restart without initializer restart","bind-mount access","encrypted backup","isolated restore"],rollback:"not_exercised_github_hosted_smoke",pdf_sandbox:$pdf_sandbox,authenticated_sensor_evidence:$authenticated,backup:$backup,restore_test:$restore}' \
   > "$EVIDENCE_FILE"
 cp "$work/compose-ps.jsonl" "$compose_ps_evidence"
 cp "$work/permissions.txt" "$permissions_evidence"

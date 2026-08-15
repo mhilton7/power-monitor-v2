@@ -75,7 +75,6 @@ readonly -a dataset_paths=(
   "$base/backups"
   "$base/logs"
   "$base/rate-source-artifacts"
-  "$base/bill-rate-source-artifacts"
   "$base/caddy-data"
   "$base/caddy-config"
   "$base/secrets"
@@ -101,13 +100,13 @@ reset_directory "$base/firmware" 10001 10001 0750
 reset_directory "$base/backups" 568 568 0750
 reset_directory "$base/logs" 0 0 0711
 reset_directory "$base/rate-source-artifacts" 10001 10001 0750
-reset_directory "$base/bill-rate-source-artifacts" 10001 10001 0750
 reset_directory "$base/caddy-data" 1000 1000 0750
 reset_directory "$base/caddy-config" 1000 1000 0750
 reset_directory "$base/secrets" 0 0 0711
 
 install -d -o 568 -g 568 -m 0750 "$base/backups/status"
 reset_directory "$base/backups/status" 568 568 0750
+setfacl -m u:10001:--x -- "$base/backups"
 setfacl -m u:10001:r-x,d:u:10001:r-x -- "$base/backups/status"
 install -d -o 10001 -g 10001 -m 0750 "$base/logs/application"
 reset_directory "$base/logs/application" 10001 10001 0750
@@ -279,7 +278,6 @@ for directory_record in \
   "$base/logs/application|10001:10001|750" \
   "$base/logs/gateway|1000:1000|750" \
   "$base/rate-source-artifacts|10001:10001|750" \
-  "$base/bill-rate-source-artifacts|10001:10001|750" \
   "$base/caddy-data|1000:1000|750" \
   "$base/caddy-config|1000:1000|750" \
   "$base/secrets|0:0|711"; do
@@ -292,6 +290,8 @@ done
 
 getfacl -cpn -- "$base/backups/status" | grep -Fx 'user:10001:r-x' >/dev/null ||
   fail "API read ACL is missing on backups/status"
+getfacl -cpn -- "$base/backups" | grep -Fx 'user:10001:--x' >/dev/null ||
+  fail "API traversal ACL is missing on backups"
 getfacl -cpn -- "$base/backups/status" | grep -Fx 'default:user:10001:r-x' >/dev/null ||
   fail "API default read ACL is missing on backups/status"
 

@@ -31,13 +31,17 @@ def test_ci_and_release_gates_use_postgres_roles_and_production_browser_e2e() ->
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     gates = (ROOT / ".github/workflows/release-gates.yml").read_text(encoding="utf-8")
     for workflow in (ci, gates):
-        assert 'POSTGRES_USER: pm_bootstrap' in workflow
+        assert "POSTGRES_USER: pm_bootstrap" in workflow
         assert 'PM_REQUIRE_POSTGRES_TESTS: "1"' in workflow
         assert "deploy/postgres/init-roles.sh" in workflow
         assert "PM_TEST_MIGRATOR_DATABASE_URL=postgresql+asyncpg://pm_migrator:" in workflow
         assert "PM_DATABASE_URL=postgresql+asyncpg://pm_api:" in workflow
         assert "permission denied|not permitted" in workflow
         assert "npm run test:e2e -- --reporter=line,junit" in workflow
+        assert "python -m ruff format --check" in workflow
+        assert "backend/app backend/tests worker tests scripts" in workflow
+        assert "python -m mypy --platform linux deploy/truenas/initialize_host.py" in workflow
+        assert "Stage-PowerMeterTrueNAS.ps1" in workflow
         assert workflow.index("alembic -c backend/alembic.ini upgrade head") < workflow.index(
             "pytest"
         )
@@ -52,35 +56,34 @@ def test_release_preserves_role_initializer_and_smoke_uses_role_scoped_secrets()
     promotion = (ROOT / ".github/workflows/stable-promotion.yml").read_text(encoding="utf-8")
     smoke = (ROOT / "scripts/release_deployment_smoke.sh").read_text(encoding="utf-8")
     assert "cp deploy/postgres/init-roles.sh release/assets/postgres-init-roles.sh" in release
-    assert "cp deploy/truenas/prepare-host.sh release/assets/prepare-host.sh" in release
+    assert "Stage-PowerMeterTrueNAS.ps1" in release
+    assert "cp deploy/truenas/initialize_host.py release/assets/initialize-host.py" in release
+    assert "release/assets/prepare-host.sh" not in release
     assert "cp docs/FIRST_RUN.md release/assets/FIRST_RUN.md" in release
     assert "cp docs/BACKUPS_AND_RESTORE.md release/assets/BACKUPS_AND_RESTORE.md" in release
     assert "postgres-init-roles.sh INSTALLATION.md" in release
-    assert "prepare-host.sh DATASET_ACLS.md SECRETS.md" in release
-    assert 'done < release/promotion/server-candidate/SHA256SUMS' in promotion
+    assert "Stage-PowerMeterTrueNAS.ps1 initialize-host.py" in release
+    assert "done < release/promotion/server-candidate/SHA256SUMS" in promotion
     assert "server-candidate/postgres-init-roles.sh" in promotion
     assert "stable/postgres-init-roles.sh" in promotion
+    assert "server-candidate/Stage-PowerMeterTrueNAS.ps1" in promotion
+    assert "stable/initialize-host.py" in promotion
 
+    first_up = smoke[: smoke.index("compose up --detach --wait --wait-timeout 360")]
+    assert 'sudo install -o "$(id -u)" -g "$(id -g)" -m 0660' in first_up
+    secret_staging = first_up[first_up.index("for name in postgres_bootstrap_password") :]
+    assert "setfacl" not in secret_staging
+    assert "sudo setfacl" not in first_up
     assert (
-        'setfacl -m u:70:r "$base/secrets/postgres_bootstrap_password"' in smoke
+        "for dataset in postgres config firmware backups logs rate-source-artifacts \\" in first_up
     )
-    application_acl = smoke[
-        smoke.index("sudo setfacl -m u:70:r,u:10001:r") : smoke.index(
-            "sudo setfacl -m u:70:r,u:568:r"
-        )
-    ]
-    for secret in (
-        "postgres_migrator_password",
-        "postgres_api_password",
-        "postgres_worker_password",
-    ):
-        assert secret in application_acl
-    backup_start = smoke.index("sudo setfacl -m u:70:r,u:568:r")
-    backup_acl = smoke[
-        backup_start : smoke.index("sudo setfacl -m u:10001:r", backup_start)
-    ]
-    for secret in ("postgres_backup_password", "postgres_restore_password"):
-        assert secret in backup_acl
+    for child in ("backups/status", "logs/application", "logs/gateway"):
+        assert f'"$base/{child}"' not in first_up
+    assert '"$base/config/Caddyfile"' not in first_up
+    assert '"$base/config/postgres-init-roles.sh"' not in first_up
+    assert "assert_exact_acl" in smoke
+    assert "record_secret postgres_bootstrap_password 70" in smoke
+    assert 'sudo cmp --silent deploy/caddy/Caddyfile "$base/config/Caddyfile"' in smoke
     assert '"$work/postgres_password"' not in smoke
     assert "backend/tests/deployment_evidence_probe.py" in smoke
     assert "backend.app.bill_rate_import.sandbox_check" in smoke
@@ -89,8 +92,7 @@ def test_release_preserves_role_initializer_and_smoke_uses_role_scoped_secrets()
 def test_release_gate_stages_only_flat_frontend_evidence_files() -> None:
     gates = (ROOT / ".github/workflows/release-gates.yml").read_text(encoding="utf-8")
     assert (
-        "install -m 0644 frontend/playwright-results.xml frontend-playwright-results.xml"
-        in gates
+        "install -m 0644 frontend/playwright-results.xml frontend-playwright-results.xml" in gates
     )
     assert "install -m 0644 frontend/npm-audit.json frontend-npm-audit.json" in gates
     assert "install -d -m 0755 frontend/test-results" in gates
@@ -106,9 +108,7 @@ def test_release_gate_stages_only_flat_frontend_evidence_files() -> None:
     assert "frontend-playwright-results.xml" in uploaded_paths
     assert "frontend-npm-audit.json" in uploaded_paths
     assert "frontend-test-results.tar.gz" in uploaded_paths
-    assert all(
-        re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", path) for path in uploaded_paths
-    )
+    assert all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", path) for path in uploaded_paths)
 
 
 def test_release_gate_archives_latest_same_major_public_release_not_newest_tag() -> None:
@@ -122,7 +122,7 @@ def test_release_gate_archives_latest_same_major_public_release_not_newest_tag()
 
     assert "GH_TOKEN: ${{ github.token }}" in step
     assert "gh api --paginate --slurp" in step
-    assert 'repos/${GITHUB_REPOSITORY}/releases?per_page=100' in step
+    assert "repos/${GITHUB_REPOSITORY}/releases?per_page=100" in step
     assert "[.[][]" in step
     assert ".draft == false" in step
     assert ".published_at != null" in step
@@ -130,11 +130,7 @@ def test_release_gate_archives_latest_same_major_public_release_not_newest_tag()
     assert "(.tag_name | startswith($major_prefix))" in step
     assert "sort_by([.published_at, .tag_name])" in step
     assert "| last" in step
-    assert (
-        '[[ "$previous_tag" =~ '
-        "^v[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[1-9][0-9]*)?$ ]]"
-        in step
-    )
+    assert '[[ "$previous_tag" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[1-9][0-9]*)?$ ]]' in step
     assert 'python - "$previous_tag" "$GITHUB_REF_NAME" <<\'PY\'' in step
     assert "from packaging.version import InvalidVersion, Version" in step
     assert "if previous >= current:" in step
@@ -199,7 +195,7 @@ def test_public_release_selector_executes_against_paginated_fail_closed_fixtures
     arguments = (
         "--arg",
         "current",
-        "v0.1.0-rc.3",
+        "v0.1.0-rc.4",
         "--arg",
         "major_prefix",
         "v0.",
@@ -216,7 +212,7 @@ def test_public_release_selector_executes_against_paginated_fail_closed_fixtures
                 "draft": False,
                 "published_at": "2026-08-15T05:30:00Z",
                 "prerelease": True,
-                "tag_name": "v0.1.0-rc.3",
+                "tag_name": "v0.1.0-rc.4",
             },
             {
                 "draft": False,
@@ -228,16 +224,22 @@ def test_public_release_selector_executes_against_paginated_fail_closed_fixtures
         [
             {
                 "draft": False,
+                "published_at": "2026-08-15T08:34:29Z",
+                "prerelease": True,
+                "tag_name": "v0.1.0-rc.3",
+            },
+            {
+                "draft": False,
                 "published_at": "2026-08-14T18:35:05Z",
                 "prerelease": True,
                 "tag_name": "v0.1.0-rc.1",
-            }
+            },
         ],
     ]
     # Failed RC2 has a Git tag but no Release, so it is intentionally absent.
     selected = _run_jq(program, pages, *arguments)
     assert selected.returncode == 0, selected.stderr
-    assert selected.stdout.strip() == "v0.1.0-rc.1"
+    assert selected.stdout.strip() == "v0.1.0-rc.3"
 
     for rejected in ([[]], [[{}]], {"not": "slurped release pages"}):
         result = _run_jq(program, rejected, *arguments)
@@ -263,11 +265,11 @@ def test_release_predecessor_version_check_rejects_equal_or_newer_versions() -> 
             check=False,
         )
 
-    assert validate("v0.1.0-rc.1", "v0.1.0-rc.3").returncode == 0
-    assert validate("v0.1.0-rc.3", "v0.1.0-rc.3").returncode != 0
-    assert validate("v0.1.0-rc.4", "v0.1.0-rc.3").returncode != 0
-    assert validate("v0.1.0", "v0.1.0-rc.3").returncode != 0
-    assert validate("not-a-version", "v0.1.0-rc.3").returncode != 0
+    assert validate("v0.1.0-rc.3", "v0.1.0-rc.4").returncode == 0
+    assert validate("v0.1.0-rc.4", "v0.1.0-rc.4").returncode != 0
+    assert validate("v0.1.0-rc.5", "v0.1.0-rc.4").returncode != 0
+    assert validate("v0.1.0", "v0.1.0-rc.4").returncode != 0
+    assert validate("not-a-version", "v0.1.0-rc.4").returncode != 0
 
 
 def test_release_tag_metadata_filters_execute_and_reject_invalid_verification() -> None:
@@ -279,7 +281,7 @@ def test_release_tag_metadata_filters_execute_and_reject_invalid_verification() 
     )
     tag_program = _between(
         step,
-        '              select(\n                .sha == $expected_tag_object',
+        "              select(\n                .sha == $expected_tag_object",
         '\n            \' "$tag_object_metadata"',
     )
     tag_program = "select(\n  .sha == $expected_tag_object" + tag_program
@@ -345,8 +347,7 @@ def test_release_checksums_only_flat_regular_files_and_publishes_every_asset() -
     assert "sha256sum --check --strict SHA256SUMS" in release
     assert (
         "frontend-playwright-results.xml frontend-npm-audit.json "
-        "frontend-test-results.tar.gz"
-        in release
+        "frontend-test-results.tar.gz" in release
     )
     assert "files: release/assets/*" in release
 
@@ -410,9 +411,9 @@ def test_api_image_uses_the_zero_finding_alpine_base_and_pinned_ocr() -> None:
     assert "HEALTHCHECK --interval=15s --timeout=15s" in dockerfile
     assert '"--loop", "asyncio"' in dockerfile
 
-    launcher = (
-        ROOT / "backend/app/bill_rate_import/sandbox_launcher.py"
-    ).read_text(encoding="utf-8")
+    launcher = (ROOT / "backend/app/bill_rate_import/sandbox_launcher.py").read_text(
+        encoding="utf-8"
+    )
     assert '"x86_64": Path("/lib/ld-musl-x86_64.so.1")' in launcher
     assert '"aarch64": Path("/lib/ld-musl-aarch64.so.1")' in launcher
     assert '"TESSDATA_PREFIX": "/usr/share/tessdata"' in launcher
@@ -471,7 +472,7 @@ def test_gateway_image_removes_unneeded_file_capability_and_is_release_owned() -
         "POWER-METER-V2-LICENSE.txt",
     ):
         assert license_file in dockerfile
-    assert "install -d -o 1000 -g 1000 -m 0750 /var/log/powermeter" in dockerfile
+    assert "/var/log/powermeter /var/log/powermeter/gateway" in dockerfile
     assert "chown -R 1000:1000 /data /config" in dockerfile
     assert "/usr/sbin/setcap -r /usr/bin/caddy" in dockerfile
     assert 'test -z "$(/usr/sbin/getcap /usr/bin/caddy)"' in dockerfile
@@ -572,8 +573,8 @@ def test_release_smoke_bootstrap_identity_is_schema_valid_and_consistent() -> No
 
 def test_release_smoke_and_operator_tls_validation_are_strict() -> None:
     smoke = (ROOT / "scripts/release_deployment_smoke.sh").read_text(encoding="utf-8")
-    preflight = (ROOT / "deploy/truenas/prepare-host.sh").read_text(encoding="utf-8")
-    secrets = (ROOT / "deploy/truenas/SECRETS.md").read_text(encoding="utf-8")
+    initializer = (ROOT / "deploy/truenas/initialize_host.py").read_text(encoding="utf-8")
+    staging = (ROOT / "deploy/truenas/Stage-PowerMeterTrueNAS.ps1").read_text(encoding="utf-8")
 
     extension_counts = {
         "-addext 'basicConstraints=critical,CA:TRUE,pathlen:0'": 1,
@@ -587,13 +588,20 @@ def test_release_smoke_and_operator_tls_validation_are_strict() -> None:
     }
     for extension, expected_count in extension_counts.items():
         assert smoke.count(extension) == expected_count
+    assert smoke.count("-days 30") == 2
+    assert "-days 2 " not in smoke
+    assert '"-checkend", "604800"' in initializer
+    assert '"-attime"' in initializer
 
     strict_smoke_verify = (
         'openssl verify -x509_strict -purpose sslserver -CAfile "$work/tls-ca.crt"'
     )
     assert smoke.count(strict_smoke_verify) == 1
-    assert preflight.count("openssl verify -x509_strict -purpose sslserver") == 2
-    assert secrets.count("openssl verify -x509_strict -purpose sslserver") == 2
+    assert '"-x509_strict"' in initializer
+    assert '"-verify_hostname"' in initializer
+    assert "'verify', '-x509_strict', '-purpose', 'sslserver'" in staging
+    assert "'-attime', $minimumValidEpoch" in staging
+    assert "'-verify_hostname', $HostName" in staging
 
 
 def test_release_smoke_expected_upload_rejection_is_fail_closed() -> None:
@@ -612,7 +620,7 @@ def test_release_smoke_expected_upload_rejection_is_fail_closed() -> None:
     assert 'curl_common=(--fail "${curl_transport_common[@]}")' in smoke
 
     upload = smoke.split('upload_status="$(curl', maxsplit=1)[1].split(
-        'jq -e \'.code == "BILL_RATE_IMPORT_REJECTED"\'', maxsplit=1
+        "jq -e '.code == \"BILL_RATE_IMPORT_REJECTED\"'", maxsplit=1
     )[0]
     assert '"${curl_transport_common[@]}"' in upload
     assert '"${curl_common[@]}"' not in upload
@@ -636,22 +644,18 @@ def test_release_smoke_archive_lookup_is_privileged_and_fail_closed() -> None:
     )
     expected_lookup = (
         f'archive_path="$({expected_find})"\n'
-        + 'readonly archive_path\n'
+        + "readonly archive_path\n"
         + '[[ -n "$archive_path" ]]'
     )
     archive_offset = smoke.index(expected_lookup)
-    archive_path_reads = [
-        line for line in smoke.splitlines() if '"$base/backups/archives"' in line
-    ]
+    archive_path_reads = [line for line in smoke.splitlines() if '"$base/backups/archives"' in line]
 
     assert archive_path_reads == [f'archive_path="$({expected_find})"']
     assert smoke.count(expected_find) == 1
     assert '$(find "$base/backups/archives"' not in smoke
     assert f'readonly archive_path="$({expected_find})"' not in smoke
     assert f'[[ -n "$({expected_find})" ]]' not in smoke
-    assert smoke.rfind("set -e", 0, archive_offset) > smoke.rfind(
-        "set +e", 0, archive_offset
-    )
+    assert smoke.rfind("set -e", 0, archive_offset) > smoke.rfind("set +e", 0, archive_offset)
 
 
 def test_release_smoke_preserves_redacted_failure_diagnostics() -> None:
@@ -670,17 +674,22 @@ def test_release_smoke_preserves_redacted_failure_diagnostics() -> None:
     assert "--tail 2000" in smoke
     assert "python scripts/redact_deployment_logs.py" in smoke
     assert "sed -E" not in smoke
-    assert smoke.index("trap cleanup EXIT") < smoke.index(
-        '[[ "${GITHUB_ACTIONS:-}" == "true"'
-    )
+    assert smoke.index("trap cleanup EXIT") < smoke.index('[[ "${GITHUB_ACTIONS:-}" == "true"')
     assert 'runner_authorized" == "true"' in smoke
     assert 'base_owned" == "true"' in smoke
     assert smoke.index('collect_failure_diagnostics "$exit_code"') < smoke.index(
         "compose down --volumes --remove-orphans"
     )
     assert '--arg expected_version "${GITHUB_REF_NAME#v}"' in smoke
-    assert '.version == $expected_version' in smoke
+    assert ".version == $expected_version" in smoke
     assert 'rollback:"not_exercised_github_hosted_smoke"' in smoke
+    assert "compose run --rm initialize" in smoke
+    assert "initializer_finished_at" in smoke
+    restart_loop = smoke.split(
+        "for service in postgres api worker frontend gateway backup; do", maxsplit=1
+    )[1].split("done", maxsplit=1)[0]
+    assert 'compose restart "$service"' in restart_loop
+    assert "initialize" not in restart_loop
 
     deployment = release.split("  deployment-smoke:", maxsplit=1)[1]
     deployment = deployment.split("  public-distribution:", maxsplit=1)[0]
@@ -746,18 +755,29 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     installation = (ROOT / "deploy/truenas/INSTALLATION.md").read_text(encoding="utf-8")
     datasets = (ROOT / "deploy/truenas/DATASET_ACLS.md").read_text(encoding="utf-8")
     secrets = (ROOT / "deploy/truenas/SECRETS.md").read_text(encoding="utf-8")
-    preflight = (ROOT / "deploy/truenas/prepare-host.sh").read_text(encoding="utf-8")
+    initializer = (ROOT / "deploy/truenas/initialize_host.py").read_text(encoding="utf-8")
+    staging = (ROOT / "deploy/truenas/Stage-PowerMeterTrueNAS.ps1").read_text(encoding="utf-8")
     template = (ROOT / "deploy/truenas/power-monitor-v2.yaml").read_text(encoding="utf-8")
+    normalized_installation = " ".join(installation.replace(">", " ").split())
 
     assert "Install via YAML" in installation
     assert "gh attestation verify" in installation
-    assert "sha256sum --check --strict SHA256SUMS" in installation
+    assert "SHA256SUMS" in installation
     assert "scripts/verify_release_artifacts.py" not in installation
-    assert "docker exec --user 568:568" in installation
+    assert "docker exec" not in installation
+    assert "sudo " not in installation
+    assert "System > Shell" not in installation
+    assert "prepare-host.sh" not in installation
     assert "pm-protocol/1.0.0" in installation
     assert "authenticated PZEM-004T readings" in installation
-    assert "tag=v0.1.0-rc.3" in installation
-    assert 'cd "/tmp/powermeter-${tag}"' in installation
+    assert "$Tag = Read-Host" in installation
+    assert "signed v0.1.0-rc.4 release" in normalized_installation
+    assert "Stage-PowerMeterTrueNAS.ps1" in installation
+    assert "power-monitor.home.arpa -> 192.168.0.175" in installation
+    assert "Direct-IP HTTPS is not supported" in installation
+    assert "unless a coordinated certificate" not in installation
+    assert "disable or delete the SMB share" in installation
+    assert "complete" in installation.lower()
 
     for dataset in (
         "postgres",
@@ -766,13 +786,12 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
         "backups",
         "logs",
         "rate-source-artifacts",
-        "bill-rate-source-artifacts",
         "caddy-data",
         "caddy-config",
         "secrets",
     ):
-        assert f"Apps/PowerMeterV2/{dataset}" in datasets
-    assert "Generic/POSIX" in datasets
+        assert dataset in datasets
+    assert "POSIX ACLs" in datasets
     assert "0777" not in datasets
 
     for secret in (
@@ -791,12 +810,13 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
         "tls-ca.crt",
     ):
         assert secret in secrets
-        assert secret in preflight
+        assert secret in staging or secret in initializer
 
-    assert 'readonly base="/mnt/Apps/PowerMeterV2"' in preflight
-    assert "sha256sum --check --strict SHA256SUMS" in preflight
-    assert "must be the mount point of its own ZFS dataset" in preflight
-    assert "getfacl -cpn" in preflight
+    assert "create_host_path: false" in datasets
+    assert "mount namespace cannot conclusively prove" in datasets
+    assert "network_mode: none" in template
+    assert "service_completed_successfully" in template
+    assert "never generates, rotates, replaces" in secrets
     assert "UNPUBLISHED_API_DIGEST" in template
     assert "UNPUBLISHED_FRONTEND_DIGEST" in template
     assert "UNPUBLISHED_GATEWAY_DIGEST" in template
@@ -806,54 +826,49 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
 def test_candidate_notes_describe_workflow_output_without_claiming_source_publication() -> None:
     notes = (ROOT / "release/RELEASE_NOTES.md").read_text(encoding="utf-8")
     normalized = " ".join(notes.split())
-    assert "presence alone does not prove a release workflow ran" in normalized
-    assert "power-monitor-v2-v0.1.0-rc.3.yaml" in normalized
-    assert "v0.1.0-rc.1 system upgrades in place" in normalized
-    assert "existing ZFS datasets" in normalized
-    assert "application secrets" in normalized
-    assert "database remains at Alembic revision `20260813_0007`" in normalized
-    assert "firmware v0.1.0-rc.3" in normalized
-    assert "7caada9c6295f4c201fd7ce7d383822e6b5785a960022de8355e3b6acc9a4e2c" in normalized
+    assert "source copy alone is not publication evidence" in normalized
+    assert "power-monitor-v2-v0.1.0-rc.4.yaml" in normalized
+    assert "Keep all existing application secrets" in normalized
+    assert "Alembic head `20260815_0011`" in normalized
+    assert "Revision 0009 adds the exact-home rate-candidate" in normalized
+    assert "permanent-loss rows immutable" in normalized
+    assert "firmware `v0.1.0-rc.4`" in normalized
+    assert "f9b936468f5a696a0bee3e04edda021c12ab81dddc091cbb307face0be1de7b1" in normalized
     assert "failed release run" in normalized
     assert "31866197054" in normalized
     assert "There is no server rc.2 GitHub Release" in normalized
-    assert "server rc.1 remains the installation authority" in normalized
+    assert "Public server rc.3 remains the prior installation authority" in normalized
+    assert "never persisted" in normalized
+    assert "nine Generic/POSIX child ZFS datasets" in normalized
     assert "not_exercised_github_hosted_smoke" in normalized
-    assert "proves only that an rc.1 database can upgrade forward to rc.3" in normalized
-    assert "Rollback compatibility remains unproven" in normalized
-    assert "matching pre-upgrade database" in normalized
+    assert "proves only the forward upgrade" in normalized
+    assert "Application-only rollback is not authorized" in normalized
+    assert "matching pre-upgrade snapshot" in normalized
     assert "migration report can permit application rollback" not in normalized
-    assert "hardware-certification-status.json` remains `pending`" in normalized
+    assert "Hardware status is honestly `pending`" in normalized
     assert "at least 72 hours" in normalized
     assert "repositories do not yet exist" not in normalized
     assert "Current `gh` authentication is invalid" not in normalized
 
 
 def test_rc3_recovery_docs_separate_failed_rc2_forward_upgrade_and_publication() -> None:
-    rollback = " ".join(
-        (ROOT / "deploy/truenas/ROLLBACK.md").read_text(encoding="utf-8").split()
-    )
+    rollback = " ".join((ROOT / "deploy/truenas/ROLLBACK.md").read_text(encoding="utf-8").split())
     release_process = " ".join(
         (ROOT / "docs/RELEASE_PROCESS.md").read_text(encoding="utf-8").split()
     )
     testing = " ".join((ROOT / "docs/TESTING.md").read_text(encoding="utf-8").split())
-    firmware = " ".join(
-        (ROOT / "docs/FIRMWARE_RELEASES.md").read_text(encoding="utf-8").split()
-    )
+    firmware = " ".join((ROOT / "docs/FIRMWARE_RELEASES.md").read_text(encoding="utf-8").split())
     traceability = " ".join(
         (ROOT / "docs/REQUIREMENTS_TRACEABILITY.md").read_text(encoding="utf-8").split()
     )
 
-    assert "proves only forward upgrade" in rollback
-    assert "must never attach old binaries to the current post-upgrade database" in rollback
-    assert "matching pre-upgrade database restore" in rollback
+    assert "proved only forward rc.1-to-rc.3 upgrade" in rollback
+    assert "Never attach old binaries to the current post-upgrade database" in rollback
+    assert "matching pre-upgrade ZFS snapshot or verified encrypted backup" in rollback
     assert "migration report can permit" not in rollback
-    assert (
-        "That gate proves only forward rc.1-to-rc.3 upgrade"
-        in release_process
-    )
-    assert "latest same-major non-draft public release" in release_process
-    assert "never the failed rc.2 tag" in release_process
+    assert "Historical rc.3 evidence proved only forward rc.1-to-rc.3 upgrade" in release_process
+    assert "latest lower same-major non-draft public release" in release_process
+    assert "predecessor is public rc.3, never failed rc.2" in release_process
     assert "exercises only the forward path" in testing
 
     assert "Historical published v0.1.0-rc.1 evidence" in firmware
@@ -862,12 +877,12 @@ def test_rc3_recovery_docs_separate_failed_rc2_forward_upgrade_and_publication()
     assert "signed, public firmware" in firmware
     assert "v0.1.0-rc.2" in firmware
     assert "No server rc.2 Release, image set, TrueNAS YAML, or deployment smoke" in firmware
-    assert "current server rc.3 coordination target" in firmware
+    assert "coordinated public firmware rc.3 release" in firmware
     assert "7caada9c6295f4c201fd7ce7d383822e6b5785a960022de8355e3b6acc9a4e2c" in firmware
 
     assert "Signed public firmware `v0.1.0-rc.2` is historical" in traceability
     assert "Signed server tag `v0.1.0-rc.2` and failed run `31866197054`" in traceability
-    assert "Server and firmware `v0.1.0-rc.3` are the current coordinated target" in traceability
+    assert "Coordinated server and firmware `v0.1.0-rc.3` are public" in traceability
     assert "target repos are absent" not in traceability
     assert "invalid `gh` authentication" not in traceability
     assert "no signed public release" not in traceability

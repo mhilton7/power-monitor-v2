@@ -17,7 +17,7 @@ https://{$PM_HOSTNAME}:8443 {
 	encode zstd gzip
 
 	log {
-		output file /var/log/powermeter/gateway-access.json {
+		output file /var/log/powermeter/gateway/gateway-access.json {
 			mode 0640
 			roll_size 25MiB
 			roll_keep 360
@@ -105,6 +105,23 @@ https://{$PM_HOSTNAME}:8443 {
 			transport http {
 				dial_timeout 5s
 				response_header_timeout 30s
+			}
+		}
+	}
+
+	@rateSync {
+		method POST
+		path /api/v1/rate-sources/check-now
+	}
+	handle @rateSync {
+		request_body {
+			max_size 1MiB
+		}
+		reverse_proxy api:8000 {
+			flush_interval -1
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 40s
 			}
 		}
 	}

@@ -375,8 +375,7 @@ def validate_commands(server: Path, firmware: Path, contract: dict[str, Any]) ->
             raise ValueError("credential rotation capability differs from the live server")
         lifetime = int(
             (
-                _utc(rotation_command["expires_at"])
-                - _utc(rotation_command["not_before"])
+                _utc(rotation_command["expires_at"]) - _utc(rotation_command["not_before"])
             ).total_seconds()
         )
         if not 0 < lifetime <= COMMAND_EXPIRY_SECONDS["rotate_device_credentials"]:
@@ -389,8 +388,7 @@ def validate_commands(server: Path, firmware: Path, contract: dict[str, Any]) ->
     commit_commands = [
         item
         for item in rotation_commands
-        if set(item.get("payload", {}))
-        == {"schema", "rotation_id", "credential_fingerprint"}
+        if set(item.get("payload", {})) == {"schema", "rotation_id", "credential_fingerprint"}
     ]
     cancel_commands = [
         item for item in rotation_commands if item.get("payload", {}).get("cancelled") is True
@@ -402,8 +400,10 @@ def validate_commands(server: Path, firmware: Path, contract: dict[str, Any]) ->
     rotation_cancel = cancel_commands[0]
     prepare_payload = rotation_prepare["payload"]
     candidate_secret = bytes.fromhex(prepare_payload["device_secret_hex"])
-    if len(candidate_secret) != 32 or hashlib.sha256(candidate_secret).hexdigest() != (
-        prepare_payload["credential_fingerprint"]
+    if (
+        len(candidate_secret) != 32
+        or hashlib.sha256(candidate_secret).hexdigest()
+        != (prepare_payload["credential_fingerprint"])
     ):
         raise ValueError("credential rotation fingerprint is not bound to its candidate secret")
     rotation_id = prepare_payload["rotation_id"]
