@@ -406,8 +406,13 @@ for record in \
 done
 sudo cmp --silent deploy/caddy/Caddyfile "$base/config/Caddyfile"
 sudo cmp --silent deploy/postgres/init-roles.sh "$base/config/postgres-init-roles.sh"
-record_metadata "$base/config/Caddyfile" "0:1000" "440" config
-record_metadata "$base/config/postgres-init-roles.sh" "0:70" "440" config
+config_base_acl=$'user::r--\ngroup::---\nmask::r--\nother::---'
+record_metadata "$base/config/Caddyfile" "0:0" "440" config
+assert_exact_acl "$base/config/Caddyfile" "$config_base_acl"$'\nuser:1000:r--'
+printf 'acl|%s|exact-caddy-read-only\n' "$base/config/Caddyfile" >> "$work/permissions.txt"
+record_metadata "$base/config/postgres-init-roles.sh" "0:0" "440" config
+assert_exact_acl "$base/config/postgres-init-roles.sh" "$config_base_acl"$'\nuser:70:r--'
+printf 'acl|%s|exact-postgres-read-only\n' "$base/config/postgres-init-roles.sh" >> "$work/permissions.txt"
 backups_acl=$'user::rwx\nuser:10001:--x\ngroup::r-x\nmask::r-x\nother::---'
 assert_exact_acl "$base/backups" "$backups_acl"
 printf 'acl|%s|exact-api-traverse-only\n' "$base/backups" >> "$work/permissions.txt"

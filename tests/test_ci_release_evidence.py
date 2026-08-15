@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -22,34 +23,30 @@ def test_gitleaks_private_key_allowlist_is_exactly_scoped_to_synthetic_fixture()
     policy = tomllib.loads((ROOT / ".gitleaks.toml").read_text(encoding="utf-8"))
     assert set(policy) == {"title", "extend", "rules"}
     private_key_rules = [rule for rule in policy["rules"] if rule["id"] == "private-key"]
+    assert len(private_key_rules) == 1
+    rule = private_key_rules[0]
+    assert set(rule) == {"id", "allowlists"}
+    assert len(rule["allowlists"]) == 1
+    allowlist = rule["allowlists"][0]
+    assert allowlist["description"] == (
+        "Allow only the exact historical synthetic encrypted-key rejection fixture"
+    )
+    assert allowlist["condition"] == "AND"
+    assert allowlist["regexTarget"] == "match"
+    assert allowlist["commits"] == ["7b025b031c12e3760ffad1f4471ce4b3bb69ccfb"]
+    assert allowlist["paths"] == [r"^tests/test_host_initializer\.py$"]
+    assert len(allowlist["regexes"]) == 1
+    assert hashlib.sha256(allowlist["regexes"][0].encode()).hexdigest() == (
+        "4e2149c40b0053568b7fd2aca8fe990e12a4b731d342e30366460e7a6e72a2b7"
+    )
 
-    assert private_key_rules == [
-        {
-            "id": "private-key",
-            "allowlists": [
-                {
-                    "description": (
-                        "Allow only the exact historical synthetic encrypted-key rejection fixture"
-                    ),
-                    "condition": "AND",
-                    "regexTarget": "match",
-                    "commits": ["7b025b031c12e3760ffad1f4471ce4b3bb69ccfb"],
-                    "paths": [r"^tests/test_host_initializer\.py$"],
-                    "regexes": [
-                        "^-----BEGIN ENCRYPTED PRIVATE KEY-----\\\\n"
-                        "ZmFrZQ==\\\\n"
-                        '-----END ENCRYPTED PRIVATE KEY-----\\\\n"\\n'
-                        r"    \)\n"
-                        "    try:\\n"
-                        "        with pytest\\.raises\\(INITIALIZER\\.InitializationError, "
-                        'match="unencrypted"\\):\\n'
-                        '            INITIALIZER\\._validate_tls\\("power-monitor\\.home\\.'
-                        'arpa", test_root\\)\\n\\n'
-                        '        key_path\\.write_bytes\\(b"-----BEGIN PRIVATE KEY-----$'
-                    ],
-                }
-            ],
-        }
+    ignored_fingerprints = [
+        line
+        for line in (ROOT / ".gitleaksignore").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    ]
+    assert ignored_fingerprints == [
+        "ec5cd5b66affcf7a155f36b74aac3654e6636c94:tests/test_ci_release_evidence.py:private-key:39"
     ]
 
 

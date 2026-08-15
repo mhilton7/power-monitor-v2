@@ -23,7 +23,7 @@ No long-running service has these privileges.
 | Path below `/mnt/Apps/PowerMeterV2` | UID:GID | Mode / additional ACL |
 |---|---:|---|
 | `postgres` | `70:70` | `0700` |
-| `config` | `0:0` | `0755`; `Caddyfile` is `0:1000`/`0440`; `postgres-init-roles.sh` is `0:70`/`0440` |
+| `config` | `0:0` | `0755`; both files are `0:0`/`0440` with an exact read-only named-user ACL for only their runtime UID (`1000` for `Caddyfile`, `70` for `postgres-init-roles.sh`) |
 | `firmware` | `10001:10001` | `0750` |
 | `backups` | `568:568` | `0750`; access-only `10001:--x` for status traversal |
 | `backups/status` | `568:568` | `0750`; access/default `10001:r-x` |

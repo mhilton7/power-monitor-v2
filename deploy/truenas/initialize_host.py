@@ -328,21 +328,34 @@ def _ensure_child_directory(relative: str, uid: int, gid: int, mode: int) -> Pat
     return path
 
 
-def _set_asset_metadata(path: Path, gid: int) -> None:
-    os.chown(path, 0, gid, follow_symlinks=False)
-    os.chmod(path, 0o440, follow_symlinks=False)
+def _expected_read_acl(readers: tuple[int, ...]) -> set[str]:
+    expected = {"user::r--", "group::---", "mask::r--", "other::---"}
+    expected.update(f"user:{uid}:r--" for uid in readers)
+    return expected
 
 
-def _verify_asset_metadata(path: Path, gid: int) -> None:
+def _set_asset_metadata(path: Path, reader_uid: int) -> None:
+    _run(["setfacl", "-b", "--", str(path)], f"cannot reset config ACL: {path.name}")
+    os.chown(path, 0, 0, follow_symlinks=False)
+    os.chmod(path, 0o400, follow_symlinks=False)
+    _run(
+        ["setfacl", "-m", f"u:{reader_uid}:r--", "--", str(path)],
+        f"cannot set config ACL: {path.name}",
+    )
+
+
+def _verify_asset_metadata(path: Path, reader_uid: int) -> None:
     try:
         value = path.lstat()
     except OSError as exc:
         raise InitializationError(f"cannot verify config asset metadata: {path.name}") from exc
-    if (value.st_uid, value.st_gid, stat.S_IMODE(value.st_mode)) != (0, gid, 0o440):
+    if (value.st_uid, value.st_gid, stat.S_IMODE(value.st_mode)) != (0, 0, 0o440):
         _fail(f"config asset owner or mode verification failed: {path.name}")
+    if _numeric_acl(path) != _expected_read_acl((reader_uid,)):
+        _fail(f"config asset ACL verification failed: {path.name}")
 
 
-def _install_asset(source: Path, destination: Path, gid: int) -> None:
+def _install_asset(source: Path, destination: Path, reader_uid: int) -> None:
     source_bytes = _assert_regular_file(source, f"image asset {source.name}")
     if destination.exists() or destination.is_symlink():
         _assert_regular_file(destination, f"existing config file {destination.name}")
@@ -355,7 +368,7 @@ def _install_asset(source: Path, destination: Path, gid: int) -> None:
             stream.write(source_bytes)
             stream.flush()
             os.fsync(stream.fileno())
-        _set_asset_metadata(temporary, gid)
+        _set_asset_metadata(temporary, reader_uid)
         os.replace(temporary, destination)
         directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -372,7 +385,7 @@ def _install_asset(source: Path, destination: Path, gid: int) -> None:
         temporary.unlink(missing_ok=True)
     if not hmac.compare_digest(source_bytes, _assert_regular_file(destination, destination.name)):
         _fail(f"installed config asset differs from image asset: {destination.name}")
-    _verify_asset_metadata(destination, gid)
+    _verify_asset_metadata(destination, reader_uid)
 
 
 def _set_secret_acl(path: Path, readers: tuple[int, ...]) -> None:
@@ -399,9 +412,7 @@ def _verify_secret_acl(path: Path, readers: tuple[int, ...]) -> None:
     value = path.lstat()
     if (value.st_uid, value.st_gid, stat.S_IMODE(value.st_mode)) != (0, 0, 0o440):
         _fail(f"secret owner or mode verification failed: {path.name}")
-    expected = {"user::r--", "group::---", "mask::r--", "other::---"}
-    expected.update(f"user:{uid}:r--" for uid in readers)
-    if _numeric_acl(path) != expected:
+    if _numeric_acl(path) != _expected_read_acl(readers):
         _fail(f"secret ACL verification failed: {path.name}")
 
 
@@ -475,8 +486,8 @@ def initialize() -> None:
         "cannot grant the API read-only backup-status ACL",
     )
 
-    for name, (source, gid) in CONFIG_ASSETS.items():
-        _install_asset(source, config_root / name, gid)
+    for name, (source, reader_uid) in CONFIG_ASSETS.items():
+        _install_asset(source, config_root / name, reader_uid)
     for name, readers in SECRET_READERS.items():
         _set_secret_acl(secret_root / name, readers)
 

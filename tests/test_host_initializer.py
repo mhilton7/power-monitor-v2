@@ -109,9 +109,10 @@ def test_initializer_requires_each_explicit_host_mount_without_claiming_zfs_proo
         test_root.rmdir()
 
 
-def test_config_assets_are_readable_by_only_their_runtime_group(monkeypatch) -> None:
+def test_config_assets_are_readable_by_only_their_runtime_uid(monkeypatch) -> None:
     path = Path("/host/config/Caddyfile")
     metadata_calls: list[tuple[str, int, int]] = []
+    acl_calls: list[list[str]] = []
 
     def fake_chown(_path: Path, uid: int, gid: int, *, follow_symlinks: bool) -> None:
         metadata_calls.append(("chown", uid, gid))
@@ -121,13 +122,29 @@ def test_config_assets_are_readable_by_only_their_runtime_group(monkeypatch) -> 
         metadata_calls.append(("chmod", mode, 0))
         assert follow_symlinks is False
 
+    def fake_run(command: list[str], _failure: str, **_kwargs) -> bytes:
+        acl_calls.append(command)
+        return b""
+
     monkeypatch.setattr(INITIALIZER.os, "chown", fake_chown, raising=False)
     monkeypatch.setattr(INITIALIZER.os, "chmod", fake_chmod)
+    monkeypatch.setattr(INITIALIZER, "_run", fake_run)
 
     INITIALIZER._set_asset_metadata(path, 1000)
 
-    assert metadata_calls == [("chown", 0, 1000), ("chmod", 0o440, 0)]
-    assert {name: gid for name, (_source, gid) in INITIALIZER.CONFIG_ASSETS.items()} == {
+    assert metadata_calls == [("chown", 0, 0), ("chmod", 0o400, 0)]
+    assert acl_calls == [
+        ["setfacl", "-b", "--", str(path)],
+        ["setfacl", "-m", "u:1000:r--", "--", str(path)],
+    ]
+    assert INITIALIZER._expected_read_acl((1000,)) == {
+        "user::r--",
+        "user:1000:r--",
+        "group::---",
+        "mask::r--",
+        "other::---",
+    }
+    assert {name: uid for name, (_source, uid) in INITIALIZER.CONFIG_ASSETS.items()} == {
         "Caddyfile": 1000,
         "postgres-init-roles.sh": 70,
     }
@@ -135,11 +152,13 @@ def test_config_assets_are_readable_by_only_their_runtime_group(monkeypatch) -> 
 
 def test_source_only_host_preparer_matches_restricted_config_asset_contract() -> None:
     source = (ROOT / "deploy/truenas/prepare-host.sh").read_text(encoding="utf-8")
-    assert 'install -o 0 -g 1000 -m 0440 -- "$assets/Caddyfile" "$base/config/Caddyfile"' in source
-    assert "install -o 0 -g 70 -m 0440 -- \\\n" in source
+    assert 'install -o 0 -g 0 -m 0400 -- "$assets/Caddyfile" "$base/config/Caddyfile"' in source
+    assert "install -o 0 -g 0 -m 0400 -- \\\n" in source
     assert '"$assets/postgres-init-roles.sh" "$base/config/postgres-init-roles.sh"' in source
-    assert '"$base/config/Caddyfile|0:1000|440"' in source
-    assert '"$base/config/postgres-init-roles.sh|0:70|440"' in source
+    assert 'set_read_acl "$base/config/Caddyfile" 1000' in source
+    assert 'set_read_acl "$base/config/postgres-init-roles.sh" 70' in source
+    assert '"$base/config/Caddyfile|0:0|440"' in source
+    assert '"$base/config/postgres-init-roles.sh|0:0|440"' in source
     assert "-m 0644" not in source
 
 

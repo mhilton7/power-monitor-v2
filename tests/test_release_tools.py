@@ -173,8 +173,10 @@ def _write_success_evidence(prefix: Path) -> None:
         f"directory|{base}/caddy-data|1000:1000|750",
         f"directory|{base}/caddy-config|1000:1000|750",
         f"directory|{base}/secrets|0:0|711",
-        f"config|{base}/config/Caddyfile|0:1000|440",
-        f"config|{base}/config/postgres-init-roles.sh|0:70|440",
+        f"config|{base}/config/Caddyfile|0:0|440",
+        f"config|{base}/config/postgres-init-roles.sh|0:0|440",
+        f"acl|{base}/config/Caddyfile|exact-caddy-read-only",
+        f"acl|{base}/config/postgres-init-roles.sh|exact-postgres-read-only",
         f"acl|{base}/backups|exact-api-traverse-only",
         f"acl|{base}/backups/status|exact-api-read-default",
     ]
