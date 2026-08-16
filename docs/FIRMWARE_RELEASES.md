@@ -78,13 +78,13 @@ crash in the main stack before provisioning. Those signed releases remain
 immutable evidence. Coordinated public firmware/server rc.6 delivered the
 main-stack hotfix and remains an immutable installation authority.
 
-Candidate firmware rc.8 carries the bounded response-header authentication fix
-identified by the unpublished local rc.7 OTA attempt. It must name server
-`v0.1.0-rc.8`, retain `pm-protocol/1.0.0`, and declare generated OpenAPI
-SHA-256 `b7f8726f73633bd577da2cd3a9bfb7a2104615dafb44681564cd81fce8c8148f`.
-It must be signed, published, and independently verified before the server rc.8
+Candidate firmware rc.9 carries the supported FAT capacity/full-state fix and
+authenticated total/free byte evidence. It must name server `v0.1.0-rc.9`,
+retain `pm-protocol/1.0.0`, and declare generated OpenAPI SHA-256
+`41dcb941227367b2097b4b16d8c43d0312bc9a3794e1fa96e7a2c89b77f37c63`.
+It must be signed, published, and independently verified before the server rc.9
 tag is created. No earlier tag or release may be moved, rewritten, or
-substituted for rc.8.
+substituted for rc.9.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

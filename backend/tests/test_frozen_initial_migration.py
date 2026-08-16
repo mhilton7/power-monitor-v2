@@ -497,6 +497,9 @@ def test_settings_revision_normalizes_email_adds_fields_and_downgrades_cleanly(
                     "show_on_dashboard",
                     "monitoring_enabled",
                 }.issubset({column["name"] for column in inspector.get_columns("devices")})
+                assert {"storage_bytes_total", "storage_bytes_free"}.issubset(
+                    {column["name"] for column in inspector.get_columns("device_heartbeats")}
+                )
                 assert {
                     "plan_classification",
                     "holiday_treatment",
@@ -539,6 +542,9 @@ def test_settings_revision_normalizes_email_adds_fields_and_downgrades_cleanly(
                 assert "candidate_complete" not in {
                     column["name"]
                     for column in inspector.get_columns("utility_bill_rate_extractions")
+                }
+                assert "storage_bytes_total" not in {
+                    column["name"] for column in inspector.get_columns("device_heartbeats")
                 }
         finally:
             engine.dispose()

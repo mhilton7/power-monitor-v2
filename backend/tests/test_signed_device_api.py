@@ -110,6 +110,8 @@ async def test_signed_heartbeat_reading_history_retry_and_replay(
                 "pzem_error_code": None,
             },
             "storage_status": "ok",
+            "storage_bytes_total": 31_914_983_424,
+            "storage_bytes_free": 31_913_934_848,
             "time_status": "trusted",
             "wifi_rssi": -55,
             "ip_address": "192.0.2.20",
@@ -200,6 +202,10 @@ async def test_signed_heartbeat_reading_history_retry_and_replay(
     home = await owner_client.get("/api/v1/home")
     assert home.status_code == 200
     assert home.json()["devices"][0]["measurement"]["active_power_w"] == "245.200"
+    devices = await owner_client.get("/api/v1/devices")
+    assert devices.status_code == 200
+    assert devices.json()["devices"][0]["storage_bytes_total"] == 31_914_983_424
+    assert devices.json()["devices"][0]["storage_bytes_free"] == 31_913_934_848
     history = await owner_client.get(
         "/api/v1/history",
         params={

@@ -316,6 +316,8 @@ class DeviceHeartbeat(Base):
     power_factor: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
     pzem_status: Mapped[str] = mapped_column(String(40), nullable=False)
     storage_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    storage_bytes_total: Mapped[int | None] = mapped_column(BigInteger)
+    storage_bytes_free: Mapped[int | None] = mapped_column(BigInteger)
     time_status: Mapped[str] = mapped_column(String(40), nullable=False)
     wifi_rssi: Mapped[int | None] = mapped_column(Integer)
     ip_address: Mapped[str | None] = mapped_column(String(45))

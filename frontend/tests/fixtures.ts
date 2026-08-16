@@ -37,7 +37,7 @@ export const home = {
 export const device = {
   id: 'device-main', home_id: '00000000-0000-0000-0000-000000000010', circuit_id: null, friendly_name: 'Main Panel Sensor', device_fingerprint: '8a34f119dd31', credential_fingerprint: 'a'.repeat(64), credential_key_version: 1, credential_rotation: null, firmware_version: 'v1.2.3', protocol: 'pm-protocol/1.0.0',
   location: 'Main electrical panel', notes: null, display_order: 0, include_in_aggregate: true, show_on_dashboard: true, monitoring_enabled: true,
-  pzem_variant: 'pzem004t-v4-classic-candidate', ct_rating_a: '100', measurement_scope: 'energy_only', heartbeat_at: '2026-08-13T17:32:10Z', wifi_rssi: -54, ip_address: '192.0.2.24', pzem_status: 'ok', storage_status: 'healthy',
+  pzem_variant: 'pzem004t-v4-classic-candidate', ct_rating_a: '100', measurement_scope: 'energy_only', heartbeat_at: '2026-08-13T17:32:10Z', wifi_rssi: -54, ip_address: '192.0.2.24', pzem_status: 'ok', storage_status: 'healthy', storage_bytes_total: 31_914_983_424, storage_bytes_free: 31_913_934_848,
   oldest_sequence: 100, newest_sequence: 2020, acknowledgement: 2017, backlog: 3, free_internal_heap: 208000, largest_internal_block: 98120,
   last_reboot_reason: 'software_update', last_command: { id: 'cmd-old', type: 'sync_now', state: 'succeeded', progress_percent: 100 },
 };
@@ -136,7 +136,7 @@ export const rateSourceStatus = {
 };
 
 export const systemHealth = {
-  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.8', protocol: 'pm-protocol/1.0.0', database: 'reachable',
+  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.9', protocol: 'pm-protocol/1.0.0', database: 'reachable',
   sensors: [{ device_id: 'device-main', state: 'online', heartbeat_age_seconds: 5, pzem_status: 'ok', storage_status: 'healthy', backlog: 3 }],
   open_alert_count: 1, last_rate_sync: { id: 'rate-run-old', state: 'review_required', event_code: 'RATE_SOURCE_SNAPSHOT_CAPTURED', completed_at: '2026-08-13T16:00:00Z' },
   backup: {}, restore_test: {}, physical_hardware_certification: 'pending',

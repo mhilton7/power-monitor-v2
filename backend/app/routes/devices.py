@@ -492,6 +492,8 @@ async def heartbeat(
             power_factor=measurement.power_factor,
             pzem_status=measurement.pzem_status,
             storage_status=payload.storage_status,
+            storage_bytes_total=payload.storage_bytes_total,
+            storage_bytes_free=payload.storage_bytes_free,
             time_status=payload.time_status,
             wifi_rssi=payload.wifi_rssi,
             ip_address=payload.ip_address,

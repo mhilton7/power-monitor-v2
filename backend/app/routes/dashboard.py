@@ -1072,6 +1072,8 @@ async def list_devices(
                     else "unavailable"
                 ),
                 "storage_status": heartbeat.storage_status if heartbeat else "unavailable",
+                "storage_bytes_total": heartbeat.storage_bytes_total if heartbeat else None,
+                "storage_bytes_free": heartbeat.storage_bytes_free if heartbeat else None,
                 "oldest_sequence": heartbeat.oldest_sequence if heartbeat else None,
                 "newest_sequence": heartbeat.newest_sequence if heartbeat else None,
                 "acknowledgement": device.contiguous_ack,

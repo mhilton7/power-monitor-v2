@@ -1,4 +1,4 @@
-# PowerMeter V2 v0.1.0-rc.8
+# PowerMeter V2 v0.1.0-rc.9
 
 PowerMeter V2 is a central, authenticated PZEM-004T monitoring system paired
 with the independent
@@ -8,30 +8,29 @@ Authenticated sensor evidence remains the only source of live measurements,
 History, energy, completeness, forecasts, and usage-based cost. Utility-bill
 PDFs remain rate-source documents only.
 
-This source file is the release-body input for candidate `v0.1.0-rc.8`. This
+This source file is the release-body input for candidate `v0.1.0-rc.9`. This
 source copy alone is not publication evidence. Installation is authorized only after the
 signed tagged workflow publishes the complete checksummed and attested asset
 set, digest-pinned YAML, public multi-architecture images, deployment evidence,
 and coordinated firmware release.
 
-## Why rc.8 follows public server rc.6
+## Why rc.9 follows public server rc.8
 
-Server [`v0.1.0-rc.6`](https://github.com/mhilton7/power-monitor-v2/releases/tag/v0.1.0-rc.6)
+Server [`v0.1.0-rc.8`](https://github.com/mhilton7/power-monitor-v2/releases/tag/v0.1.0-rc.8)
 completed its tagged workflow and remains a public, immutable, installable
-prerelease with its complete attached asset set. Rc.8 carries its SCE,
+prerelease with its complete attached asset set. Rc.9 carries its SCE,
 rate-only bill parsing, user/profile, home naming, sensor presentation, and
 per-user settings behavior forward unchanged.
 
-Rc.8 bounds authenticated heartbeat command responses to the ESP32 receive
-buffer, prevents the firmware's uint8 delivery attempt from overflowing, and
-terminalizes linked OTA deployments when delivery can no longer complete. The
-browser accepts exact decimal telemetry strings as finite nonnegative numbers
-while preserving missing values as null and measured zero as zero. Bill-rate
-extractions now accept their required `home_id` only when it matches the
-selected home. It retains `pm-protocol/1.0.0` and Alembic head
-`20260815_0012`; no migration or breaking sensor-contract change is introduced.
+Rc.9 provides the condensed dashboard with a verified non-overlapping live-power
+aggregate, adaptive W/kW presentation for each sensor, and coherent unavailable
+states. It persists authenticated microSD total/free bytes and displays them in
+the sensor drawer. Firmware uses ESP-IDF's supported FAT-volume information API,
+so a blank card is no longer falsely treated as full. It retains
+`pm-protocol/1.0.0` and advances Alembic head to `20260816_0013` with two
+nullable, pair-constrained capacity-evidence columns.
 Its generated OpenAPI SHA-256 is
-`b7f8726f73633bd577da2cd3a9bfb7a2104615dafb44681564cd81fce8c8148f`.
+`41dcb941227367b2097b4b16d8c43d0312bc9a3794e1fa96e7a2c89b77f37c63`.
 
 ### Historical rc.4 recovery carried by rc.5
 
@@ -129,7 +128,7 @@ protocol, or migration revision changed for this repair.
 
 ### Ingestion and database integrity
 
-- Alembic head `20260815_0012` extends the frozen chain without rewriting an
+- Alembic head `20260816_0013` extends the frozen chain without rewriting an
   applied migration. Revision 0008 enforces
   `sample_count <= expected_sample_count` and prevents authenticated raw
   readings from overlapping permanent-loss evidence or two loss ranges from
@@ -145,6 +144,9 @@ protocol, or migration revision changed for this repair.
   safe legacy home labels, and adds per-user preferences, sensor presentation
   settings, and typed bill-rate evidence fields without changing home, device,
   reading, rate-version, or audit identities.
+  Revision 0013 adds nullable authenticated microSD total/free byte evidence
+  with a database constraint requiring a coherent pair and preserving all
+  existing heartbeat rows.
 - The migrations take write-blocking table locks, preflight existing evidence,
   and fail closed before installing PostgreSQL guards. Revision 0011 also locks
   its rate workflow tables across preflight and guard installation. Conflicting
@@ -165,7 +167,7 @@ protocol, or migration revision changed for this repair.
   are not part of the normal path.
 - Operators create exactly nine Generic/POSIX child ZFS datasets below
   `/mnt/Apps/PowerMeterV2`. The former `bill-rate-source-artifacts` dataset is
-  not mounted by rc.5, rc.6, or rc.8; an existing rc.3 dataset is left untouched and should
+  not mounted by rc.5, rc.6, rc.8, or rc.9; an existing rc.3 dataset is left untouched and should
   remain unshared until an operator chooses a separately reviewed cleanup.
 - TLS verification remains strict for `power-monitor.home.arpa`, including
   hostname, key match, current validity, and at least seven days of remaining
@@ -186,11 +188,11 @@ protocol, or migration revision changed for this repair.
 ## Upgrade and rollback boundary
 
 Back up and verify the database, perform an isolated restore check, and take a
-recursive ZFS snapshot before installing rc.8. Keep all existing application
+recursive ZFS snapshot before installing rc.9. Keep all existing application
 secrets, database credentials, the backup encryption key, TLS material, and
 datasets. Do not recreate storage or rotate secrets during this upgrade.
 
-The migration chain through `20260815_0012` is intentionally fail-closed. The
+The migration chain through `20260816_0013` is intentionally fail-closed. The
 0008 preflight blocks an overlap in immutable reading/loss evidence or a
 historical retained-bill reference for review. Revision 0010 requires the exact
 legacy raw-reading immutability guard before changing trigger ordering.
@@ -200,8 +202,8 @@ write locks until its guards are installed. Do not bypass a guard, edit an
 applied migration, or delete evidence merely to continue.
 
 The release migration report proves only the forward upgrade from the latest
-lower same-major public release. It does not prove that rc.6 binaries can use
-state touched by rc.8. Application-only rollback is not authorized. A
+lower same-major public release. It does not prove that rc.8 binaries can use
+state touched by rc.9. Application-only rollback is not authorized. A
 rollback requires a separately validated restore or clone of the matching
 pre-upgrade snapshot or verified backup, paired with the exact older release
 assets. GitHub-hosted smoke records rollback as
@@ -209,26 +211,26 @@ assets. GitHub-hosted smoke records rollback as
 
 ## Release contents and firmware pairing
 
-A successfully published rc.8 candidate includes:
+A successfully published rc.9 candidate includes:
 
 - four immutable multi-architecture GHCR images referenced by registry digest;
-- `power-monitor-v2-v0.1.0-rc.8.yaml` and `release-manifest.json`;
+- `power-monitor-v2-v0.1.0-rc.9.yaml` and `release-manifest.json`;
 - the Windows SMB staging helper and auditable initializer source;
 - checksums, strict attestations, SBOMs, vulnerability results, dependency and
   test reports, migration evidence, and deployment-smoke evidence;
 - installation, secrets/TLS, dataset/ACL, backup/restore, upgrade, and rollback
   instructions; and
-- an exact coordinated public firmware `v0.1.0-rc.8` release whose server
+- an exact coordinated public firmware `v0.1.0-rc.9` release whose server
   contract declares OpenAPI SHA-256
-  `b7f8726f73633bd577da2cd3a9bfb7a2104615dafb44681564cd81fce8c8148f`.
+  `41dcb941227367b2097b4b16d8c43d0312bc9a3794e1fa96e7a2c89b77f37c63`.
 
 The signed server rc.2 tag and failed release run `31866197054` remain
 immutable prepublication evidence. There is no server rc.2 GitHub Release.
-Public server rc.6 remains installable with its own attached eight-service
-assets and instructions and is the migration predecessor for rc.8. Firmware
-rc.8 must be published and verified with the exact server rc.8 contract before
-a server rc.8 tag is created. No historical tag or release is modified or
-relabeled by rc.8; rc.7 remains an unpublished local firmware candidate.
+Public server rc.8 remains installable with its own attached eight-service
+assets and instructions and is the migration predecessor for rc.9. Firmware
+rc.9 must be published and verified with the exact server rc.9 contract before
+a server rc.9 tag is created. No historical tag or release is modified or
+relabeled by rc.9; rc.7 remains an unpublished local firmware candidate.
 
 This remains a prerelease candidate. Hardware status is honestly `pending`.
 Marked-unit electrical identity, physical TLS/HMAC behavior, OTA installation

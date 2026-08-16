@@ -1,6 +1,6 @@
 # Roll back PowerMeter V2 on TrueNAS
 
-> This UI-oriented source document is prepared for v0.1.0-rc.8. Public rc.6, rc.5,
+> This UI-oriented source document is prepared for v0.1.0-rc.9. Public rc.8, rc.6, rc.5,
 > and immutable older releases retain their own attached instructions. Never
 > combine asset sets.
 
@@ -21,18 +21,18 @@ read a database touched by the new release.
 
 ## Restored rollback only
 
-A direct application-only rollback from v0.1.0-rc.8 to public v0.1.0-rc.6 is
-unauthorized without a separate recovery test. Both declare Alembic head
-`20260815_0012`, but a forward-migration gate still cannot prove that older
-binaries correctly handle state touched by rc.8; `not_exercised_github_hosted_smoke`
+A direct application-only rollback from v0.1.0-rc.9 to public v0.1.0-rc.8 is
+unauthorized without a separate recovery test. Rc.9 advances Alembic head to
+`20260816_0013`, and a forward-migration gate cannot prove that older
+binaries correctly handle state touched by rc.9; `not_exercised_github_hosted_smoke`
 is not rollback evidence. The immutable server rc.2 and rc.4 tags have no
 GitHub Releases and are not predecessors.
 
 Historical rc.3 evidence proved only forward rc.1-to-rc.3 upgrade; it does not
-authorize rc.3-to-rc.1, rc.5-to-rc.3, rc.6-to-rc.5, or rc.8-to-rc.6 rollback.
+authorize rc.3-to-rc.1, rc.5-to-rc.3, rc.6-to-rc.5, rc.8-to-rc.6, or rc.9-to-rc.8 rollback.
 
 Public rc.3 has a seven-service YAML and no `initialize` service. Its attached
-instructions use the rc.3 host-preparation contract. The rc.5/rc.6/rc.8 Windows/SMB
+instructions use the rc.3 host-preparation contract. The rc.5/rc.6/rc.8/rc.9 Windows/SMB
 initializer procedure cannot be combined with rc.3 assets and does not make an
 rc.5-to-rc.3 rollback shell-free. Server rc.4 never became an installation
 authority: its release assembly was skipped after deployment smoke failed.

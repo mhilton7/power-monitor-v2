@@ -52,6 +52,8 @@ class HeartbeatRequest(BaseModel):
     firmware_version: str = Field(min_length=1, max_length=80)
     measurement: ElectricalMeasurement
     storage_status: Literal["ok", "missing", "read_only", "full", "corrupt", "degraded"]
+    storage_bytes_total: int | None = Field(default=None, gt=0)
+    storage_bytes_free: int | None = Field(default=None, ge=0)
     time_status: Literal["trusted", "untrusted", "stepped", "disputed"]
     wifi_rssi: int | None = Field(default=None, ge=-127, le=0)
     ip_address: str | None = Field(default=None, max_length=45)
@@ -65,6 +67,15 @@ class HeartbeatRequest(BaseModel):
     reboot_reason: str | None = Field(default=None, max_length=80)
     health_flags: list[str] = Field(default_factory=list, max_length=32)
     command_results: list[CommandResult] = Field(default_factory=list, max_length=16)
+
+    @model_validator(mode="after")
+    def storage_capacity_is_coherent(self) -> HeartbeatRequest:
+        if self.storage_bytes_total is None or self.storage_bytes_free is None:
+            if self.storage_bytes_total is not None or self.storage_bytes_free is not None:
+                raise ValueError("microSD total and free bytes must be reported together")
+        elif self.storage_bytes_total == 0 or self.storage_bytes_free > self.storage_bytes_total:
+            raise ValueError("microSD capacity must be positive and free bytes cannot exceed total")
+        return self
 
 
 class DurableReading(BaseModel):

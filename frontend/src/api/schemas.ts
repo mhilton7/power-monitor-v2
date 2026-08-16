@@ -507,6 +507,8 @@ export const deviceDetailSchema = z.object({
   ip_address: z.string().nullable(),
   pzem_status: z.string(),
   storage_status: z.string(),
+  storage_bytes_total: z.number().int().positive().nullable(),
+  storage_bytes_free: z.number().int().nonnegative().nullable(),
   oldest_sequence: z.number().int().nonnegative().nullable(),
   newest_sequence: z.number().int().nonnegative().nullable(),
   acknowledgement: z.number().int().nonnegative(),
