@@ -3,10 +3,10 @@
 This summary describes post-rc.3 source repairs. Public `v0.1.0-rc.3` is
 immutable and does not contain these changes. The repairs reached the valid
 signed server rc.4 tag, but deterministic deployment smoke failed and release
-assembly skipped, leaving no server rc.4 Release or YAML. Server rc.5 then
+assembly skipped, leaving no server rc.4 Release or YAML. Server rc.6 later
 published the repaired asset set and remains public and installable. Hardware
 execution confirmed that firmware rc.1 through rc.5 crash in the main stack
-before provisioning; coordinated rc.6 hotfix publication is pending. The
+before provisioning; coordinated rc.8 publication is pending. The
 detailed repair narrative below preserves the rc.5 prepublication boundary.
 
 ## User-visible fixes

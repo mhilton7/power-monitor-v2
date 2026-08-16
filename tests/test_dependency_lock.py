@@ -72,8 +72,8 @@ def test_release_version_metadata_is_consistent() -> None:
     package = json.loads((ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
     package_lock = json.loads((ROOT / "frontend" / "package-lock.json").read_text(encoding="utf-8"))
 
-    assert VERSION == "0.1.0-rc.6"
-    assert project["version"] == "0.1.0rc6"
+    assert VERSION == "0.1.0-rc.8"
+    assert project["version"] == "0.1.0rc8"
     assert package["version"] == VERSION
     assert package_lock["version"] == VERSION
     assert package_lock["packages"][""]["version"] == VERSION
@@ -92,5 +92,5 @@ def test_release_version_metadata_is_consistent() -> None:
         hashlib.sha256(
             (ROOT / "shared/openapi/power-meter-v2.openapi.json").read_bytes()
         ).hexdigest()
-        == "b1b0728eb7b00038053ecf6d3b2b302a82683d100086399b7e888dc0359b8ac9"
+        == "b7f8726f73633bd577da2cd3a9bfb7a2104615dafb44681564cd81fce8c8148f"
     )

@@ -8,14 +8,15 @@ Repository visibility is **public**, matching the verified public reference repo
 
 Server tags use semantic `vMAJOR.MINOR.PATCH` (prerelease suffix allowed). Breaking device changes require a coordinated protocol bump in both repositories; otherwise the manifest remains `pm-protocol/1.0.0` and names compatible firmware.
 
-`v0.1.0-rc.5` is the current immutable public server installation authority and
-the migration predecessor for rc.6. The valid signed server `v0.1.0-rc.4` tag
+`v0.1.0-rc.6` is the current immutable public server installation authority and
+the migration predecessor for rc.8. The valid signed server `v0.1.0-rc.4` tag
 is historical failed prepublication evidence, not a Release. Hardware execution
 confirmed that firmware rc.1 through rc.5 crash in the main stack before
-provisioning. `v0.1.0-rc.6` is the coordinated hotfix identity; the server side
-retains `pm-protocol/1.0.0` while extending the additive migration chain to
-`20260815_0012` for rate-only parsing and scoped settings behavior.
-It may be tagged only after the exact fixed firmware rc.6 release is public and
+provisioning. Public `v0.1.0-rc.6` delivered that coordinated hotfix and the
+additive migration chain through `20260815_0012`. Candidate `v0.1.0-rc.8`
+retains `pm-protocol/1.0.0` and the same Alembic head while adding bounded OTA
+command delivery and strict browser response normalization/home isolation.
+It may be tagged only after the exact firmware rc.8 release is public and
 verified, and it may be published only after every automated gate passes.
 Stable publication remains blocked until physical hardware, TLS,
 OTA-install/rollback, and soak certification from the actual marked unit
@@ -37,7 +38,7 @@ Missing, skipped without an approved reason, stale, or failed evidence blocks st
 
 ## Current candidate state
 
-`v0.1.0-rc.5` remains the immutable public server release and is installable
+`v0.1.0-rc.6` remains the immutable public server release and is installable
 with its own attached eight-service assets and instructions. The signed server
 `v0.1.0-rc.2` tag is immutable failed prepublication evidence, not an
 installation authority. Tagged run
@@ -75,15 +76,18 @@ Compose dependency traversal and recording a fixed allowlisted failure
 assertion. Its generated OpenAPI SHA-256 is
 `66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591`.
 
-Candidate rc.6 includes the firmware-coordination identity plus the reviewed
-SCE, bill-rate, user, home-name, sensor, and per-user settings repairs. The
-generated rc.6 OpenAPI SHA-256 is
-`b1b0728eb7b00038053ecf6d3b2b302a82683d100086399b7e888dc0359b8ac9`;
-the shared protocol remains `pm-protocol/1.0.0` and Alembic head is
-`20260815_0012`. Firmware rc.1 through rc.5 are confirmed to crash in the main
-stack before provisioning, so a coordinated fixed firmware rc.6 is required.
+Public rc.6 includes the firmware-coordination identity plus the reviewed SCE,
+bill-rate, user, home-name, sensor, and per-user settings repairs. Candidate
+rc.8 bounds authenticated heartbeat command responses to the ESP32 receive
+buffer, prevents delivery-attempt overflow, terminalizes undeliverable OTA
+deployments, normalizes exact decimal telemetry without converting missing
+evidence to zero, and validates bill extractions against the selected home. The
+generated rc.8 OpenAPI SHA-256 is
+`b7f8726f73633bd577da2cd3a9bfb7a2104615dafb44681564cd81fce8c8148f`;
+the shared protocol remains `pm-protocol/1.0.0` and Alembic head remains
+`20260815_0012`. Firmware rc.8 is the coordinated response-authentication fix.
 The checked-in YAML retains `UNPUBLISHED_*` sentinels until its tagged workflow
-supplies exact registry digests. Rc.6 must pass clean
+supplies exact registry digests. Rc.8 must pass clean
 dependency/backend/PostgreSQL gates, security scans, public package
 verification, first-run plus idempotent initializer smoke, checksums, and
 attestations. Its explicit migration chain extends to `20260815_0012`; the
@@ -99,8 +103,8 @@ published non-draft same-major public Release other than the current tag, then
 requires that selected tag to be semantically older and to have verified
 signed-tag ancestry. It fails closed if publication-date ordering selects a
 same-major tag that is not older; it does not search past it for a
-`latest lower same-major non-draft public release`. For rc.6, the public metadata
-therefore selects public rc.5; failed rc.2 and non-released rc.4 are never
+`latest lower same-major non-draft public release`. For rc.8, the public metadata
+therefore selects public rc.6; failed rc.2 and non-released rc.4 are never
 predecessors.
 Historical rc.3 evidence proved only forward rc.1-to-rc.3 upgrade. Rollback
 remains separately unproven and its
@@ -123,7 +127,7 @@ The tagged workflow uses `GITHUB_TOKEN` with job-minimal permissions to build AP
 
 `scripts/render_truenas_release.py` accepts only semantic version, full revision, and four syntactically valid nonzero digests. It replaces every fail-closed sentinel, verifies exactly eight services, exact initializer host mounts/capabilities/no-network gating, runtime secret-directory isolation, digest pinning, network/port/hardening constraints, and emits `power-monitor-v2-<version>.yaml` plus `release-manifest.json`. `scripts/verify_release_artifacts.py` verifies checksum and invariants.
 
-Release assets include manifest, digest-pinned YAML, SBOMs/attestations, test/security/migration reports, checksums, installation/upgrade/rollback guides, the tracked Windows SMB staging helper, the auditable initializer source embedded in the API image, and release notes. The GitHub Release cross-links the compatible firmware release. The eight-service/no-shell model is already public in rc.5; coordinated rc.6 must publish under a new immutable tag without rewriting rc.5 or any earlier release.
+Release assets include manifest, digest-pinned YAML, SBOMs/attestations, test/security/migration reports, checksums, installation/upgrade/rollback guides, the tracked Windows SMB staging helper, the auditable initializer source embedded in the API image, and release notes. The GitHub Release cross-links the compatible firmware release. The eight-service/no-shell model is already public in rc.6; coordinated rc.8 must publish under a new immutable tag without rewriting rc.6 or any earlier release.
 
 ## Stable prohibition and promotion
 

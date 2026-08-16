@@ -7,8 +7,9 @@ UI, first-boot, backup/restore, upgrade, and rollback sequence. Each release
 copies those operator files, the Windows SMB staging helper, and the auditable
 one-shot initializer source beside its generated YAML. The no-shell initializer
 model began with the complete signed v0.1.0-rc.5 release asset set; that public
-server release remains installable with its own attached files. The current
-source guide is prepared for coordinated rc.6 and must not be combined with
+server release remains installable with its own attached files. Public rc.6 is
+also immutable and installable with its own attached files. The current source
+guide is prepared for coordinated rc.8 and must not be combined with rc.6,
 rc.5, rc.3, or any other release. The signed server rc.4 tag has no GitHub
 Release or YAML and is not an installation source.
 

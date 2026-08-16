@@ -24,7 +24,7 @@ actual registry digests after push.
 docker build --file backup/Dockerfile --tag pm-backup:test .
 python scripts/render_truenas_release.py --template deploy/truenas/power-monitor-v2.yaml `
   --output release/power-monitor-v2-test.yaml --manifest release/release-manifest-test.json `
-  --version 0.1.0-rc.6 --revision 0123456789abcdef0123456789abcdef01234567 `
+  --version 0.1.0-rc.8 --revision 0123456789abcdef0123456789abcdef01234567 `
   --api-digest sha256:<published-api-digest> `
   --frontend-digest sha256:<published-frontend-digest> `
   --gateway-digest sha256:<published-gateway-digest> `
@@ -33,7 +33,7 @@ docker compose -f release/power-monitor-v2-test.yaml config --quiet
 python scripts/verify_release_artifacts.py --manifest release/release-manifest-test.json
 ```
 
-The rc.6 value above is a local render example, not a tag or
+The rc.8 value above is a local render example, not a tag or
 publication claim. The checked-in template cannot become installable until a
 new coordinated release supplies real registry digests and passes every gate.
 
@@ -228,17 +228,17 @@ certification.
 
 ### Gates that remain closed
 
-- Signed public server/firmware rc.1, rc.3, and rc.5 releases, plus signed public
-  firmware rc.2 and rc.4, are historical evidence. The signed server rc.2 tag's run
+- Signed public server/firmware rc.1, rc.3, rc.5, and rc.6 releases, plus signed
+  public firmware rc.2 and rc.4, are historical evidence. The signed server rc.2 tag's run
   `31866197054` failed the cross-repository OpenAPI-hash check before server
   images or release assets were published.
-- Public rc.1/rc.3/rc.5 GHCR digests, attestations, generated TrueNAS YAML, and
+- Public rc.1/rc.3/rc.5/rc.6 GHCR digests, attestations, generated TrueNAS YAML, and
   release smokes are version-specific historical evidence. There is no server
   rc.2 image set or YAML. Server rc.4 published images but no Release or YAML
   after deployment smoke failed; those images are not an installation
-  authority. Public server rc.5 remains installable with its attached assets,
-  but hardware execution confirms firmware rc.1 through rc.5 crash in the main
-  stack before provisioning. The rc.6 coordinated hotfix source remains
+  authority. Public server rc.6 remains installable with its attached assets.
+  Hardware execution confirms firmware rc.1 through rc.5 crash in the main
+  stack before provisioning. The rc.8 coordinated source remains
   unpublished and the checked-in template correctly retains `UNPUBLISHED_*`
   sentinels pending its own coordinated tag.
 - The target-TrueNAS clean install, forward upgrade, restored rollback,

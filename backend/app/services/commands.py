@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import orjson
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
+from ..constants import MAX_COMMAND_DELIVERY_ATTEMPT
 from ..errors import IntegrityConflict, NotFound
 from ..models import (
     AuditEvent,
@@ -96,6 +99,43 @@ def _invalidate_rotation_credential(credential: DeviceCredential, now: datetime)
     credential.encrypted_secret = secrets.token_bytes(len(credential.encrypted_secret))
     credential.state = "revoked"
     credential.revoked_at = now
+
+
+async def _terminalize_linked_ota_deployment(
+    session: AsyncSession,
+    command: DeviceCommand,
+    *,
+    now: datetime,
+    result_code: str,
+    evidence: Mapping[str, str | int | bool | None] | None = None,
+) -> None:
+    """Fail the deployment when its delivery command can no longer complete."""
+
+    if command.command_type != "ota_install":
+        return
+    deployment_id = command.payload.get("deployment_id")
+    if not isinstance(deployment_id, str):
+        return
+    deployment = await session.scalar(
+        select(FirmwareDeployment).where(FirmwareDeployment.id == deployment_id).with_for_update()
+    )
+    if deployment is None or deployment.state in {
+        "succeeded",
+        "failed",
+        "rolled_back",
+        "cancelled",
+    }:
+        return
+    deployment.state = "failed"
+    deployment.completed_at = now
+    deployment.evidence = {
+        **deployment.evidence,
+        "server_result_code": result_code,
+        "command_id": command.id,
+        "command_state": command.state,
+        "delivery_attempt": command.attempt,
+        **(evidence or {}),
+    }
 
 
 async def expire_rotation_credentials(session: AsyncSession, *, now: datetime | None = None) -> int:
@@ -302,6 +342,8 @@ async def deliver_commands(
     limit: int = 4,
     *,
     settings: Settings | None = None,
+    response_byte_budget: int | None = None,
+    maximum_single_envelope_bytes: int | None = None,
 ) -> list[CommandEnvelope]:
     now = datetime.now(UTC)
     # This session intentionally disables autoflush. Persist authenticated result transitions
@@ -311,17 +353,31 @@ async def deliver_commands(
     await session.flush()
     expired = (
         await session.scalars(
-            select(DeviceCommand).where(
+            select(DeviceCommand)
+            .where(
                 DeviceCommand.device_id == device_id,
                 DeviceCommand.state.in_(("queued", "delivered")),
                 DeviceCommand.expires_at <= now,
             )
+            # Keep the same command-then-deployment lock order used by result
+            # application before terminalizing a linked OTA deployment.
+            .with_for_update(skip_locked=True)
         )
     ).all()
     for command in expired:
         command.state = "expired"
+        command.last_result = {
+            "result_code": "COMMAND_EXPIRED",
+            "evidence": {"delivery_attempt": command.attempt},
+        }
         if command.prepare_token_hash is not None:
             _redact_prepare_token(command, "[expired]")
+        await _terminalize_linked_ota_deployment(
+            session,
+            command,
+            now=now,
+            result_code="COMMAND_EXPIRED",
+        )
     commands = (
         await session.scalars(
             select(DeviceCommand)
@@ -337,6 +393,7 @@ async def deliver_commands(
         )
     ).all()
     envelopes: list[CommandEnvelope] = []
+    serialized_bytes = 0
     for command in commands:
         delivered_payload = command.payload
         if command.command_type == "rotate_device_credentials":
@@ -376,23 +433,70 @@ async def deliver_commands(
                     }
                 finally:
                     candidate_secret[:] = b"\0" * len(candidate_secret)
-        command.attempt += 1
+        if command.attempt >= MAX_COMMAND_DELIVERY_ATTEMPT:
+            command.state = "failed"
+            command.last_result = {
+                "result_code": "DELIVERY_ATTEMPTS_EXHAUSTED",
+                "evidence": {"delivery_attempt": command.attempt},
+            }
+            await _terminalize_linked_ota_deployment(
+                session,
+                command,
+                now=now,
+                result_code="DELIVERY_ATTEMPTS_EXHAUSTED",
+            )
+            continue
+        next_attempt = command.attempt + 1
+        envelope = CommandEnvelope(
+            command_id=command.id,
+            command_type=command.command_type,
+            not_before=command.not_before,
+            expires_at=command.expires_at,
+            attempt=next_attempt,
+            idempotency_key=command.idempotency_key,
+            required_firmware_capability=command.required_firmware_capability,
+            payload=delivered_payload,
+        )
+        # Match the response serializer exactly. Replacing `commands:[]` with
+        # one envelope increases the response by exactly the serialized
+        # envelope length; each later envelope adds one comma byte as well.
+        envelope_bytes = len(
+            orjson.dumps(envelope.model_dump(mode="json"), option=orjson.OPT_SORT_KEYS)
+        )
+        if (
+            maximum_single_envelope_bytes is not None
+            and envelope_bytes > maximum_single_envelope_bytes
+        ):
+            size_evidence = {
+                "serialized_envelope_bytes": envelope_bytes,
+                "maximum_envelope_bytes": maximum_single_envelope_bytes,
+            }
+            command.state = "failed"
+            command.last_result = {
+                "result_code": "DELIVERY_RESPONSE_TOO_LARGE",
+                "evidence": size_evidence,
+            }
+            await _terminalize_linked_ota_deployment(
+                session,
+                command,
+                now=now,
+                result_code="DELIVERY_RESPONSE_TOO_LARGE",
+                evidence=size_evidence,
+            )
+            continue
+        incremental_bytes = envelope_bytes + (1 if envelopes else 0)
+        if (
+            response_byte_budget is not None
+            and serialized_bytes + incremental_bytes > response_byte_budget
+        ):
+            continue
+        command.attempt = next_attempt
         command.state = "delivered"
         session.add(
             DeviceCommandAttempt(command_id=command.id, attempt=command.attempt, delivered_at=now)
         )
-        envelopes.append(
-            CommandEnvelope(
-                command_id=command.id,
-                command_type=command.command_type,
-                not_before=command.not_before,
-                expires_at=command.expires_at,
-                attempt=command.attempt,
-                idempotency_key=command.idempotency_key,
-                required_firmware_capability=command.required_firmware_capability,
-                payload=delivered_payload,
-            )
-        )
+        envelopes.append(envelope)
+        serialized_bytes += incremental_bytes
     return envelopes
 
 
@@ -413,6 +517,26 @@ async def apply_command_results(
             raise NotFound("command result does not belong to this device")
         if command.state in TERMINAL_STATES:
             if command.state != result.state:
+                server_result_code = (command.last_result or {}).get("result_code")
+                if command.command_type == "ota_install" and server_result_code in {
+                    "COMMAND_EXPIRED",
+                    "DELIVERY_ATTEMPTS_EXHAUSTED",
+                    "DELIVERY_RESPONSE_TOO_LARGE",
+                }:
+                    # Server expiry/failure is authoritative. A device that
+                    # parsed the final delivery may still report its local
+                    # outcome on the next heartbeat; accept that heartbeat
+                    # without reviving the terminal server decision.
+                    attempt = await session.scalar(
+                        select(DeviceCommandAttempt).where(
+                            DeviceCommandAttempt.command_id == command.id,
+                            DeviceCommandAttempt.attempt == command.attempt,
+                        )
+                    )
+                    if attempt is not None:
+                        attempt.result_at = datetime.now(UTC)
+                        attempt.result_code = f"IGNORED_AFTER_{command.state.upper()}"
+                    continue
                 raise IntegrityConflict("terminal command result cannot change")
             continue
         if result.progress_percent < command.progress_percent:

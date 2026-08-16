@@ -74,14 +74,17 @@ The matching server rc.5 release completed publication and remains public and
 installable with its attached assets.
 
 Hardware execution subsequently confirmed that firmware rc.1 through rc.5
-crash in the main stack before provisioning. These signed releases remain
-immutable evidence, but none is a working provisioning path. Candidate firmware
-rc.6 is the coordinated hotfix. It must name server `v0.1.0-rc.6`, retain
-`pm-protocol/1.0.0`, and declare generated OpenAPI SHA-256
-`b1b0728eb7b00038053ecf6d3b2b302a82683d100086399b7e888dc0359b8ac9`.
-It must be signed, published, and independently verified before the server rc.6
-tag is created. No rc.1 through rc.5 tag or release may be moved, rewritten, or
-substituted for rc.6.
+crash in the main stack before provisioning. Those signed releases remain
+immutable evidence. Coordinated public firmware/server rc.6 delivered the
+main-stack hotfix and remains an immutable installation authority.
+
+Candidate firmware rc.8 carries the bounded response-header authentication fix
+identified by the unpublished local rc.7 OTA attempt. It must name server
+`v0.1.0-rc.8`, retain `pm-protocol/1.0.0`, and declare generated OpenAPI
+SHA-256 `b7f8726f73633bd577da2cd3a9bfb7a2104615dafb44681564cd81fce8c8148f`.
+It must be signed, published, and independently verified before the server rc.8
+tag is created. No earlier tag or release may be moved, rewritten, or
+substituted for rc.8.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

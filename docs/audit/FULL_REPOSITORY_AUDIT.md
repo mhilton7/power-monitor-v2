@@ -1,9 +1,9 @@
 # Full repository audit
 
-> **Post-audit release update:** Server `v0.1.0-rc.5` subsequently completed
+> **Post-audit release update:** Server `v0.1.0-rc.6` subsequently completed
 > publication and remains public and installable with its attached assets.
 > Hardware execution confirmed that firmware rc.1 through rc.5 crash in the
-> main stack before provisioning. Coordinated rc.6 hotfix publication is
+> main stack before provisioning. Coordinated rc.8 publication is
 > pending. The report below preserves the evidence boundary at audit time.
 
 ## Audit identity and evidence boundary

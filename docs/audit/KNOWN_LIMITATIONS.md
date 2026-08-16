@@ -1,10 +1,10 @@
 # Known limitations
 
 This list preserves the rc.5-preparation snapshot from the 2026-08-15 audit.
-Server rc.5 subsequently completed publication and remains public and
+Server rc.6 subsequently completed publication and remains public and
 installable with its attached assets. Hardware execution confirmed that
 firmware rc.1 through rc.5 crash in the main stack before provisioning;
-coordinated rc.6 hotfix publication is pending. Historical evidence is never
+coordinated rc.8 publication is pending. Historical evidence is never
 relabeled as proof for a later candidate.
 
 ## 1. The repaired checkout is not an installable release

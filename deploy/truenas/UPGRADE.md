@@ -1,7 +1,7 @@
 # Upgrade PowerMeter V2 on TrueNAS
 
-> This UI-only flow is prepared for the complete signed v0.1.0-rc.6 release
-> asset set. Public rc.5 and immutable rc.3 assets retain their own attached
+> This UI-only flow is prepared for the complete signed v0.1.0-rc.8 release
+> asset set. Public rc.6, rc.5, and immutable rc.3 assets retain their attached
 > procedures. Never mix release asset sets.
 
 Upgrade by replacing the complete verified YAML in the TrueNAS app editor.
@@ -23,8 +23,9 @@ Never edit one image tag/digest, accept a generic image-update suggestion, use
    `Apps/PowerMeterV2` named with the old version and UTC time. A snapshot
    supplements rather than replaces the verified logical backup.
 
-The coordinated rc.6 migration chain extends rc.5 additively to Alembic head
-`20260815_0012` and is fail-closed. The 0008 preflight can
+The coordinated rc.8 migration chain retains public rc.6 Alembic head
+`20260815_0012`; no new database revision is introduced. Upgrades from rc.5 or
+earlier still traverse the additive fail-closed revisions. The 0008 preflight can
 stop when existing immutable ingestion evidence conflicts, including a raw
 reading whose sequence was also recorded as permanent loss or overlapping
 permanent-loss ranges for one device. It never deletes, merges, or rewrites
@@ -32,7 +33,7 @@ that evidence automatically. It also stops if a legacy database row references
 a retained original bill document; the new runtime forbids all persistent
 original-bill storage, including encrypted storage, and does not silently
 delete an operator's legacy file. Complete and verify the backup and snapshot
-above before applying rc.6. If either preflight stops, leave the prior datasets
+above before applying rc.8. If either preflight stops, leave the prior datasets
 intact and preserve the exact failure for reviewed recovery; do not edit
 evidence or delete a referenced file merely to make the migration pass.
 
@@ -49,7 +50,7 @@ release explicitly requires coordinated new inputs, its release-specific guide
 must provide a reviewed UI/SMB procedure and compatibility evidence.
 
 An rc.3 installation can also have a legacy `bill-rate-source-artifacts`
-dataset. Rc.5 and rc.6 do not mount or write it, and the upgrade never deletes it.
+dataset. Rc.5, rc.6, and rc.8 do not mount or write it, and the upgrade never deletes it.
 Leave it unmounted and unshared; do not export or decrypt its contents. Its
 separate retention or deletion requires an explicit operator decision outside
 this upgrade rather than an automated migration.
