@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from backend.app.main import session_factory
 from backend.app.models import (
+    AuditEvent,
     Circuit,
     Device,
     DeviceHeartbeat,
@@ -45,6 +46,72 @@ SCOPED_GET_PATHS = (
     "/api/v1/circuits",
     "/api/v1/settings/home-utility",
 )
+
+
+@pytest.mark.asyncio
+async def test_device_presentation_and_monitoring_settings_are_scoped_and_audited(
+    owner_client: AsyncClient,
+) -> None:
+    _owner_id, home_id = await _owner_scope()
+    async with session_factory() as session:
+        device = Device(
+            home_id=home_id,
+            friendly_name="Panel sensor",
+            pzem_variant="pzem004t-v4-classic-candidate",
+            ct_rating_a=Decimal("100"),
+        )
+        session.add(device)
+        await session.commit()
+        device_id = device.id
+
+    response = await owner_client.patch(
+        f"/api/v1/devices/{device_id}",
+        json={
+            "friendly_name": "  Garage   panel  ",
+            "location": "  North   wall  ",
+            "notes": "Verified one-CT sensor",
+            "display_order": 4,
+            "include_in_aggregate": False,
+            "show_on_dashboard": False,
+            "monitoring_enabled": False,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "id": device_id,
+        "friendly_name": "Garage panel",
+        "measurement_scope": "energy_only",
+        "location": "North wall",
+        "notes": "Verified one-CT sensor",
+        "display_order": 4,
+        "include_in_aggregate": False,
+        "show_on_dashboard": False,
+        "monitoring_enabled": False,
+    }
+
+    listed = await owner_client.get("/api/v1/devices", params={"home_id": home_id})
+    assert listed.status_code == 200, listed.text
+    item = next(row for row in listed.json()["devices"] if row["id"] == device_id)
+    assert item["friendly_name"] == "Garage panel"
+    assert item["location"] == "North wall"
+    assert item["display_order"] == 4
+    assert item["monitoring_enabled"] is False
+    assert item["pzem_status"] == "monitoring_disabled"
+
+    dashboard = await owner_client.get("/api/v1/home", params={"home_id": home_id})
+    assert dashboard.status_code == 200, dashboard.text
+    assert all(row["id"] != device_id for row in dashboard.json()["devices"])
+
+    async with session_factory() as session:
+        audit = await session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.target_id == device_id,
+                AuditEvent.event_code == "DEVICE_SETTINGS_UPDATED",
+            )
+        )
+        assert audit is not None
+        assert audit.correlation_id
+        assert audit.details["include_in_aggregate"] is False
 
 
 def _feature_params(path: str, home_id: str | None = None) -> dict[str, str]:
@@ -106,10 +173,25 @@ async def test_home_utility_auto_resolves_exactly_one_scope_for_get_and_patch(
     assert fetched.status_code == 200, fetched.text
     assert fetched.json()["home"]["id"] == home_id
 
-    updated = await owner_client.patch("/api/v1/settings/home-utility", json={"billing_day": 7})
+    updated = await owner_client.patch(
+        "/api/v1/settings/home-utility",
+        json={"billing_day": 7, "home_name": "  Main   House  "},
+    )
     assert updated.status_code == 200, updated.text
     assert updated.json()["home"]["id"] == home_id
+    assert updated.json()["home"]["name"] == "Main House"
     assert updated.json()["utility"]["billing_day"] == 7
+    scopes = await owner_client.get("/api/v1/home-scopes")
+    assert scopes.json() == {"home_scopes": [{"id": home_id, "name": "Main House"}]}
+    async with session_factory() as session:
+        renamed = await session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.target_id == home_id,
+                AuditEvent.event_code == "HOME_RENAMED",
+            )
+        )
+        assert renamed is not None
+        assert renamed.details == {}
 
     for path in SCOPED_GET_PATHS:
         response = await owner_client.get(path, params=_feature_params(path))

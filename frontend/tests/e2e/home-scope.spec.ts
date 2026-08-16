@@ -19,8 +19,8 @@ test('requires a UUID-disambiguated home and binds every home-specific page requ
   await page.waitForTimeout(100);
   expect(featureRequests).toEqual([]);
   const selector = page.getByLabel('Active home');
-  await expect(selector.getByRole('option', { name: `Home (${firstHomeId})` })).toHaveAttribute('value', firstHomeId);
-  await expect(selector.getByRole('option', { name: `Home (${secondHomeId})` })).toHaveAttribute('value', secondHomeId);
+  await expect(selector.getByRole('option', { name: 'Home (1)' })).toHaveAttribute('value', firstHomeId);
+  await expect(selector.getByRole('option', { name: 'Home (2)' })).toHaveAttribute('value', secondHomeId);
   await selector.selectOption(firstHomeId);
   await expect(page.getByRole('heading', { name: 'Live Power Usage' })).toBeVisible();
   await expect(page).toHaveTitle('PowerMeter V2');

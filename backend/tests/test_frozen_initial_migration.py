@@ -431,3 +431,161 @@ def test_permanent_loss_immutability_revision_preserves_existing_rows_on_rollbac
     finally:
         get_settings.cache_clear()
         database.unlink(missing_ok=True)
+
+
+def test_settings_revision_normalizes_email_adds_fields_and_downgrades_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = ROOT / ".test-runtime" / f"settings-migration-{uuid.uuid4().hex}.sqlite3"
+    async_url = _sqlite_url(database, async_driver=True)
+    sync_url = _sqlite_url(database, async_driver=False)
+    monkeypatch.setenv("PM_ENV", "test")
+    monkeypatch.setenv("PM_DATABASE_URL", async_url)
+    get_settings.cache_clear()
+    config = _config()
+    user_id = str(uuid.uuid4())
+    home_id = str(uuid.uuid4())
+    try:
+        command.upgrade(config, "20260815_0011")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO users "
+                        "(id, email, display_name, password_hash, enabled, created_at, updated_at) "
+                        "VALUES (:id, '  Mixed-Case@Example.COM  ', 'Owner', 'hash', true, "
+                        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": user_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO homes (id, name, timezone, created_at) "
+                        "VALUES (:id, :name, 'America/Los_Angeles', CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": home_id, "name": f"Home ({home_id})"},
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(config, "head")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                inspector = sa.inspect(connection)
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT email FROM users WHERE id = :id"), {"id": user_id}
+                    )
+                    == "mixed-case@example.com"
+                )
+                assert "preferences" in {
+                    column["name"] for column in inspector.get_columns("users")
+                }
+                assert (
+                    connection.scalar(
+                        sa.text("SELECT name FROM homes WHERE id = :id"), {"id": home_id}
+                    )
+                    == "Home"
+                )
+                assert {
+                    "location",
+                    "notes",
+                    "display_order",
+                    "include_in_aggregate",
+                    "show_on_dashboard",
+                    "monitoring_enabled",
+                }.issubset({column["name"] for column in inspector.get_columns("devices")})
+                assert {
+                    "plan_classification",
+                    "holiday_treatment",
+                    "billing_period_start",
+                    "billing_period_end",
+                    "billing_period_days",
+                    "tier_threshold_basis",
+                    "candidate_complete",
+                }.issubset(
+                    {
+                        column["name"]
+                        for column in inspector.get_columns("utility_bill_rate_extractions")
+                    }
+                )
+                with pytest.raises(sa.exc.IntegrityError):
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO users "
+                            "(id, email, display_name, password_hash, enabled, "
+                            "preferences, created_at, updated_at) "
+                            "VALUES (:id, 'MIXED-CASE@EXAMPLE.COM', 'Duplicate', 'hash', true, "
+                            "'{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                        ),
+                        {"id": str(uuid.uuid4())},
+                    )
+        finally:
+            engine.dispose()
+
+        command.downgrade(config, "20260815_0011")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                inspector = sa.inspect(connection)
+                assert "preferences" not in {
+                    column["name"] for column in inspector.get_columns("users")
+                }
+                assert "location" not in {
+                    column["name"] for column in inspector.get_columns("devices")
+                }
+                assert "candidate_complete" not in {
+                    column["name"]
+                    for column in inspector.get_columns("utility_bill_rate_extractions")
+                }
+        finally:
+            engine.dispose()
+    finally:
+        get_settings.cache_clear()
+        database.unlink(missing_ok=True)
+
+
+def test_settings_revision_refuses_case_insensitive_duplicate_emails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = ROOT / ".test-runtime" / f"settings-email-preflight-{uuid.uuid4().hex}.sqlite3"
+    async_url = _sqlite_url(database, async_driver=True)
+    sync_url = _sqlite_url(database, async_driver=False)
+    monkeypatch.setenv("PM_ENV", "test")
+    monkeypatch.setenv("PM_DATABASE_URL", async_url)
+    get_settings.cache_clear()
+    config = _config()
+    try:
+        command.upgrade(config, "20260815_0011")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                for email in ("duplicate@example.com", "DUPLICATE@EXAMPLE.COM"):
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO users "
+                            "(id, email, display_name, password_hash, enabled, "
+                            "created_at, updated_at) VALUES "
+                            "(:id, :email, 'User', 'hash', true, CURRENT_TIMESTAMP, "
+                            "CURRENT_TIMESTAMP)"
+                        ),
+                        {"id": str(uuid.uuid4()), "email": email},
+                    )
+        finally:
+            engine.dispose()
+
+        with pytest.raises(RuntimeError, match="case-insensitive duplicate user email"):
+            command.upgrade(config, "head")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == (
+                    "20260815_0011"
+                )
+        finally:
+            engine.dispose()
+    finally:
+        get_settings.cache_clear()
+        database.unlink(missing_ok=True)

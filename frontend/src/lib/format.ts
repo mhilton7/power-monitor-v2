@@ -3,10 +3,24 @@ import { format, formatDistanceToNowStrict } from 'date-fns';
 const numberFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 const moneyFormat = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export function numeric(value: number | null | undefined, unit = '', digits = 2): string {
+export function numeric(value: number | null | undefined, unit = '', digits?: number): string {
   if (value === null || value === undefined) return 'Not available';
-  const text = new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(value);
-  return unit ? `${text} ${unit}` : text;
+  let adjusted = value;
+  let adjustedUnit = unit;
+  const powerUnit = document.documentElement.dataset.powerUnit;
+  const energyUnit = document.documentElement.dataset.energyUnit;
+  if ((unit === 'kW' || unit === 'kilowatts') && powerUnit === 'W') {
+    adjusted *= 1000;
+    adjustedUnit = unit === 'kilowatts' ? 'watts' : 'W';
+  }
+  if (unit === 'kWh' && energyUnit === 'Wh') {
+    adjusted *= 1000;
+    adjustedUnit = 'Wh';
+  }
+  const configuredDigits = Number(document.documentElement.dataset.decimalPrecision ?? '2');
+  const precision = digits ?? (Number.isInteger(configuredDigits) ? configuredDigits : 2);
+  const text = new Intl.NumberFormat('en-US', { maximumFractionDigits: precision }).format(adjusted);
+  return adjustedUnit ? `${text} ${adjustedUnit}` : text;
 }
 
 export function money(value: string | number | null | undefined): string {
@@ -26,12 +40,15 @@ export function timeAgo(value: string | null | undefined): string {
 
 export function dateTime(value: string | null | undefined, timezone = 'America/Los_Angeles'): string {
   if (!value) return 'Not available';
-  return new Intl.DateTimeFormat('en-US', {
+  const iso = document.documentElement.dataset.dateFormat === 'iso';
+  const hour12 = document.documentElement.dataset.timeFormat !== '24h';
+  return new Intl.DateTimeFormat(iso ? 'en-CA' : 'en-US', {
     year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
+    month: iso ? '2-digit' : 'short',
+    day: '2-digit',
+    hour: '2-digit',
     minute: '2-digit',
+    hour12,
     timeZone: timezone,
     timeZoneName: 'short',
   }).format(new Date(value));

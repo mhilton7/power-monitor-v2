@@ -8,6 +8,7 @@ import sys
 from collections.abc import Sequence
 from typing import Final
 
+from ..errors import BillRateImportError
 from .ocr import local_tesseract_ocr
 from .parser import PROHIBITED_PATTERNS, extract_rate_plan_from_pdf
 
@@ -28,6 +29,21 @@ _ALLOWED_ENVIRONMENT: Final = frozenset(
     }
 )
 _O_CLOEXEC: Final = 0x80000
+_SAFE_REJECTION_CODES: Final = frozenset(
+    {
+        "CHARGES_PAGE_NOT_FOUND",
+        "EXTRACTION_TIMED_OUT",
+        "PDF_ENCRYPTED",
+        "PDF_INVALID",
+        "PDF_PAGE_LIMIT",
+        "PDF_TEXT_UNAVAILABLE",
+        "PDF_TOO_LARGE",
+        "RATE_LINES_NOT_FOUND",
+        "RATE_NAME_NOT_FOUND",
+        "UNSUPPORTED_RATE_STRUCTURE",
+        "UTILITY_NOT_RECOGNIZED",
+    }
+)
 
 
 def _write_closed(value: dict[str, object]) -> None:
@@ -63,6 +79,17 @@ def _parse(maximum_bytes: int) -> int:
             }
         )
         return 0
+    except BillRateImportError as exc:
+        _write_closed(
+            {
+                "error_code": exc.code
+                if exc.code in _SAFE_REJECTION_CODES
+                else "DOCUMENT_REJECTED",
+                "schema_id": EXTRACTION_SCHEMA_ID,
+                "status": "rejected",
+            }
+        )
+        return 2
     except Exception:
         _write_closed(
             {

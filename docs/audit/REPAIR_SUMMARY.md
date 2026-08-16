@@ -3,10 +3,11 @@
 This summary describes post-rc.3 source repairs. Public `v0.1.0-rc.3` is
 immutable and does not contain these changes. The repairs reached the valid
 signed server rc.4 tag, but deterministic deployment smoke failed and release
-assembly skipped, leaving no server rc.4 Release or YAML. The rc.5 checkout
-adds only the exact smoke recovery repair and release identity; it remains
-non-installable until coordinated signed server/firmware rc.5 passes its gates
-and supplies digest-pinned release YAML.
+assembly skipped, leaving no server rc.4 Release or YAML. Server rc.5 then
+published the repaired asset set and remains public and installable. Hardware
+execution confirmed that firmware rc.1 through rc.5 crash in the main stack
+before provisioning; coordinated rc.6 hotfix publication is pending. The
+detailed repair narrative below preserves the rc.5 prepublication boundary.
 
 ## User-visible fixes
 
@@ -49,10 +50,12 @@ and supplies digest-pinned release YAML.
 
 ## Database fixes
 
-- Added migrations `20260815_0008` through `20260815_0011` instead of
+- Added migrations `20260815_0008` through `20260815_0012` instead of
   modifying any applied migration. Migration 0009 introduces the exact-home
   rate-candidate workflow; 0008 and 0010 strengthen ingestion evidence; 0011
-  enforces the workflow's database integrity.
+  enforces the workflow's database integrity; 0012 adds case-insensitive email
+  identity, scoped preferences/device presentation, legacy home-label
+  normalization, and typed bill-rate evidence without rewriting prior rows.
 - Tightened raw-reading completeness to
   `0 <= sample_count <= expected_sample_count` with positive expected count.
 - Added PostgreSQL trigger guards that serialize on the device row and reject

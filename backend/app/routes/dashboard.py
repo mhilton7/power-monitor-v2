@@ -374,9 +374,10 @@ async def home_dashboard(
         await session.scalars(
             select(Device)
             .where(Device.home_id == scoped_home_id, Device.revoked_at.is_(None))
-            .order_by(Device.id)
+            .order_by(Device.display_order, Device.id)
         )
     ).all()
+    visible_devices = [device for device in devices if device.show_on_dashboard]
     now = datetime.now(UTC)
     output_devices: list[dict[str, object]] = []
     for device in devices:
@@ -396,7 +397,9 @@ async def home_dashboard(
         )
         age = (now - aware_utc(heartbeat.received_at)).total_seconds() if heartbeat else None
         state = (
-            "waiting"
+            "monitoring_disabled"
+            if not device.monitoring_enabled
+            else "waiting"
             if heartbeat is None
             else "live"
             if age is not None and age <= 30 and heartbeat.pzem_status == "ok"
@@ -417,22 +420,24 @@ async def home_dashboard(
                 "measured_at": heartbeat.measured_at,
                 "pzem_status": heartbeat.pzem_status,
             }
-        output_devices.append(
-            {
-                "id": device.id,
-                "home_id": device.home_id,
-                "circuit_id": device.circuit_id,
-                "friendly_name": device.friendly_name,
-                "state": state,
-                "measurement_scope": device.measurement_scope,
-                "measurement": measurement,
-                "heartbeat_at": heartbeat.received_at if heartbeat else None,
-                "last_committed_at": last_committed,
-                "backlog": heartbeat.backlog if heartbeat else None,
-                "storage_status": heartbeat.storage_status if heartbeat else "unavailable",
-                "firmware_version": device.firmware_version,
-            }
-        )
+        if device.show_on_dashboard:
+            output_devices.append(
+                {
+                    "id": device.id,
+                    "home_id": device.home_id,
+                    "circuit_id": device.circuit_id,
+                    "friendly_name": device.friendly_name,
+                    "location": device.location,
+                    "state": state,
+                    "measurement_scope": device.measurement_scope,
+                    "measurement": measurement,
+                    "heartbeat_at": heartbeat.received_at if heartbeat else None,
+                    "last_committed_at": last_committed,
+                    "backlog": heartbeat.backlog if heartbeat else None,
+                    "storage_status": heartbeat.storage_status if heartbeat else "unavailable",
+                    "firmware_version": device.firmware_version,
+                }
+            )
     # A default card represents one selected sensor. A multi-device sum requires
     # an explicitly configured verified_sum circuit and is never inferred.
     summary_kind = "selected_sensor"
@@ -447,7 +452,11 @@ async def home_dashboard(
         )
         if circuit is None:
             raise NotFound("verified aggregate does not exist")
-        ids = tuple(device.id for device in devices if device.circuit_id == circuit.id)
+        ids = tuple(
+            device.id
+            for device in devices
+            if device.circuit_id == circuit.id and device.include_in_aggregate
+        )
         if not ids:
             raise NotFound("verified aggregate has no active sensors")
         summary_kind = "verified_aggregate"
@@ -457,7 +466,7 @@ async def home_dashboard(
             raise NotFound("device does not exist")
         ids = (device_id,)
     else:
-        ids = (devices[0].id,) if devices else ()
+        ids = (visible_devices[0].id,) if visible_devices else ()
     home = await session.get(Home, summary_home_id)
     account = await session.scalar(
         select(UtilityAccount).where(UtilityAccount.home_id == summary_home_id)
@@ -479,7 +488,9 @@ async def home_dashboard(
         )
         for home_id in homes_by_id
     }
-    for device, item in zip(devices, output_devices, strict=True):
+    devices_by_id = {device.id: device for device in visible_devices}
+    for item in output_devices:
+        device = devices_by_id[str(item["id"])]
         card_account = accounts_by_home_id[device.home_id]
         card_home = homes_by_id[device.home_id]
         card_timezone = (
@@ -978,7 +989,9 @@ async def list_devices(
     ).all()
     devices = (
         await session.scalars(
-            select(Device).where(Device.home_id == scoped_home_id).order_by(Device.id)
+            select(Device)
+            .where(Device.home_id == scoped_home_id)
+            .order_by(Device.display_order, Device.id)
         )
     ).all()
     result: list[dict[str, object]] = []
@@ -1019,6 +1032,12 @@ async def list_devices(
                 "home_id": device.home_id,
                 "circuit_id": device.circuit_id,
                 "friendly_name": device.friendly_name,
+                "location": device.location,
+                "notes": device.notes,
+                "display_order": device.display_order,
+                "include_in_aggregate": device.include_in_aggregate,
+                "show_on_dashboard": device.show_on_dashboard,
+                "monitoring_enabled": device.monitoring_enabled,
                 "device_fingerprint": hashlib.sha256(device.id.encode()).hexdigest()[:12],
                 "credential_fingerprint": active_credential.fingerprint
                 if active_credential
@@ -1045,7 +1064,13 @@ async def list_devices(
                 "heartbeat_at": heartbeat.received_at if heartbeat else None,
                 "wifi_rssi": heartbeat.wifi_rssi if heartbeat else None,
                 "ip_address": heartbeat.ip_address if heartbeat else None,
-                "pzem_status": heartbeat.pzem_status if heartbeat else "unavailable",
+                "pzem_status": (
+                    "monitoring_disabled"
+                    if not device.monitoring_enabled
+                    else heartbeat.pzem_status
+                    if heartbeat
+                    else "unavailable"
+                ),
                 "storage_status": heartbeat.storage_status if heartbeat else "unavailable",
                 "oldest_sequence": heartbeat.oldest_sequence if heartbeat else None,
                 "newest_sequence": heartbeat.newest_sequence if heartbeat else None,

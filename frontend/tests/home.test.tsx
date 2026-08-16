@@ -52,4 +52,21 @@ describe('Home', () => {
     expect(calls[1]).toMatchObject({ prepare_command_id: '00000000-0000-0000-0000-000000000001', confirmation_token: 'bound-token', typed_confirmation: 'FORMAT STORAGE' });
     expect(calls[1]?.idempotency_key).not.toBe(calls[0]?.idempotency_key);
   });
+
+  it('applies persisted dashboard range and card visibility preferences', async () => {
+    const historyRequests: string[] = [];
+    installFetchMock((path) => {
+      if (path.endsWith('/auth/preferences')) return { status: 200, body: { preferences: { dashboard_range: 'month', history_range: 'week', refresh_seconds: 60, power_unit: 'auto', energy_unit: 'auto', date_format: 'us', time_format: '12h', decimal_precision: 2, density: 'comfortable', dashboard_cards: ['energy'] } } };
+      if (path.includes('/home')) return { status: 200, body: home };
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [device] } };
+      if (path.includes('/history')) { historyRequests.push(path); return { status: 200, body: { points: [], energy_kwh: 0, cost: '0', completeness: 1, missing_ranges: [], resolution_seconds: 86400, timezone: 'UTC', usage_source: 'authenticated PZEM-004T sensor intervals only' } }; }
+      return { status: 200, body: { alerts: [], active_count: 0 } };
+    });
+    renderWithProviders(<HomePage />);
+    expect(await screen.findByRole('heading', { name: 'Daily Energy (kWh)' })).toBeInTheDocument();
+    expect(screen.getByText('30 Days')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Live Power Usage' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Current Rate' })).not.toBeInTheDocument();
+    await waitFor(() => expect(historyRequests.some((path) => path.includes('metric=energy'))).toBe(true));
+  });
 });

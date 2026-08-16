@@ -37,7 +37,7 @@ dependency, memory, stack, test, migration, and release reports. These preserved
 local values are historical test evidence, not substitutes for the public
 rc.1 release's attached `SHA256SUMS`, attestations, or downloadable assets.
 
-## Historical rc.2 failure and coordinated public rc.3/rc.4 firmware
+## Historical rc.2 failure and coordinated public rc.3/rc.4/rc.5 firmware
 
 The signed, public firmware
 [`v0.1.0-rc.2`](https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.2)
@@ -66,13 +66,22 @@ server tag was created. The server rc.4 run later failed deterministic
 deployment smoke, skipped assembly, and produced no server Release or YAML;
 that outcome does not invalidate or relabel the firmware release.
 
-Candidate firmware rc.5 is the required release-identity and traceability
-update for server rc.5. It must name server `v0.1.0-rc.5` and declare generated
-OpenAPI SHA-256
+The signed, public firmware
+[`v0.1.0-rc.5`](https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.5)
+names public server `v0.1.0-rc.5` and declares generated OpenAPI SHA-256
 `66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591`.
-It must be signed, published, and independently verified before the server rc.5
-tag is created. Neither the public rc.3 nor rc.4 firmware release may be moved,
-rewritten, or substituted for rc.5.
+The matching server rc.5 release completed publication and remains public and
+installable with its attached assets.
+
+Hardware execution subsequently confirmed that firmware rc.1 through rc.5
+crash in the main stack before provisioning. These signed releases remain
+immutable evidence, but none is a working provisioning path. Candidate firmware
+rc.6 is the coordinated hotfix. It must name server `v0.1.0-rc.6`, retain
+`pm-protocol/1.0.0`, and declare generated OpenAPI SHA-256
+`b1b0728eb7b00038053ecf6d3b2b302a82683d100086399b7e888dc0359b8ac9`.
+It must be signed, published, and independently verified before the server rc.6
+tag is created. No rc.1 through rc.5 tag or release may be moved, rewritten, or
+substituted for rc.6.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

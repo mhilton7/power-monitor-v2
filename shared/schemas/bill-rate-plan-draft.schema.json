@@ -46,6 +46,20 @@
         },
         "source": {
           "$ref": "#/$defs/SourceRegion"
+        },
+        "supporting_label": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supporting Label"
         }
       },
       "required": [
@@ -339,6 +353,51 @@
       "default": null,
       "title": "Baseline Credit Rate"
     },
+    "billing_period_days": {
+      "anyOf": [
+        {
+          "maximum": 62,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Billing Period Days"
+    },
+    "billing_period_end": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Billing Period End"
+    },
+    "billing_period_start": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Billing Period Start"
+    },
+    "candidate_complete": {
+      "default": true,
+      "title": "Candidate Complete",
+      "type": "boolean"
+    },
     "cca_or_direct_access_indicator": {
       "enum": [
         "sce_generation",
@@ -382,6 +441,18 @@
       "title": "Fields",
       "type": "array"
     },
+    "holiday_treatment": {
+      "default": "unresolved",
+      "enum": [
+        "not_applicable",
+        "no_special_treatment",
+        "weekend_schedule",
+        "explicit_schedule",
+        "unresolved"
+      ],
+      "title": "Holiday Treatment",
+      "type": "string"
+    },
     "parser_version": {
       "maxLength": 40,
       "minLength": 1,
@@ -394,6 +465,18 @@
       },
       "title": "Periods",
       "type": "array"
+    },
+    "plan_classification": {
+      "default": "time_of_use",
+      "enum": [
+        "flat",
+        "tiered",
+        "seasonal_tiered",
+        "time_of_use",
+        "unknown"
+      ],
+      "title": "Plan Classification",
+      "type": "string"
     },
     "rate_class": {
       "maxLength": 80,
@@ -438,6 +521,19 @@
       },
       "title": "Summer Months",
       "type": "array"
+    },
+    "tier_threshold_basis": {
+      "anyOf": [
+        {
+          "maxLength": 500,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tier Threshold Basis"
     },
     "utility_name": {
       "const": "Southern California Edison",

@@ -38,7 +38,7 @@ from .sce_rate_parser import (
 )
 
 SCE_TOU_URL = DEFAULT_SCE_RATE_SOURCE_URL
-SCE_SOURCE_NAME = "SCE residential TOU public page"
+SCE_SOURCE_NAME = "SCE residential rate-plan public page"
 
 FetchCallable = Callable[..., Awaitable[SourceFetch]]
 _LOCAL_SOURCE_LEASES: set[str] = set()

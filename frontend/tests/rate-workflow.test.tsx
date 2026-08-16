@@ -57,6 +57,22 @@ describe('exact-home SCE rate workflow', () => {
     expect(requestedHome).toBe(homeId);
   });
 
+  it('reports a valid unchanged tiered check as success without a holiday error', async () => {
+    installFetchMock((path, method) => {
+      const url = new URL(path, 'http://frontend.test');
+      if (url.pathname.endsWith('/rate-sources/check-now') && method === 'POST') {
+        return { status: 202, body: { run_id: 'run-unchanged', state: 'unchanged', event_code: 'RATE_SOURCE_CONTENT_UNCHANGED', revision_id: rateCandidate.source.revision_id, candidate_id: rateCandidate.id, error_code: null } };
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<BillingPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Check now' }));
+    expect(await screen.findByText(/The verified source is unchanged/)).toBeInTheDocument();
+    expect(screen.queryByText(/HOLIDAY_RULE_MISSING/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/completed with a failure/)).not.toBeInTheDocument();
+  });
+
   it('requires review confirmations before separate publish and exact-account activation', async () => {
     let workflow: Record<string, unknown> = { state: 'review_required' };
     const requests: Array<{ path: string; body: Record<string, unknown> }> = [];

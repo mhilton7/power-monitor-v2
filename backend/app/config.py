@@ -13,7 +13,7 @@ from .constants import DEFAULT_TIMEZONE
 
 RATE_SOURCE_OPERATION_TIMEOUT_MAX_SECONDS = 25.0
 DEFAULT_SCE_RATE_SOURCE_URL = (
-    "https://www.sce.com/save-money/rates-financing/residential-rate-plans/time-of-use-plans"
+    "https://www.sce.com/save-money/rates-financing/residential-rate-plans/tiered-rate-plan"
 )
 _ALLOWED_SCE_RATE_PATH_PREFIXES = (
     "/save-money/rates-financing/",

@@ -1,4 +1,4 @@
-# PowerMeter V2 v0.1.0-rc.5
+# PowerMeter V2 v0.1.0-rc.6
 
 PowerMeter V2 is a central, authenticated PZEM-004T monitoring system paired
 with the independent
@@ -8,13 +8,31 @@ Authenticated sensor evidence remains the only source of live measurements,
 History, energy, completeness, forecasts, and usage-based cost. Utility-bill
 PDFs remain rate-source documents only.
 
-This source file is the release-body input for candidate `v0.1.0-rc.5`. This
+This source file is the release-body input for candidate `v0.1.0-rc.6`. This
 source copy alone is not publication evidence. Installation is authorized only after the
 signed tagged workflow publishes the complete checksummed and attested asset
 set, digest-pinned YAML, public multi-architecture images, deployment evidence,
 and coordinated firmware release.
 
-## Why rc.5 follows the non-installable rc.4 tag
+## Why rc.6 follows public server rc.5
+
+Server [`v0.1.0-rc.5`](https://github.com/mhilton7/power-monitor-v2/releases/tag/v0.1.0-rc.5)
+completed its tagged workflow and remains a public, immutable, installable
+prerelease with its complete attached asset set. Hardware execution after that
+publication confirmed that firmware rc.1 through rc.5 crash in the main stack
+before provisioning. Those firmware releases remain immutable evidence but are
+not a working provisioning path.
+
+Rc.6 is the coordinated hotfix identity for corrected firmware. The server
+also repairs SCE tiered-source classification, closed rate-only bill parsing,
+user/profile administration, persistent home naming, sensor presentation, and
+per-user display settings. It retains `pm-protocol/1.0.0` and extends the
+additive Alembic chain to `20260815_0012` without changing sensor contracts or
+rewriting telemetry.
+Its generated OpenAPI SHA-256 is
+`b1b0728eb7b00038053ecf6d3b2b302a82683d100086399b7e888dc0359b8ac9`.
+
+### Historical rc.4 recovery carried by rc.5
 
 Server `v0.1.0-rc.4` remains a valid, immutable signed tag. Tagged release run
 [`31893354667`](https://github.com/mhilton7/power-monitor-v2/actions/runs/31893354667)
@@ -28,7 +46,7 @@ returned healthy. Release assembly was skipped. There is no server rc.4 GitHub
 Release or generated rc.4 YAML, and the published rc.4 images alone are not an
 installation authority.
 
-Rc.5 preserves the audited application, protocol, and migration behavior while
+Rc.5 preserved the audited application, protocol, and migration behavior while
 repairing that recovery check. It captures the six runtime container IDs,
 starts those exact stopped containers directly without Compose dependency
 traversal, requires their identities and health to remain stable, and still
@@ -50,8 +68,9 @@ protocol, or migration revision changed for this repair.
   the exact home associated with the selected evidence instead of an unrelated
   first row.
 - The browser auto-selects only a sole authorized home, requires an explicit
-  UUID-disambiguated choice for multiple homes, clears stale queries when the
-  actor or home changes, and never grants authority from client state.
+  choice for multiple homes, uses ordinal labels when names collide without
+  exposing UUIDs, clears stale queries when the actor or home changes, and
+  never grants authority from client state.
 - Mobile navigation, dialogs, focus management, loading/error/empty states,
   chart descriptions, gaps, brush targets, responsive containment, and
   keyboard behavior were repaired and covered at the supported viewports.
@@ -69,8 +88,19 @@ protocol, or migration revision changed for this repair.
   exists; legacy `304` state without a parsed candidate receives one bounded
   unconditional recovery request through the same SSRF and size controls.
 - Immutable source artifacts are file- and directory-synced before database
-  pointers advance. Missing official holiday or effective-date evidence is an
-  actionable failure, never fabricated rate data.
+  pointers advance. Holiday evidence is required only for time-dependent
+  schedules; DOMESTIC flat/tiered plans use `not_applicable`, while genuinely
+  unresolved TOU treatment remains an actionable failure.
+- The configured public SCE source is the tiered-rate page. Classification
+  prefers its primary Tier 1/Tier 2 tariff content over incidental shared TOU
+  navigation/FAQ copy. A valid unchanged fetch is reported as success with no
+  duplicate candidate or version.
+- The closed bill parser accepts a complete statement or an isolated numbered
+  SCE charges page. It extracts exact Decimal rate components, billing-period
+  context, and provenance; approximate chart prices and already-included
+  explanatory breakdowns are ignored. The supplied DOMESTIC page remains
+  review-required because one customer-period baseline and one season cannot
+  establish a complete reusable annual tariff.
 - The exact-home candidate workflow now supports deterministic, database-
   idempotent manual candidates plus explicit review, publication, activation,
   and rejection. Candidate provenance is immutable. The only legal review
@@ -78,9 +108,27 @@ protocol, or migration revision changed for this repair.
   fetching, parsing, reviewing, publishing, or rejecting never auto-activates a
   rate.
 
+### Accounts, naming, sensors, and settings
+
+- Administrators can create, edit, enable/disable, reset passwords for,
+  soft-delete, and restore scoped users. Email uniqueness is case-insensitive,
+  the last active home owner is protected, security-sensitive changes revoke
+  sessions, and audit details never contain password material.
+- Regular users can update their own display name, reauthenticated email,
+  password, and persisted display preferences without gaining administrative
+  permissions.
+- Existing UUID-shaped `Home (<uuid>)` labels are normalized to `Home` without
+  changing the internal UUID or any device/history relation. Home rename
+  updates the selector cache immediately; the UUID is shown only in Advanced
+  system health with an explicit copy action.
+- Sensor location, notes, order, aggregate eligibility, dashboard visibility,
+  and monitoring state persist at device scope. Per-user refresh, range,
+  units, date/time, precision, density, and card-visibility preferences are
+  applied by Home and History rather than stored as disconnected controls.
+
 ### Ingestion and database integrity
 
-- Alembic head `20260815_0011` extends the frozen chain without rewriting an
+- Alembic head `20260815_0012` extends the frozen chain without rewriting an
   applied migration. Revision 0008 enforces
   `sample_count <= expected_sample_count` and prevents authenticated raw
   readings from overlapping permanent-loss evidence or two loss ranges from
@@ -92,6 +140,10 @@ protocol, or migration revision changed for this repair.
   provenance and legal review transitions, a unique natural rate-plan identity
   with serialized version allocation shared by bill and SCE publication, and
   deterministic non-overlapping assignments with equal-start rejection.
+  Revision 0012 fails closed on case-insensitive duplicate emails, normalizes
+  safe legacy home labels, and adds per-user preferences, sensor presentation
+  settings, and typed bill-rate evidence fields without changing home, device,
+  reading, rate-version, or audit identities.
 - The migrations take write-blocking table locks, preflight existing evidence,
   and fail closed before installing PostgreSQL guards. Revision 0011 also locks
   its rate workflow tables across preflight and guard installation. Conflicting
@@ -112,7 +164,7 @@ protocol, or migration revision changed for this repair.
   are not part of the normal path.
 - Operators create exactly nine Generic/POSIX child ZFS datasets below
   `/mnt/Apps/PowerMeterV2`. The former `bill-rate-source-artifacts` dataset is
-  not mounted by rc.5; an existing rc.3 dataset is left untouched and should
+  not mounted by rc.5 or rc.6; an existing rc.3 dataset is left untouched and should
   remain unshared until an operator chooses a separately reviewed cleanup.
 - TLS verification remains strict for `power-monitor.home.arpa`, including
   hostname, key match, current validity, and at least seven days of remaining
@@ -133,11 +185,11 @@ protocol, or migration revision changed for this repair.
 ## Upgrade and rollback boundary
 
 Back up and verify the database, perform an isolated restore check, and take a
-recursive ZFS snapshot before installing rc.5. Keep all existing application
+recursive ZFS snapshot before installing rc.6. Keep all existing application
 secrets, database credentials, the backup encryption key, TLS material, and
 datasets. Do not recreate storage or rotate secrets during this upgrade.
 
-The migration chain through `20260815_0011` is intentionally fail-closed. The
+The migration chain through `20260815_0012` is intentionally fail-closed. The
 0008 preflight blocks an overlap in immutable reading/loss evidence or a
 historical retained-bill reference for review. Revision 0010 requires the exact
 legacy raw-reading immutability guard before changing trigger ordering.
@@ -147,8 +199,8 @@ write locks until its guards are installed. Do not bypass a guard, edit an
 applied migration, or delete evidence merely to continue.
 
 The release migration report proves only the forward upgrade from the latest
-lower same-major public release. It does not prove that rc.3 binaries can use a
-database touched by rc.5. Application-only rollback is not authorized. A
+lower same-major public release. It does not prove that rc.5 binaries can use a
+database touched by rc.6. Application-only rollback is not authorized. A
 rollback requires a separately validated restore or clone of the matching
 pre-upgrade snapshot or verified backup, paired with the exact older release
 assets. GitHub-hosted smoke records rollback as
@@ -156,27 +208,27 @@ assets. GitHub-hosted smoke records rollback as
 
 ## Release contents and firmware pairing
 
-A successfully published rc.5 candidate includes:
+A successfully published rc.6 candidate includes:
 
 - four immutable multi-architecture GHCR images referenced by registry digest;
-- `power-monitor-v2-v0.1.0-rc.5.yaml` and `release-manifest.json`;
+- `power-monitor-v2-v0.1.0-rc.6.yaml` and `release-manifest.json`;
 - the Windows SMB staging helper and auditable initializer source;
 - checksums, strict attestations, SBOMs, vulnerability results, dependency and
   test reports, migration evidence, and deployment-smoke evidence;
 - installation, secrets/TLS, dataset/ACL, backup/restore, upgrade, and rollback
   instructions; and
-- an exact coordinated public firmware `v0.1.0-rc.5` release whose server
+- an exact coordinated public firmware `v0.1.0-rc.6` release whose server
   contract declares OpenAPI SHA-256
-  `66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591`.
+  `b1b0728eb7b00038053ecf6d3b2b302a82683d100086399b7e888dc0359b8ac9`.
 
 The signed server rc.2 tag and failed release run `31866197054` remain
 immutable prepublication evidence. There is no server rc.2 GitHub Release.
-Public server rc.3 remains the installation authority and migration predecessor
-for its own attached seven-service assets and instructions. Public firmware
-rc.4 is immutable historical evidence for the failed server rc.4 attempt; the
-coordinated firmware rc.5 target must be published and verified before a server
-rc.5 tag is created. No historical tag or release is modified or relabeled by
-rc.5.
+Public server rc.5 remains installable with its own attached eight-service
+assets and instructions and is the migration predecessor for rc.6. Firmware
+rc.1 through rc.5 have the confirmed pre-provision main-stack crash; the
+coordinated fixed firmware rc.6 target must be published and verified before a
+server rc.6 tag is created. No historical tag or release is modified or
+relabeled by rc.6.
 
 This remains a prerelease candidate. Hardware status is honestly `pending`.
 Marked-unit electrical identity, physical TLS/HMAC behavior, OTA installation

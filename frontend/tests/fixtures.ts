@@ -12,7 +12,7 @@ export const session = {
   bootstrap_required: false,
   user: {
     id: 'user-owner', display_name: 'Alex Morgan', email: 'alex@example.test', roles: ['Owner'],
-    permissions: allPermissions, mfa_enabled: true, enabled: true,
+    permissions: allPermissions, mfa_enabled: true, enabled: true, manageable: true,
   },
 };
 
@@ -36,6 +36,7 @@ export const home = {
 
 export const device = {
   id: 'device-main', home_id: '00000000-0000-0000-0000-000000000010', circuit_id: null, friendly_name: 'Main Panel Sensor', device_fingerprint: '8a34f119dd31', credential_fingerprint: 'a'.repeat(64), credential_key_version: 1, credential_rotation: null, firmware_version: 'v1.2.3', protocol: 'pm-protocol/1.0.0',
+  location: 'Main electrical panel', notes: null, display_order: 0, include_in_aggregate: true, show_on_dashboard: true, monitoring_enabled: true,
   pzem_variant: 'pzem004t-v4-classic-candidate', ct_rating_a: '100', measurement_scope: 'energy_only', heartbeat_at: '2026-08-13T17:32:10Z', wifi_rssi: -54, ip_address: '192.0.2.24', pzem_status: 'ok', storage_status: 'healthy',
   oldest_sequence: 100, newest_sequence: 2020, acknowledgement: 2017, backlog: 3, free_internal_heap: 208000, largest_internal_block: 98120,
   last_reboot_reason: 'software_update', last_command: { id: 'cmd-old', type: 'sync_now', state: 'succeeded', progress_percent: 100 },
@@ -135,7 +136,7 @@ export const rateSourceStatus = {
 };
 
 export const systemHealth = {
-  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.5', protocol: 'pm-protocol/1.0.0', database: 'reachable',
+  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.6', protocol: 'pm-protocol/1.0.0', database: 'reachable',
   sensors: [{ device_id: 'device-main', state: 'online', heartbeat_age_seconds: 5, pzem_status: 'ok', storage_status: 'healthy', backlog: 3 }],
   open_alert_count: 1, last_rate_sync: { id: 'rate-run-old', state: 'review_required', event_code: 'RATE_SOURCE_SNAPSHOT_CAPTURED', completed_at: '2026-08-13T16:00:00Z' },
   backup: {}, restore_test: {}, physical_hardware_certification: 'pending',
@@ -192,10 +193,17 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (pathname.endsWith('/publish') && pathname.includes('/rate-sources/candidates/') && method === 'POST') return { status: 201, body: { home_id: homeScopes[0]!.id, candidate_id: rateCandidate.id, workflow: { id: 'review-1', state: 'published', selected_plan_name: 'TOU-D-4-9PM', effective_start: '2026-08-01T07:00:00Z', effective_end: null, reviewed_at: '2026-08-13T17:00:00Z', published_at: '2026-08-13T17:01:00Z', activated_at: null, rate_plan_version_id: 'rate-version-new', utility_account_id: null }, rate_plan_version: { id: 'rate-version-new', plan_id: 'rate-plan-1', plan_name: 'TOU-D-4-9PM', version: 2, effective_start: '2026-08-01T07:00:00Z', effective_end: null, source_artifact_sha256: rateCandidate.source.artifact_sha256, state: 'published' } } };
   if (pathname.endsWith('/activate') && pathname.includes('/rate-sources/candidates/') && method === 'POST') return { status: 201, body: { home_id: homeScopes[0]!.id, candidate_id: rateCandidate.id, workflow: { id: 'review-1', state: 'activated', selected_plan_name: 'TOU-D-4-9PM', effective_start: '2026-08-01T07:00:00Z', effective_end: null, reviewed_at: '2026-08-13T17:00:00Z', published_at: '2026-08-13T17:01:00Z', activated_at: '2026-08-13T17:02:00Z', rate_plan_version_id: 'rate-version-new', utility_account_id: billing.accounts[0]!.utility_account_id }, assignment: { id: 'assignment-new', utility_account_id: billing.accounts[0]!.utility_account_id, rate_plan_version_id: 'rate-version-new', effective_start: '2026-08-01T07:00:00Z', effective_end: null } } };
   if (pathname.endsWith('/rate-sources/check-now')) return { status: 202, body: { run_id: 'rate-run-1', state: 'review_required', event_code: 'RATE_SOURCE_CHANGED', revision_id: rateCandidate.source.revision_id, candidate_id: rateCandidate.id, error_code: null } };
+  if (path.endsWith('/auth/profile') && method === 'PATCH') return { status: 200, body: { id: session.user.id, email: session.user.email, display_name: session.user.display_name, session_revoked: false } };
+  if (path.endsWith('/auth/profile')) return { status: 200, body: { id: session.user.id, email: session.user.email, display_name: session.user.display_name, enabled: true, roles: session.user.roles, created_at: '2026-08-01T00:00:00Z', preferences: {} } };
+  if (path.endsWith('/auth/preferences')) return { status: 200, body: { preferences: { dashboard_range: 'today', history_range: 'week', refresh_seconds: 60, power_unit: 'auto', energy_unit: 'auto', date_format: 'us', time_format: '12h', decimal_precision: 2, density: 'comfortable', dashboard_cards: ['live_power', 'energy', 'cost', 'completeness', 'alerts'] } } };
+  if (path.endsWith('/auth/change-password')) return { status: 204 };
   if (path.endsWith('/users') && method === 'POST') return { status: 201, body: { id: 'user-new', email: 'new@example.test', display_name: 'New User' } };
   if (path.endsWith('/users')) return { status: 200, body: { users: [session.user] } };
   if (path.endsWith('/roles')) return { status: 200, body: { roles: [{ id: 'role-owner', name: 'Owner', permissions: allPermissions, built_in: true }], available_permissions: allPermissions } };
   if (path.includes('/users/') && method === 'PATCH') return { status: 200, body: { id: session.user.id, enabled: true, display_name: session.user.display_name } };
+  if (path.includes('/users/') && path.endsWith('/reset-password')) return { status: 204 };
+  if (path.includes('/users/') && path.endsWith('/restore')) return { status: 200, body: { id: session.user.id, enabled: true } };
+  if (path.includes('/users/') && method === 'DELETE') return { status: 204 };
   if (path.endsWith('/firmware/releases') && method === 'POST') return { status: 201, body: { release: firmwareReleases.releases[0], manifest_signature: 'fixture-signature', physical_certification: 'pending' } };
   if (path.endsWith('/firmware/releases')) return { status: 200, body: firmwareReleases };
   if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) return { status: 202, body: { deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] } };

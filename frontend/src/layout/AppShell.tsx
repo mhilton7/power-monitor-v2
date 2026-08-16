@@ -23,8 +23,10 @@ export function AppShell() {
   const location = useLocation();
   const priorPath = useRef(location.pathname);
   const { homeScopes, selectedHomeId, setSelectedHomeId, isLoading: homeScopesLoading, isError: homeScopesError } = useHomeScope();
-  const home = useQuery({ queryKey: ['home', selectedHomeId], queryFn: () => api.home(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: 30_000 });
-  const alerts = useQuery({ queryKey: ['alerts'], queryFn: api.alerts, refetchInterval: 30_000 });
+  const preferences = useQuery({ queryKey: ['preferences'], queryFn: api.preferences });
+  const refreshInterval = (preferences.data?.refresh_seconds ?? 30) * 1000;
+  const home = useQuery({ queryKey: ['home', selectedHomeId], queryFn: () => api.home(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: refreshInterval });
+  const alerts = useQuery({ queryKey: ['alerts'], queryFn: api.alerts, refetchInterval: refreshInterval });
   useLiveUpdates();
 
   useEffect(() => {
@@ -32,6 +34,16 @@ export function AppShell() {
     window.addEventListener('pm:open-alerts', openAlerts);
     return () => window.removeEventListener('pm:open-alerts', openAlerts);
   }, []);
+
+  useEffect(() => {
+    if (!preferences.data) return;
+    document.documentElement.dataset.density = preferences.data.density;
+    document.documentElement.dataset.dateFormat = preferences.data.date_format;
+    document.documentElement.dataset.timeFormat = preferences.data.time_format;
+    document.documentElement.dataset.decimalPrecision = String(preferences.data.decimal_precision);
+    document.documentElement.dataset.powerUnit = preferences.data.power_unit;
+    document.documentElement.dataset.energyUnit = preferences.data.energy_unit;
+  }, [preferences.data]);
 
   useEffect(() => {
     const title = navigation.find((entry) => entry.to === location.pathname)?.label ?? 'PowerMeter V2';
@@ -42,6 +54,9 @@ export function AppShell() {
 
   const primary = home.data?.devices[0];
   const overallState = home.data?.devices.some((device) => ['offline', 'invalid', 'needs_attention'].includes(device.state)) ? 'degraded' : home.data ? 'healthy' : 'waiting';
+  const homeNameCounts = new Map<string, number>();
+  for (const homeScope of homeScopes) homeNameCounts.set(homeScope.name, (homeNameCounts.get(homeScope.name) ?? 0) + 1);
+  const homeNameOrdinals = new Map<string, number>();
 
   async function logout() {
     await api.logout();
@@ -66,8 +81,13 @@ export function AppShell() {
           {homeScopesError && <option value="">Homes unavailable</option>}
           {!homeScopesLoading && !homeScopesError && homeScopes.length === 0 && <option value="">No authorized homes</option>}
           {!homeScopesLoading && !homeScopesError && homeScopes.length > 1 && <option value="">Select an active home</option>}
-          {homeScopes.map((homeScope) => <option key={homeScope.id} value={homeScope.id}>{homeScope.name} ({homeScope.id})</option>)}
-        </select><span id="active-home-status" className="sr-only">{homeScopes.length > 1 && !selectedHomeId ? 'Choose a home before loading home-specific data.' : selectedHomeId ? `Requests are scoped to home UUID ${selectedHomeId}.` : 'No home-specific requests are being made.'}</span></div>
+          {homeScopes.map((homeScope) => {
+            const ordinal = (homeNameOrdinals.get(homeScope.name) ?? 0) + 1;
+            homeNameOrdinals.set(homeScope.name, ordinal);
+            const label = homeNameCounts.get(homeScope.name) === 1 ? homeScope.name : `${homeScope.name} (${ordinal})`;
+            return <option key={homeScope.id} value={homeScope.id}>{label}</option>;
+          })}
+        </select><span id="active-home-status" className="sr-only">{homeScopes.length > 1 && !selectedHomeId ? 'Choose a home before loading home-specific data.' : selectedHomeId ? 'Requests are scoped to the selected home.' : 'No home-specific requests are being made.'}</span></div>
         <div className="topbar-actions">
           <button type="button" className="notification-button" aria-label={`${alerts.data?.active_count ?? 0} active alerts across all authorized homes`} onClick={() => setAlertsOpen(true)}><Bell aria-hidden="true" />{Boolean(alerts.data?.active_count) && <span>{alerts.data?.active_count}</span>}</button>
           <div className="profile"><span className="avatar" aria-hidden="true">{session.user?.display_name.slice(0, 1).toUpperCase()}</span><div><strong>{session.user?.display_name}</strong><small>{session.user?.roles[0] ?? 'Member'}</small></div></div>

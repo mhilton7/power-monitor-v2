@@ -1,7 +1,7 @@
 ﻿import { useQuery } from '@tanstack/react-query';
 import { endOfDay, startOfDay, subDays, subHours } from 'date-fns';
 import { CalendarRange, Download, Info, ZoomIn } from 'lucide-react';
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Area, AreaChart, Brush, CartesianGrid, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from '../api';
 import { PermissionGate } from '../auth/PermissionGate';
@@ -37,11 +37,13 @@ function rangeFor(preset: Preset, now: Date): { from: Date; to: Date; aggregatio
 export function HistoryPage() {
   const [now] = useState(() => new Date());
   const [preset, setPreset] = useState<Preset>('24 hours');
+  const presetWasChanged = useRef(false);
   const [metric, setMetric] = useState<(typeof metrics)[number]['value']>('power');
   const [timezone, setTimezone] = useState('America/Los_Angeles');
   const [custom, setCustom] = useState(() => ({ from: inputDateTime(subHours(now, 24)), to: inputDateTime(now) }));
   const homeScope = useHomeScope();
   const { selectedHomeId } = homeScope;
+  const preferences = useQuery({ queryKey: ['preferences'], queryFn: api.preferences });
   const devices = useQuery({ queryKey: ['devices', selectedHomeId], queryFn: () => api.devices(selectedHomeId), enabled: Boolean(selectedHomeId) });
   const circuits = useQuery({ queryKey: ['circuits', selectedHomeId], queryFn: () => api.circuits(selectedHomeId), enabled: Boolean(selectedHomeId) });
   const [selectedScope, setSelectedScope] = useState('');
@@ -65,7 +67,7 @@ export function HistoryPage() {
     queryKey: ['history', params.toString()],
     queryFn: () => api.history(params),
     enabled: Boolean(selectedHomeId && (deviceId || circuitId)) && range.to > range.from,
-    refetchInterval: preset === 'Live' ? 15_000 : false,
+    refetchInterval: preset === 'Live' ? (preferences.data?.refresh_seconds ?? 15) * 1000 : false,
   });
   const metricDefinition = metrics.find((entry) => entry.value === metric) ?? metrics[0];
   const rangeHours = (range.to.getTime() - range.from.getTime()) / 3_600_000;
@@ -75,8 +77,20 @@ export function HistoryPage() {
     plottedValue: metric === 'cost' ? (point.cost === null ? null : Number(point.cost)) : point.value === null ? null : Number(point.value),
   })) ?? [], [history.data, metric]);
 
+  useEffect(() => {
+    if (!preferences.data || presetWasChanged.current) return;
+    const preferred: Record<'day' | 'week' | 'month' | 'billing_cycle', Preset> = {
+      day: '24 hours',
+      week: '7 days',
+      month: '30 days',
+      billing_cycle: 'Billing cycle',
+    };
+    setPreset(preferred[preferences.data.history_range]);
+  }, [preferences.data]);
+
   function applyCustom(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    presetWasChanged.current = true;
     setPreset('Custom');
   }
 
@@ -87,7 +101,7 @@ export function HistoryPage() {
 
   if (homeScope.isLoading) return <div className="page"><h1 className="sr-only">History</h1><Loading label="Loading authorized homes" /></div>;
   if (homeScope.isError) return <div className="page"><h1 className="sr-only">History</h1><ErrorState error={homeScope.error} retry={homeScope.refetch} /></div>;
-  if (!selectedHomeId) return <div className="page"><h1 className="sr-only">History</h1><EmptyState title={homeScope.homeScopes.length === 0 ? 'No authorized home' : 'Choose an active home'} detail={homeScope.homeScopes.length === 0 ? 'Your account has no authorized home scope. History remains unavailable.' : 'Select a UUID-disambiguated home from the Active home control before loading History.'} /></div>;
+  if (!selectedHomeId) return <div className="page"><h1 className="sr-only">History</h1><EmptyState title={homeScope.homeScopes.length === 0 ? 'No authorized home' : 'Choose an active home'} detail={homeScope.homeScopes.length === 0 ? 'Your account has no authorized home scope. History remains unavailable.' : 'Select a home from the Active home control before loading History.'} /></div>;
   if (devices.isLoading || circuits.isLoading) return <div className="page"><h1 className="sr-only">History</h1><Loading label="Loading sensor and aggregate scopes" /></div>;
   if (devices.isError || circuits.isError) return <div className="page"><h1 className="sr-only">History</h1><ErrorState error={devices.error ?? circuits.error} retry={() => { void devices.refetch(); void circuits.refetch(); }} /></div>;
   if (!scopeValue) return <div className="page"><h1 className="sr-only">History</h1><EmptyState title="No History scope" detail="This home has no enrolled sensor or verified aggregate. History remains empty instead of guessing a scope." /></div>;
@@ -95,7 +109,7 @@ export function HistoryPage() {
   return <div className="page history-page">
     <header className="page-heading"><div><p className="eyebrow">Committed sensor evidence</p><h1>History</h1><p>Every point comes from an accepted durable PZEM interval. Missing data stays visibly missing.</p></div><PermissionGate permission="history.export"><button type="button" className="button button-secondary" onClick={() => void exportCsv()} disabled={!history.data}><Download aria-hidden="true" /> Export CSV</button></PermissionGate></header>
     <Card className="history-controls">
-      <div className="preset-tabs" role="group" aria-label="History range">{presets.map((entry) => <button type="button" key={entry} className={preset === entry ? 'active' : ''} aria-pressed={preset === entry} onClick={() => setPreset(entry)}>{entry}</button>)}</div>
+      <div className="preset-tabs" role="group" aria-label="History range">{presets.map((entry) => <button type="button" key={entry} className={preset === entry ? 'active' : ''} aria-pressed={preset === entry} onClick={() => { presetWasChanged.current = true; setPreset(entry); }}>{entry}</button>)}</div>
       <div className="filter-row">
         <div className="field"><label htmlFor="history-device">Sensor or aggregate scope</label><select id="history-device" value={scopeValue} onChange={(event) => setSelectedScope(event.target.value)}>{devices.data?.devices.map((device) => <option key={device.id} value={`device:${device.id}`}>{device.friendly_name}</option>)}{circuits.data?.circuits.filter((circuit) => circuit.aggregate_mode === 'verified_sum').map((circuit) => <option key={circuit.id} value={`circuit:${circuit.id}`}>{circuit.name} · verified aggregate</option>)}</select></div>
         <div className="field"><label htmlFor="history-metric">Metric</label><select id="history-metric" value={metric} onChange={(event) => setMetric(event.target.value as typeof metric)}>{metrics.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}</select></div>
