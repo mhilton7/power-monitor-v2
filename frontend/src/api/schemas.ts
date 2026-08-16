@@ -5,6 +5,13 @@ const localDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const decimal = z.union([z.string(), z.number().finite()]);
 const nullableDecimal = decimal.nullable();
 const nullableNumber = z.number().finite().nullable();
+const nullableTelemetryNumber = z.union([
+  z.number().finite().nonnegative(),
+  z.string()
+    .regex(/^(?:0|[1-9]\d*)(?:\.\d+)?$/)
+    .transform(Number)
+    .pipe(z.number().finite().nonnegative()),
+]).nullable();
 
 export const userSchema = z.object({
   id: z.string(),
@@ -40,11 +47,11 @@ export const sessionSchema = z.object({
 });
 
 export const measurementSchema = z.object({
-  voltage_v: nullableNumber,
-  current_a: nullableNumber,
-  active_power_w: nullableNumber,
-  frequency_hz: nullableNumber,
-  power_factor: nullableNumber,
+  voltage_v: nullableTelemetryNumber,
+  current_a: nullableTelemetryNumber,
+  active_power_w: nullableTelemetryNumber,
+  frequency_hz: nullableTelemetryNumber,
+  power_factor: nullableTelemetryNumber,
   measured_at: isoDate.nullable(),
   pzem_status: z.string().optional(),
 }).passthrough();
@@ -58,7 +65,7 @@ export const deviceSummarySchema = z.object({
   include_in_aggregate: z.boolean().optional(),
   show_on_dashboard: z.boolean().optional(),
   monitoring_enabled: z.boolean().optional(),
-  state: z.enum(['live', 'waiting', 'stale', 'offline', 'unavailable', 'invalid', 'needs_attention']),
+  state: z.enum(['live', 'waiting', 'stale', 'offline', 'unavailable', 'invalid', 'needs_attention', 'monitoring_disabled']),
   measurement: measurementSchema.nullable(),
   heartbeat_at: isoDate.nullable(),
   last_committed_at: isoDate.nullable(),
@@ -135,6 +142,7 @@ export const rateEvidenceSchema = z.object({
 
 export const rateDraftSchema = z.object({
   id: z.string(),
+  home_id: z.string().length(36),
   artifact_sha256: z.string().regex(/^[a-f0-9]{64}$/),
   utility_name: z.string().nullable(),
   rate_plan_name: z.string().nullable(),

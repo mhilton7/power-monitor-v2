@@ -5,6 +5,56 @@ import { device, home } from './fixtures';
 import { installFetchMock, renderWithProviders } from './render';
 
 describe('Home', () => {
+  it('loads decimal-string telemetry when another sensor reports missing PZEM values', async () => {
+    const absentMeasurement = {
+      voltage_v: null,
+      current_a: null,
+      active_power_w: null,
+      frequency_hz: null,
+      power_factor: null,
+      measured_at: null,
+      pzem_status: 'absent',
+    };
+    installFetchMock((path) => {
+      if (path.includes('/home')) return {
+        status: 200,
+        body: {
+          ...home,
+          devices: [
+            {
+              ...home.devices[0]!,
+              measurement: {
+                ...home.devices[0]!.measurement,
+                voltage_v: '122.600',
+                current_a: '20.200',
+                active_power_w: '2480.000',
+                frequency_hz: '60.010',
+                power_factor: '0.970',
+              },
+            },
+            {
+              ...home.devices[0]!,
+              id: 'device-outdoor',
+              friendly_name: 'Outdoor AC',
+              state: 'monitoring_disabled',
+              measurement: absentMeasurement,
+              last_committed_at: null,
+            },
+          ],
+        },
+      };
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [device] } };
+      return path.includes('/history') ? { status: 200, body: { points: [], energy_kwh: 0, cost: '0', completeness: 1, missing_ranges: [], resolution_seconds: 300, timezone: 'UTC', usage_source: 'authenticated PZEM-004T sensor intervals only' } } : { status: 200, body: { alerts: [] } };
+    });
+
+    renderWithProviders(<HomePage />);
+
+    expect(await screen.findByLabelText('2.48 kilowatts')).toBeInTheDocument();
+    const absentSensor = screen.getByRole('button', { name: 'Open Outdoor AC sensor details' });
+    expect(within(absentSensor).getByText('Not available')).toBeInTheDocument();
+    expect(screen.queryByText('Unable to load this view')).not.toBeInTheDocument();
+  });
+
   it('distinguishes a measured zero from a missing value and labels live evidence', async () => {
     installFetchMock((path) => {
       if (path.includes('/home')) return { status: 200, body: { ...home, devices: [{ ...home.devices[0]!, measurement: { ...home.devices[0]!.measurement, active_power_w: 0, voltage_v: null } }] } };

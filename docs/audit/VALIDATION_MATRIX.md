@@ -1,11 +1,11 @@
 # Validation matrix
 
 This matrix preserves the rc.5-preparation audit snapshot and records explicitly
-identified supplemental rc.6 working-tree evidence. Server rc.5 later
+identified supplemental rc.6 working-tree evidence. Server rc.6 later
 completed publication and remains public and installable with its attached
 assets. Hardware execution confirmed that firmware rc.1 through rc.5 crash in
-the main stack before provisioning; coordinated rc.6 hotfix publication is
-pending. Historical rows are not relabeled as rc.6 evidence; rows naming
+the main stack before provisioning; coordinated rc.8 publication is pending.
+Historical rows are not relabeled as rc.8 evidence; rows naming
 revision 0012, 31 Vitest tests, or the live tiered-page probe are supplemental
 current-source results.
 

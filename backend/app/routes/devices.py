@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
 from ..constants import (
+    MAX_DEVICE_RESPONSE_BYTES,
     MAX_FUTURE_TIME_SECONDS,
     MAX_HEARTBEAT_BODY_BYTES,
     MAX_READING_BODY_BYTES,
@@ -75,6 +76,11 @@ async def _require_home_scope(session: AsyncSession, user_id: str, home_id: str)
         raise NotFound("home does not exist")
 
 
+def _device_response_body(payload: DeviceResponse | dict[str, object]) -> bytes:
+    value = payload.model_dump(mode="json") if isinstance(payload, DeviceResponse) else payload
+    return orjson.dumps(value, option=orjson.OPT_SORT_KEYS)
+
+
 def _signed_device_response(
     *,
     payload: DeviceResponse | dict[str, object],
@@ -83,8 +89,7 @@ def _signed_device_response(
     device_secret: bytes,
     status_code: int = 200,
 ) -> Response:
-    value = payload.model_dump(mode="json") if isinstance(payload, DeviceResponse) else payload
-    body = orjson.dumps(value, option=orjson.OPT_SORT_KEYS)
+    body = _device_response_body(payload)
     timestamp = str(int(datetime.now(UTC).timestamp()))
     nonce = secrets.token_urlsafe(24)
     digest = body_sha256(body)
@@ -504,14 +509,50 @@ async def heartbeat(
     device.maximum_sequence = max(device.maximum_sequence, payload.newest_sequence or 0)
     if payload.acknowledged_sequence > device.contiguous_ack:
         raise IntegrityConflict("device claims an acknowledgement the server has not committed")
-    commands = await deliver_commands(session, device.id, settings=settings)
     gaps = await find_gaps(session, device)
+    empty_response = DeviceResponse(
+        server_time=now,
+        highest_contiguous_sequence=device.contiguous_ack,
+        gaps=gaps,
+        commands=[],
+    )
+    minimum_response = DeviceResponse(
+        server_time=now,
+        highest_contiguous_sequence=device.contiguous_ack,
+        gaps=[],
+        commands=[],
+    )
+    # Gap evidence is advisory and will be returned again. Bound it before
+    # command delivery so the complete authenticated response always fits the
+    # firmware's fixed receive buffer.
+    while gaps and len(_device_response_body(empty_response)) > MAX_DEVICE_RESPONSE_BYTES:
+        gaps.pop()
+        empty_response = DeviceResponse(
+            server_time=now,
+            highest_contiguous_sequence=device.contiguous_ack,
+            gaps=gaps,
+            commands=[],
+        )
+    empty_response_size = len(_device_response_body(empty_response))
+    if empty_response_size > MAX_DEVICE_RESPONSE_BYTES:
+        raise IntegrityConflict("device response exceeds the protocol byte limit")
+    commands = await deliver_commands(
+        session,
+        device.id,
+        settings=settings,
+        response_byte_budget=MAX_DEVICE_RESPONSE_BYTES - empty_response_size,
+        maximum_single_envelope_bytes=(
+            MAX_DEVICE_RESPONSE_BYTES - len(_device_response_body(minimum_response))
+        ),
+    )
     response = DeviceResponse(
         server_time=now,
         highest_contiguous_sequence=device.contiguous_ack,
         gaps=gaps,
         commands=commands,
     )
+    if len(_device_response_body(response)) > MAX_DEVICE_RESPONSE_BYTES:
+        raise IntegrityConflict("device response exceeds the protocol byte limit")
     await session.commit()
     return _signed_device_response(
         payload=response, request=request, device_id=device.id, device_secret=secret

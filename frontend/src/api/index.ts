@@ -115,7 +115,7 @@ export const api = {
     const overview = await apiRequest(homePath('/billing', homeId), billingSchema);
     try {
       const drafts = await apiRequest(homePath('/bill-rate-imports', homeId), z.object({ extractions: z.array(rateDraftSchema) }));
-      return { ...overview, drafts: drafts.extractions };
+      return { ...overview, drafts: drafts.extractions.map((draft) => exactHome(homeId, draft)) };
     } catch (error) {
       if (error instanceof ApiError && error.status === 403) return { ...overview, drafts: [] };
       throw error;
@@ -145,7 +145,7 @@ export const api = {
   uploadRatePdf: async (file: File, homeId: string) => {
     const body = new FormData(); body.set('document', file, file.name); body.set('home_id', homeId);
     const response = await apiRequest('/bill-rate-imports', z.object({ extraction: rateDraftSchema, usage_source_notice: z.string(), ignored_prohibited_categories: z.array(z.string()) }), { method: 'POST', body });
-    return response.extraction;
+    return exactHome(homeId, response.extraction);
   },
   correctRateDraft: async (id: string, field: string, correctedValue: string) => {
     const response = await apiRequest(`/bill-rate-imports/${encodeURIComponent(id)}`, z.object({ extraction: rateDraftSchema }), { method: 'PATCH', body: jsonBody({ field, corrected_value: correctedValue }) });

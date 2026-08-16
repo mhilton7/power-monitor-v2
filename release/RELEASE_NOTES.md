@@ -1,4 +1,4 @@
-# PowerMeter V2 v0.1.0-rc.6
+# PowerMeter V2 v0.1.0-rc.8
 
 PowerMeter V2 is a central, authenticated PZEM-004T monitoring system paired
 with the independent
@@ -8,29 +8,30 @@ Authenticated sensor evidence remains the only source of live measurements,
 History, energy, completeness, forecasts, and usage-based cost. Utility-bill
 PDFs remain rate-source documents only.
 
-This source file is the release-body input for candidate `v0.1.0-rc.6`. This
+This source file is the release-body input for candidate `v0.1.0-rc.8`. This
 source copy alone is not publication evidence. Installation is authorized only after the
 signed tagged workflow publishes the complete checksummed and attested asset
 set, digest-pinned YAML, public multi-architecture images, deployment evidence,
 and coordinated firmware release.
 
-## Why rc.6 follows public server rc.5
+## Why rc.8 follows public server rc.6
 
-Server [`v0.1.0-rc.5`](https://github.com/mhilton7/power-monitor-v2/releases/tag/v0.1.0-rc.5)
+Server [`v0.1.0-rc.6`](https://github.com/mhilton7/power-monitor-v2/releases/tag/v0.1.0-rc.6)
 completed its tagged workflow and remains a public, immutable, installable
-prerelease with its complete attached asset set. Hardware execution after that
-publication confirmed that firmware rc.1 through rc.5 crash in the main stack
-before provisioning. Those firmware releases remain immutable evidence but are
-not a working provisioning path.
+prerelease with its complete attached asset set. Rc.8 carries its SCE,
+rate-only bill parsing, user/profile, home naming, sensor presentation, and
+per-user settings behavior forward unchanged.
 
-Rc.6 is the coordinated hotfix identity for corrected firmware. The server
-also repairs SCE tiered-source classification, closed rate-only bill parsing,
-user/profile administration, persistent home naming, sensor presentation, and
-per-user display settings. It retains `pm-protocol/1.0.0` and extends the
-additive Alembic chain to `20260815_0012` without changing sensor contracts or
-rewriting telemetry.
+Rc.8 bounds authenticated heartbeat command responses to the ESP32 receive
+buffer, prevents the firmware's uint8 delivery attempt from overflowing, and
+terminalizes linked OTA deployments when delivery can no longer complete. The
+browser accepts exact decimal telemetry strings as finite nonnegative numbers
+while preserving missing values as null and measured zero as zero. Bill-rate
+extractions now accept their required `home_id` only when it matches the
+selected home. It retains `pm-protocol/1.0.0` and Alembic head
+`20260815_0012`; no migration or breaking sensor-contract change is introduced.
 Its generated OpenAPI SHA-256 is
-`b1b0728eb7b00038053ecf6d3b2b302a82683d100086399b7e888dc0359b8ac9`.
+`b7f8726f73633bd577da2cd3a9bfb7a2104615dafb44681564cd81fce8c8148f`.
 
 ### Historical rc.4 recovery carried by rc.5
 
@@ -164,7 +165,7 @@ protocol, or migration revision changed for this repair.
   are not part of the normal path.
 - Operators create exactly nine Generic/POSIX child ZFS datasets below
   `/mnt/Apps/PowerMeterV2`. The former `bill-rate-source-artifacts` dataset is
-  not mounted by rc.5 or rc.6; an existing rc.3 dataset is left untouched and should
+  not mounted by rc.5, rc.6, or rc.8; an existing rc.3 dataset is left untouched and should
   remain unshared until an operator chooses a separately reviewed cleanup.
 - TLS verification remains strict for `power-monitor.home.arpa`, including
   hostname, key match, current validity, and at least seven days of remaining
@@ -185,7 +186,7 @@ protocol, or migration revision changed for this repair.
 ## Upgrade and rollback boundary
 
 Back up and verify the database, perform an isolated restore check, and take a
-recursive ZFS snapshot before installing rc.6. Keep all existing application
+recursive ZFS snapshot before installing rc.8. Keep all existing application
 secrets, database credentials, the backup encryption key, TLS material, and
 datasets. Do not recreate storage or rotate secrets during this upgrade.
 
@@ -199,8 +200,8 @@ write locks until its guards are installed. Do not bypass a guard, edit an
 applied migration, or delete evidence merely to continue.
 
 The release migration report proves only the forward upgrade from the latest
-lower same-major public release. It does not prove that rc.5 binaries can use a
-database touched by rc.6. Application-only rollback is not authorized. A
+lower same-major public release. It does not prove that rc.6 binaries can use
+state touched by rc.8. Application-only rollback is not authorized. A
 rollback requires a separately validated restore or clone of the matching
 pre-upgrade snapshot or verified backup, paired with the exact older release
 assets. GitHub-hosted smoke records rollback as
@@ -208,27 +209,26 @@ assets. GitHub-hosted smoke records rollback as
 
 ## Release contents and firmware pairing
 
-A successfully published rc.6 candidate includes:
+A successfully published rc.8 candidate includes:
 
 - four immutable multi-architecture GHCR images referenced by registry digest;
-- `power-monitor-v2-v0.1.0-rc.6.yaml` and `release-manifest.json`;
+- `power-monitor-v2-v0.1.0-rc.8.yaml` and `release-manifest.json`;
 - the Windows SMB staging helper and auditable initializer source;
 - checksums, strict attestations, SBOMs, vulnerability results, dependency and
   test reports, migration evidence, and deployment-smoke evidence;
 - installation, secrets/TLS, dataset/ACL, backup/restore, upgrade, and rollback
   instructions; and
-- an exact coordinated public firmware `v0.1.0-rc.6` release whose server
+- an exact coordinated public firmware `v0.1.0-rc.8` release whose server
   contract declares OpenAPI SHA-256
-  `b1b0728eb7b00038053ecf6d3b2b302a82683d100086399b7e888dc0359b8ac9`.
+  `b7f8726f73633bd577da2cd3a9bfb7a2104615dafb44681564cd81fce8c8148f`.
 
 The signed server rc.2 tag and failed release run `31866197054` remain
 immutable prepublication evidence. There is no server rc.2 GitHub Release.
-Public server rc.5 remains installable with its own attached eight-service
-assets and instructions and is the migration predecessor for rc.6. Firmware
-rc.1 through rc.5 have the confirmed pre-provision main-stack crash; the
-coordinated fixed firmware rc.6 target must be published and verified before a
-server rc.6 tag is created. No historical tag or release is modified or
-relabeled by rc.6.
+Public server rc.6 remains installable with its own attached eight-service
+assets and instructions and is the migration predecessor for rc.8. Firmware
+rc.8 must be published and verified with the exact server rc.8 contract before
+a server rc.8 tag is created. No historical tag or release is modified or
+relabeled by rc.8; rc.7 remains an unpublished local firmware candidate.
 
 This remains a prerelease candidate. Hardware status is honestly `pending`.
 Marked-unit electrical identity, physical TLS/HMAC behavior, OTA installation
