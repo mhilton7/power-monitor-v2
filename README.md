@@ -71,13 +71,16 @@ code. The current release candidate is not physically certified; see
 ## Release state
 
 The current public server installation authority is
-[`v0.1.0-rc.3`](https://github.com/mhilton7/power-monitor-v2/releases/tag/v0.1.0-rc.3).
+[`v0.1.0-rc.5`](https://github.com/mhilton7/power-monitor-v2/releases/tag/v0.1.0-rc.5),
+which remains public, immutable, and installable with its attached asset set.
 The valid signed server `v0.1.0-rc.4` tag is historical, but its deterministic
 deployment-smoke failure skipped release assembly; it has no server GitHub
-Release or generated YAML and is not installable. The audited source candidate
-is now `v0.1.0-rc.5`; it is installable only if its signed tagged workflow
-publishes the complete matching asset set after coordinated firmware rc.5 is
-public and verified.
+Release or generated YAML and is not installable. Hardware execution has now
+confirmed that firmware rc.1 through rc.5 crash in the main stack before
+provisioning. A coordinated rc.6 hotfix is pending; the server rc.6 source
+advances release identity only and is not an installation artifact until its
+signed tagged workflow publishes the complete matching asset set after fixed
+firmware rc.6 is public and verified.
 Stable release remains fail-closed until the hardware identity, electrical
 interface, TLS, OTA rollback, outage recovery, and 72-hour soak gates have
 machine-readable evidence. A source checkout is never an install artifact:

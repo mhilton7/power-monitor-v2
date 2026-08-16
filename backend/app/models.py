@@ -24,6 +24,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    func,
     select,
 )
 from sqlalchemy.engine import Connection
@@ -90,11 +91,15 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    preferences: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+Index("uq_users_email_lower", func.lower(User.email), unique=True)
 
 
 class Role(Base):
@@ -193,6 +198,12 @@ class Device(Base):
     home_id: Mapped[str] = mapped_column(ForeignKey("homes.id", ondelete="CASCADE"), index=True)
     circuit_id: Mapped[str | None] = mapped_column(ForeignKey("circuits.id", ondelete="SET NULL"))
     friendly_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    location: Mapped[str | None] = mapped_column(String(120))
+    notes: Mapped[str | None] = mapped_column(String(500))
+    display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    include_in_aggregate: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    show_on_dashboard: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    monitoring_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     protocol_id: Mapped[str] = mapped_column(
         String(40), default="pm-protocol/1.0.0", nullable=False
     )
@@ -812,12 +823,19 @@ class UtilityBillRateExtraction(Base):
     utility_name: Mapped[str] = mapped_column(String(120), nullable=False)
     rate_plan_name: Mapped[str] = mapped_column(String(120), nullable=False)
     rate_class: Mapped[str] = mapped_column(String(80), nullable=False)
+    plan_classification: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False)
+    holiday_treatment: Mapped[str] = mapped_column(String(40), default="unresolved", nullable=False)
     cca_or_direct_access_indicator: Mapped[str | None] = mapped_column(String(80))
     season_definitions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     day_type_definitions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     tou_period_definitions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     tier_threshold_definitions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     reusable_price_components: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    billing_period_start: Mapped[date | None] = mapped_column(Date)
+    billing_period_end: Mapped[date | None] = mapped_column(Date)
+    billing_period_days: Mapped[int | None] = mapped_column(Integer)
+    tier_threshold_basis: Mapped[str | None] = mapped_column(String(500))
+    candidate_complete: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     baseline_allocation_rule: Mapped[str | None] = mapped_column(String(500))
     baseline_credit_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
     effective_start_candidate: Mapped[date | None] = mapped_column(Date)

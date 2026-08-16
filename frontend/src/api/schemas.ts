@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 const isoDate = z.string().datetime({ offset: true });
+const localDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const decimal = z.union([z.string(), z.number().finite()]);
 const nullableDecimal = decimal.nullable();
 const nullableNumber = z.number().finite().nullable();
@@ -14,7 +15,23 @@ export const userSchema = z.object({
   mfa_enabled: z.boolean().default(false),
   enabled: z.boolean().default(true),
   deleted_at: isoDate.nullable().optional(),
+  created_at: isoDate.optional(),
+  last_login_at: isoDate.nullable().optional(),
+  manageable: z.boolean().default(false),
 }).passthrough();
+
+export const userPreferencesSchema = z.object({
+  dashboard_range: z.enum(['today', 'week', 'month']),
+  history_range: z.enum(['day', 'week', 'month', 'billing_cycle']),
+  refresh_seconds: z.union([z.literal(15), z.literal(30), z.literal(60), z.literal(120), z.literal(300)]),
+  power_unit: z.enum(['auto', 'W', 'kW']),
+  energy_unit: z.enum(['auto', 'Wh', 'kWh']),
+  date_format: z.enum(['iso', 'us']),
+  time_format: z.enum(['12h', '24h']),
+  decimal_precision: z.number().int().min(0).max(4),
+  density: z.enum(['comfortable', 'compact']),
+  dashboard_cards: z.array(z.enum(['live_power', 'energy', 'cost', 'completeness', 'alerts'])).min(1),
+}).strict();
 
 export const sessionSchema = z.object({
   authenticated: z.boolean(),
@@ -35,6 +52,12 @@ export const measurementSchema = z.object({
 export const deviceSummarySchema = z.object({
   id: z.string(),
   friendly_name: z.string(),
+  location: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  display_order: z.number().int().nonnegative().optional(),
+  include_in_aggregate: z.boolean().optional(),
+  show_on_dashboard: z.boolean().optional(),
+  monitoring_enabled: z.boolean().optional(),
   state: z.enum(['live', 'waiting', 'stale', 'offline', 'unavailable', 'invalid', 'needs_attention']),
   measurement: measurementSchema.nullable(),
   heartbeat_at: isoDate.nullable(),
@@ -99,8 +122,11 @@ export const historySchema = z.object({
 }).passthrough();
 
 export const rateEvidenceSchema = z.object({
+  name: z.string().optional(),
   field: z.string().optional(),
   key: z.string().optional(),
+  normalized_value: z.string().optional(),
+  supporting_label: z.string().nullable().optional(),
   label: z.string().optional(),
   value: z.unknown().optional(),
   source: z.object({ page: z.number().int().positive(), region: z.unknown().optional() }).optional(),
@@ -113,12 +139,19 @@ export const rateDraftSchema = z.object({
   utility_name: z.string().nullable(),
   rate_plan_name: z.string().nullable(),
   rate_class: z.string().nullable(),
+  plan_classification: z.enum(['flat', 'tiered', 'seasonal_tiered', 'time_of_use', 'unknown']),
+  holiday_treatment: z.enum(['not_applicable', 'no_special_treatment', 'weekend_schedule', 'explicit_schedule', 'unresolved']),
   cca_or_direct_access_indicator: z.string().nullable(),
   season_definitions: z.array(z.unknown()),
   day_type_definitions: z.array(z.unknown()),
   tou_period_definitions: z.array(z.unknown()),
   tier_threshold_definitions: z.array(z.unknown()),
   reusable_price_components: z.array(z.unknown()),
+  billing_period_start: localDate.nullable(),
+  billing_period_end: localDate.nullable(),
+  billing_period_days: z.number().int().positive().nullable(),
+  tier_threshold_basis: z.string().nullable(),
+  candidate_complete: z.boolean(),
   baseline_allocation_rule: z.string().nullable(),
   baseline_credit_rate: nullableDecimal,
   effective_start_candidate: isoDate.nullable(),
@@ -446,6 +479,12 @@ export const deviceDetailSchema = z.object({
   home_id: z.string(),
   circuit_id: z.string().nullable(),
   friendly_name: z.string(),
+  location: z.string().nullable().default(null),
+  notes: z.string().nullable().default(null),
+  display_order: z.number().int().nonnegative().default(0),
+  include_in_aggregate: z.boolean().default(true),
+  show_on_dashboard: z.boolean().default(true),
+  monitoring_enabled: z.boolean().default(true),
   device_fingerprint: z.string(),
   credential_fingerprint: z.string().length(64).nullable(),
   credential_key_version: z.number().int().positive().nullable(),

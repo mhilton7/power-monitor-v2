@@ -5,10 +5,25 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
 from itertools import pairwise
-from typing import Any
+from typing import Any, Literal
 
-PARSER_VERSION = "sce-tou-public-v1"
+PARSER_VERSION = "sce-residential-public-v2"
 CANDIDATE_SCHEMA = "sce-rate-candidate/1.0.0"
+
+PlanClassification = Literal[
+    "flat",
+    "tiered",
+    "seasonal_tiered",
+    "time_of_use",
+    "unknown",
+]
+HolidayTreatment = Literal[
+    "not_applicable",
+    "no_special_treatment",
+    "weekend_schedule",
+    "explicit_schedule",
+    "unresolved",
+]
 
 
 class SourceParseError(ValueError):
@@ -300,7 +315,79 @@ def _require_component_scope(block: str) -> None:
         )
 
 
-def parse_sce_tou_public_page(body: bytes, media_type: str) -> ParsedRateCandidate:
+def _classify_plan(text: str) -> PlanClassification:
+    """Classify before applying schedule-specific validation.
+
+    This ordering is security relevant: an unknown or tiered tariff must never
+    be forced through the TOU holiday validator and mislabeled as a missing
+    holiday rule.
+    """
+
+    # SCE pages share global navigation and FAQ content. The official tiered
+    # page therefore mentions TOU plans even though its primary tariff is not
+    # time-dependent. Prefer stronger page-local tier evidence before an
+    # incidental TOU link or comparison paragraph.
+    if re.search(r"\b(?:DOMESTIC|SCHEDULE\s+D)\b", text, re.IGNORECASE) and re.search(
+        r"\bTIER\s*1\b.*\bTIER\s*2\b", text, re.IGNORECASE | re.DOTALL
+    ):
+        return (
+            "seasonal_tiered"
+            if re.search(
+                r"JUNE\s*[-\u2013\u2014]\s*SEPTEMBER|SUMMER\s+(?:DAILY\s+)?ALLOCATION",
+                text,
+                re.IGNORECASE,
+            )
+            else "tiered"
+        )
+    if re.search(r"TIERED\s+RATE\s+PLAN", text, re.IGNORECASE) and re.search(
+        r"\bTIER\s*1\b.*\bTIER\s*2\b", text, re.IGNORECASE | re.DOTALL
+    ):
+        return (
+            "seasonal_tiered"
+            if re.search(
+                r"SUMMER\s+(?:DAILY\s+)?ALLOCATIONS?|JUNE\s*[-\u2013\u2014]\s*SEPTEMBER",
+                text,
+                re.IGNORECASE,
+            )
+            else "tiered"
+        )
+    if re.search(r"\bTOU(?:-D)?\b|TIME\s*[- ]?OF\s*[- ]?USE", text, re.IGNORECASE):
+        return "time_of_use"
+    if re.search(r"\bFLAT\s+RATE\b", text, re.IGNORECASE):
+        return "flat"
+    return "unknown"
+
+
+def _holiday_treatment(text: str, classification: PlanClassification) -> HolidayTreatment:
+    if classification in {"flat", "tiered", "seasonal_tiered"}:
+        return "not_applicable"
+    if classification == "unknown":
+        raise SourceParseError(
+            "RATE_PLAN_TYPE_UNRESOLVED",
+            "the SCE source tariff could not be classified safely",
+            evidence={"classification": classification},
+        )
+    if re.search(
+        r"HOLIDAYS?\s+(?:FOLLOW|USE|ARE\s+CHARGED\s+AT)\s+(?:THE\s+)?WEEKEND\s+RATES?",
+        text,
+        re.IGNORECASE,
+    ):
+        return "weekend_schedule"
+    if re.search(r"HOLIDAYS?\s+(?:HAVE|USE)\s+NO\s+SPECIAL\s+TREATMENT", text, re.IGNORECASE):
+        return "no_special_treatment"
+    if re.search(r"HOLIDAY\s+(?:RATE|SCHEDULE|PERIOD)", text, re.IGNORECASE):
+        return "explicit_schedule"
+    raise SourceParseError(
+        "HOLIDAY_RULE_MISSING",
+        "the time-of-use SCE source does not establish holiday treatment",
+        evidence={
+            "classification": classification,
+            "required_day_types": ["weekday", "weekend", "holiday"],
+        },
+    )
+
+
+def _visible_text(body: bytes, media_type: str) -> str:
     if media_type not in {"text/html", "application/xhtml+xml"}:
         raise SourceParseError(
             "PARSER_MEDIA_TYPE_UNSUPPORTED",
@@ -316,17 +403,241 @@ def parse_sce_tou_public_page(body: bytes, media_type: str) -> ParsedRateCandida
         parser.close()
     except Exception as exc:
         raise SourceParseError("HTML_INVALID", "SCE source HTML could not be parsed") from exc
-    text = "\n".join(parser.values)
-    if not re.search(
-        r"HOLIDAYS?\s+(?:FOLLOW|USE|ARE\s+CHARGED\s+AT)\s+(?:THE\s+)?WEEKEND\s+RATES?",
+    return "\n".join(parser.values)
+
+
+def _public_decimal(raw: str, *, cents: bool) -> Decimal:
+    try:
+        value = Decimal(raw.replace(",", ""))
+    except InvalidOperation as exc:
+        raise SourceParseError("PRICE_INVALID", "SCE public price is invalid") from exc
+    if cents:
+        value /= Decimal(100)
+    if value <= 0 or value > Decimal("20"):
+        raise SourceParseError("PRICE_OUT_OF_RANGE", "SCE public price is outside safe bounds")
+    return value.quantize(Decimal("0.00000001"))
+
+
+def _tier_price(text: str, tier: int) -> Decimal:
+    match = re.search(
+        rf"\bTIER\s*{tier}\b(?:(?!\bTIER\s*[12]\b).){{0,240}}?"
+        r"(?:(?P<dollar>\$)\s*)?(?P<amount>\d+(?:\.\d+)?)\s*(?P<cents>\u00a2|CENTS?)",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match is None:
+        raise SourceParseError(
+            "RATE_LINES_NOT_FOUND",
+            "the SCE tiered source does not contain both tier prices",
+            evidence={"missing_tier": tier},
+        )
+    return _public_decimal(match.group("amount"), cents=match.group("dollar") is None)
+
+
+def _tiered_candidate(
+    text: str,
+    classification: Literal["tiered", "seasonal_tiered"],
+) -> ParsedRateCandidate:
+    tier_one = _tier_price(text, 1)
+    tier_two = _tier_price(text, 2)
+    base_match = re.search(
+        r"(?:(?P<dollar>\$)\s*)?(?P<amount>\d+(?:\.\d+)?)\s*"
+        r"(?P<cents>\u00a2|CENTS?)?\s*(?:DAILY|PER\s+DAY)\s+BASE\s+SERVICES?\s+CHARGE",
         text,
         re.IGNORECASE,
-    ):
+    ) or re.search(
+        r"BASE\s+SERVICES?\s+CHARGE\s*:?.{0,40}?"
+        r"(?:(?P<dollar>\$)\s*)?(?P<amount>\d+(?:\.\d+)?)\s*"
+        r"(?P<cents>\u00a2|CENTS?)?\s*(?:PER\s+DAY|/\s*DAY)",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if base_match is None:
         raise SourceParseError(
-            "HOLIDAY_RULE_MISSING",
-            "the SCE source does not explicitly define holiday treatment",
-            evidence={"required_day_types": ["weekday", "weekend", "holiday"]},
+            "FIXED_CHARGE_MISSING",
+            "the SCE tiered source daily base service charge is missing",
         )
+    daily = _public_decimal(
+        base_match.group("amount"),
+        cents=base_match.group("dollar") is None and base_match.group("cents") is not None,
+    )
+    effective_match = re.search(
+        r"CURRENT\s+RATES?\s+AS\s+OF\s+(?P<month>\d{1,2})/(?P<day>\d{1,2})/(?P<year>\d{2,4})",
+        text,
+        re.IGNORECASE,
+    )
+    effective_date = None
+    if effective_match is not None:
+        year = int(effective_match.group("year"))
+        if year < 100:
+            year += 2000
+        effective_date = (
+            f"{year:04d}-{int(effective_match.group('month')):02d}-"
+            f"{int(effective_match.group('day')):02d}"
+        )
+    periods = [
+        {
+            "season": "all",
+            "day_type": "all",
+            "name": "tier_1",
+            "start_minute": 0,
+            "end_minute": 1440,
+            "price_per_kwh": format(tier_one, "f"),
+            "currency": "USD",
+            "unit": "kWh",
+            "tier_min_kwh": "0.000000",
+            "tier_max_kwh": None,
+        },
+        {
+            "season": "all",
+            "day_type": "all",
+            "name": "tier_2",
+            "start_minute": 0,
+            "end_minute": 1440,
+            "price_per_kwh": format(tier_two, "f"),
+            "currency": "USD",
+            "unit": "kWh",
+            "tier_min_kwh": None,
+            "tier_max_kwh": None,
+        },
+    ]
+    normalized = {
+        "schema": CANDIDATE_SCHEMA,
+        "utility_name": "Southern California Edison",
+        "timezone": "America/Los_Angeles",
+        "currency": "USD",
+        "plan_classification": classification,
+        "holiday_treatment": "not_applicable",
+        "season_definitions": {
+            "summer": {"start_month": 6, "end_month": 9},
+            "winter": {"start_month": 10, "end_month": 5},
+        },
+        "holiday_rule": "not_applicable",
+        "effective_start": effective_date,
+        "effective_end": None,
+        "effective_date_confirmation_required": True,
+        "plans": [
+            {
+                "rate_plan_name": "DOMESTIC",
+                "rate_class": "residential",
+                "pricing_model": classification,
+                "daily_fixed_charge": format(daily, "f"),
+                "monthly_fixed_charge": "0.00000000",
+                "baseline_credit_per_kwh": "0.00000000",
+                "rate_components": "sce_delivery_and_generation_combined",
+                "tier_threshold_basis": "home_baseline_allocation_review_required",
+                "periods": periods,
+            }
+        ],
+    }
+    return ParsedRateCandidate(
+        normalized_rates=normalized,
+        validation_evidence={
+            "parser_version": PARSER_VERSION,
+            "schema": CANDIDATE_SCHEMA,
+            "plan_classification": classification,
+            "holiday_treatment": "not_applicable",
+            "plan_count": 1,
+            "period_count": len(periods),
+            "seasons": ["summer", "winter"],
+            "day_types": ["all"],
+            "coverage": "semantic_tier_coverage",
+            "price_unit": "USD/kWh",
+            "effective_date": effective_date or "administrator_confirmation_required",
+            "warnings": [
+                "PUBLIC_SOURCE_PRICES_ARE_DISPLAY_ROUNDED",
+                "HOME_BASELINE_ALLOCATION_REVIEW_REQUIRED",
+            ],
+        },
+    )
+
+
+def _flat_candidate(text: str) -> ParsedRateCandidate:
+    price_match = re.search(
+        r"FLAT\s+RATE(?:\s+PLAN)?.{0,240}?"
+        r"(?:(?P<dollar>\$)\s*)?(?P<amount>\d+(?:\.\d+)?)\s*"
+        r"(?P<cents>\u00a2|CENTS?)?\s*(?:PER|/)\s*KWH",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if price_match is None:
+        raise SourceParseError(
+            "RATE_LINES_NOT_FOUND",
+            "the SCE flat source does not contain a reusable per-kWh rate",
+        )
+    price = _public_decimal(
+        price_match.group("amount"),
+        cents=price_match.group("dollar") is None and price_match.group("cents") is not None,
+    )
+    normalized = {
+        "schema": CANDIDATE_SCHEMA,
+        "utility_name": "Southern California Edison",
+        "timezone": "America/Los_Angeles",
+        "currency": "USD",
+        "plan_classification": "flat",
+        "holiday_treatment": "not_applicable",
+        "season_definitions": {
+            "summer": {"start_month": 6, "end_month": 9},
+            "winter": {"start_month": 10, "end_month": 5},
+        },
+        "holiday_rule": "not_applicable",
+        "effective_start": None,
+        "effective_end": None,
+        "effective_date_confirmation_required": True,
+        "plans": [
+            {
+                "rate_plan_name": "FLAT",
+                "rate_class": "residential",
+                "pricing_model": "flat",
+                "daily_fixed_charge": "0.00000000",
+                "monthly_fixed_charge": "0.00000000",
+                "baseline_credit_per_kwh": "0.00000000",
+                "rate_components": "sce_delivery_and_generation_combined",
+                "periods": [
+                    {
+                        "season": "all",
+                        "day_type": "all",
+                        "name": "flat",
+                        "start_minute": 0,
+                        "end_minute": 1440,
+                        "price_per_kwh": format(price, "f"),
+                        "currency": "USD",
+                        "unit": "kWh",
+                        "tier_min_kwh": None,
+                        "tier_max_kwh": None,
+                    }
+                ],
+            }
+        ],
+    }
+    return ParsedRateCandidate(
+        normalized_rates=normalized,
+        validation_evidence={
+            "parser_version": PARSER_VERSION,
+            "schema": CANDIDATE_SCHEMA,
+            "plan_classification": "flat",
+            "holiday_treatment": "not_applicable",
+            "plan_count": 1,
+            "period_count": 1,
+            "seasons": ["summer", "winter"],
+            "day_types": ["all"],
+            "coverage": "complete",
+            "price_unit": "USD/kWh",
+            "effective_date": "administrator_confirmation_required",
+        },
+    )
+
+
+def parse_sce_public_page(body: bytes, media_type: str) -> ParsedRateCandidate:
+    text = _visible_text(body, media_type)
+    classification = _classify_plan(text)
+    treatment = _holiday_treatment(text, classification)
+    if classification == "tiered":
+        return _tiered_candidate(text, "tiered")
+    if classification == "seasonal_tiered":
+        return _tiered_candidate(text, "seasonal_tiered")
+    if classification == "flat":
+        return _flat_candidate(text)
 
     plans: list[dict[str, Any]] = []
     for definition in PLAN_DEFINITIONS:
@@ -377,6 +688,8 @@ def parse_sce_tou_public_page(body: bytes, media_type: str) -> ParsedRateCandida
             "summer": {"start_month": 6, "end_month": 9},
             "winter": {"start_month": 10, "end_month": 5},
         },
+        "plan_classification": classification,
+        "holiday_treatment": treatment,
         "holiday_rule": "weekend_rates",
         "effective_start": None,
         "effective_end": None,
@@ -388,6 +701,8 @@ def parse_sce_tou_public_page(body: bytes, media_type: str) -> ParsedRateCandida
         validation_evidence={
             "parser_version": PARSER_VERSION,
             "schema": CANDIDATE_SCHEMA,
+            "plan_classification": classification,
+            "holiday_treatment": treatment,
             "plan_count": len(plans),
             "period_count": sum(len(plan["periods"]) for plan in plans),
             "seasons": ["summer", "winter"],
@@ -397,6 +712,12 @@ def parse_sce_tou_public_page(body: bytes, media_type: str) -> ParsedRateCandida
             "effective_date": "administrator_confirmation_required",
         },
     )
+
+
+def parse_sce_tou_public_page(body: bytes, media_type: str) -> ParsedRateCandidate:
+    """Backward-compatible entry point retained for existing callers."""
+
+    return parse_sce_public_page(body, media_type)
 
 
 def side_by_side_diff(
@@ -444,6 +765,7 @@ __all__ = [
     "PARSER_VERSION",
     "ParsedRateCandidate",
     "SourceParseError",
+    "parse_sce_public_page",
     "parse_sce_tou_public_page",
     "side_by_side_diff",
 ]

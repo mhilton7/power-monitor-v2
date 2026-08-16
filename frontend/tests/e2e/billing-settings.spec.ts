@@ -31,13 +31,14 @@ test('rate-source Check now and backup/system health evidence work', async ({ pa
 
 test('user permission changes are available only on the scoped settings surface', async ({ page }) => {
   await page.goto('/settings');
-  await page.getByRole('button', { name: /Users & access/ }).click();
+  await page.getByRole('button', { name: /Profile & users/ }).click();
   await page.getByRole('button', { name: /Alex Morgan/ }).click();
-  await expect(page.getByRole('dialog', { name: /Access for Alex Morgan/ })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: /Manage Alex Morgan/ })).toBeVisible();
   await page.getByRole('checkbox', { name: /^Owner\d+ permissions$/ }).uncheck();
   await page.getByRole('checkbox', { name: /^Owner\d+ permissions$/ }).check();
-  await page.getByRole('button', { name: 'Save access' }).click();
-  await expect(page.getByRole('dialog', { name: /Access for Alex Morgan/ })).not.toBeVisible();
+  await page.getByRole('button', { name: 'Review changes' }).click();
+  await page.getByRole('button', { name: 'Apply changes' }).click();
+  await expect(page.getByRole('dialog', { name: /Manage Alex Morgan/ })).not.toBeVisible();
 });
 
 test('session expiry returns to login without retaining protected views', async ({ page }) => {

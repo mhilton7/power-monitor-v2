@@ -797,7 +797,7 @@ async def test_layout_failure_persists_snapshot_failure_evidence_and_alert(
 
         assert result.state == "failed"
         assert result.event_code == "RATE_SYNC_PARSE_FAILED"
-        assert result.error_code == "HOLIDAY_RULE_MISSING"
+        assert result.error_code == "RATE_PLAN_TYPE_UNRESOLVED"
         assert result.revision_id is not None
         assert result.candidate_id is None
         assert await session.scalar(select(func.count()).select_from(RateSourceRevision)) == 1

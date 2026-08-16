@@ -424,6 +424,19 @@
       "DeviceUpdateRequest": {
         "additionalProperties": false,
         "properties": {
+          "display_order": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Order"
+          },
           "friendly_name": {
             "anyOf": [
               {
@@ -436,6 +449,29 @@
               }
             ],
             "title": "Friendly Name"
+          },
+          "include_in_aggregate": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Include In Aggregate"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
           },
           "measurement_scope": {
             "anyOf": [
@@ -467,6 +503,40 @@
               }
             ],
             "title": "Measurement Scope Confirmation"
+          },
+          "monitoring_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitoring Enabled"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "show_on_dashboard": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Show On Dashboard"
           }
         },
         "title": "DeviceUpdateRequest",
@@ -1146,6 +1216,51 @@
         "title": "RoleCreateRequest",
         "type": "object"
       },
+      "SelfProfileUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "current_password": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Password"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "format": "email",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          }
+        },
+        "title": "SelfProfileUpdateRequest",
+        "type": "object"
+      },
       "UserCreateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1201,6 +1316,116 @@
         "title": "UserCreateRequest",
         "type": "object"
       },
+      "UserPreferencesUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "dashboard_cards": {
+            "items": {
+              "enum": [
+                "live_power",
+                "energy",
+                "cost",
+                "completeness",
+                "alerts"
+              ],
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Dashboard Cards",
+            "type": "array"
+          },
+          "dashboard_range": {
+            "default": "today",
+            "enum": [
+              "today",
+              "week",
+              "month"
+            ],
+            "title": "Dashboard Range",
+            "type": "string"
+          },
+          "date_format": {
+            "default": "us",
+            "enum": [
+              "iso",
+              "us"
+            ],
+            "title": "Date Format",
+            "type": "string"
+          },
+          "decimal_precision": {
+            "default": 2,
+            "maximum": 4.0,
+            "minimum": 0.0,
+            "title": "Decimal Precision",
+            "type": "integer"
+          },
+          "density": {
+            "default": "comfortable",
+            "enum": [
+              "comfortable",
+              "compact"
+            ],
+            "title": "Density",
+            "type": "string"
+          },
+          "energy_unit": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "Wh",
+              "kWh"
+            ],
+            "title": "Energy Unit",
+            "type": "string"
+          },
+          "history_range": {
+            "default": "week",
+            "enum": [
+              "day",
+              "week",
+              "month",
+              "billing_cycle"
+            ],
+            "title": "History Range",
+            "type": "string"
+          },
+          "power_unit": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "W",
+              "kW"
+            ],
+            "title": "Power Unit",
+            "type": "string"
+          },
+          "refresh_seconds": {
+            "default": 60,
+            "enum": [
+              15,
+              30,
+              60,
+              120,
+              300
+            ],
+            "title": "Refresh Seconds",
+            "type": "integer"
+          },
+          "time_format": {
+            "default": "12h",
+            "enum": [
+              "12h",
+              "24h"
+            ],
+            "title": "Time Format",
+            "type": "string"
+          }
+        },
+        "title": "UserPreferencesUpdateRequest",
+        "type": "object"
+      },
       "UserUpdateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1216,6 +1441,18 @@
               }
             ],
             "title": "Display Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "format": "email",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
           },
           "enabled": {
             "anyOf": [
@@ -1331,7 +1568,7 @@
   },
   "info": {
     "title": "PowerMeter V2 API",
-    "version": "0.1.0-rc.5"
+    "version": "0.1.0-rc.6"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2218,6 +2455,290 @@
           }
         },
         "summary": "Setup Mfa",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/auth/preferences": {
+      "get": {
+        "operationId": "get_preferences_api_v1_auth_preferences_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Preferences Api V1 Auth Preferences Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Preferences",
+        "tags": [
+          "users"
+        ]
+      },
+      "put": {
+        "operationId": "update_preferences_api_v1_auth_preferences_put",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserPreferencesUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Preferences Api V1 Auth Preferences Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Preferences",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/auth/profile": {
+      "get": {
+        "operationId": "get_profile_api_v1_auth_profile_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Profile Api V1 Auth Profile Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Profile",
+        "tags": [
+          "users"
+        ]
+      },
+      "patch": {
+        "operationId": "update_profile_api_v1_auth_profile_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfProfileUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Profile Api V1 Auth Profile Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Profile",
         "tags": [
           "users"
         ]

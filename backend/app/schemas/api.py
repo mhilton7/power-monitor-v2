@@ -10,6 +10,21 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
+def _clean_label(value: str, *, field: str) -> str:
+    cleaned = " ".join(value.strip().split())
+    if not cleaned:
+        raise ValueError(f"{field} cannot be blank")
+    if any(ord(character) < 32 or ord(character) == 127 for character in cleaned):
+        raise ValueError(f"{field} contains unsupported control characters")
+    return cleaned
+
+
+def _clean_optional_label(value: str | None, *, field: str) -> str | None:
+    if value is None:
+        return None
+    return _clean_label(value, field=field)
+
+
 class BootstrapRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     email: EmailStr
@@ -17,6 +32,12 @@ class BootstrapRequest(BaseModel):
     password: str = Field(min_length=14, max_length=1024)
     home_name: str = Field(min_length=1, max_length=120)
     timezone: str = Field(default="America/Los_Angeles", min_length=1, max_length=80)
+
+    @field_validator("display_name", "home_name")
+    @classmethod
+    def clean_bootstrap_labels(cls, value: str, info: object) -> str:
+        field_name = getattr(info, "field_name", "name")
+        return _clean_label(value, field=str(field_name).replace("_", " "))
 
     @field_validator("timezone")
     @classmethod
@@ -319,6 +340,11 @@ class UserCreateRequest(BaseModel):
     role_names: list[str] = Field(min_length=1, max_length=8)
     home_ids: list[str] | None = Field(default=None, min_length=1, max_length=32)
 
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str) -> str:
+        return _clean_label(value, field="display name")
+
     @model_validator(mode="after")
     def valid_home_scope(self) -> UserCreateRequest:
         if self.home_ids is not None:
@@ -331,15 +357,73 @@ class UserCreateRequest(BaseModel):
 
 class UserUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    email: EmailStr | None = None
     display_name: str | None = Field(default=None, min_length=1, max_length=120)
     enabled: bool | None = None
     role_names: list[str] | None = Field(default=None, min_length=1, max_length=8)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str | None) -> str | None:
+        return _clean_optional_label(value, field="display name")
 
 
 class PasswordChangeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     current_password: str = Field(min_length=1, max_length=1024)
     new_password: str = Field(min_length=14, max_length=1024)
+
+
+class SelfProfileUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    email: EmailStr | None = None
+    current_password: str | None = Field(default=None, min_length=1, max_length=1024)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str | None) -> str | None:
+        return _clean_optional_label(value, field="display name")
+
+    @model_validator(mode="after")
+    def email_change_requires_password(self) -> SelfProfileUpdateRequest:
+        if self.email is not None and self.current_password is None:
+            raise ValueError("current password is required to change email")
+        if self.display_name is None and self.email is None:
+            raise ValueError("at least one profile field is required")
+        return self
+
+
+DashboardCard = Literal["live_power", "energy", "cost", "completeness", "alerts"]
+
+
+def _default_dashboard_cards() -> list[DashboardCard]:
+    return ["live_power", "energy", "cost", "completeness", "alerts"]
+
+
+class UserPreferencesUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dashboard_range: Literal["today", "week", "month"] = "today"
+    history_range: Literal["day", "week", "month", "billing_cycle"] = "week"
+    refresh_seconds: Literal[15, 30, 60, 120, 300] = 60
+    power_unit: Literal["auto", "W", "kW"] = "auto"
+    energy_unit: Literal["auto", "Wh", "kWh"] = "auto"
+    date_format: Literal["iso", "us"] = "us"
+    time_format: Literal["12h", "24h"] = "12h"
+    decimal_precision: int = Field(default=2, ge=0, le=4)
+    density: Literal["comfortable", "compact"] = "comfortable"
+    dashboard_cards: list[DashboardCard] = Field(
+        default_factory=_default_dashboard_cards,
+        min_length=1,
+        max_length=5,
+    )
+
+    @field_validator("dashboard_cards")
+    @classmethod
+    def unique_dashboard_cards(cls, value: list[DashboardCard]) -> list[DashboardCard]:
+        if len(value) != len(set(value)):
+            raise ValueError("dashboard cards must be unique")
+        return value
 
 
 class AdminPasswordResetRequest(BaseModel):
@@ -369,6 +453,12 @@ class HomeUtilityUpdateRequest(BaseModel):
     cca_provider: str | None = Field(default=None, max_length=120)
     full_account_confirmation: Literal["I UNDERSTAND FULL ACCOUNT SCOPE"] | None = None
     allocated_account_confirmation: Literal["I VERIFIED THIS ALLOCATION SCOPE"] | None = None
+
+    @field_validator("home_name", "cca_provider")
+    @classmethod
+    def clean_optional_labels(cls, value: str | None, info: object) -> str | None:
+        field_name = getattr(info, "field_name", "name")
+        return _clean_optional_label(value, field=str(field_name).replace("_", " "))
 
     @model_validator(mode="after")
     def full_account_is_explicit(self) -> HomeUtilityUpdateRequest:
@@ -412,6 +502,12 @@ class HomeScopesResponse(BaseModel):
 class DeviceUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     friendly_name: str | None = Field(default=None, min_length=1, max_length=120)
+    location: str | None = Field(default=None, max_length=120)
+    notes: str | None = Field(default=None, max_length=500)
+    display_order: int | None = Field(default=None, ge=0, le=10000)
+    include_in_aggregate: bool | None = None
+    show_on_dashboard: bool | None = None
+    monitoring_enabled: bool | None = None
     measurement_scope: Literal["energy_only", "allocated_account", "full_account"] | None = None
     measurement_scope_confirmation: (
         Literal[
@@ -420,6 +516,27 @@ class DeviceUpdateRequest(BaseModel):
         ]
         | None
     ) = None
+
+    @field_validator("friendly_name", "location")
+    @classmethod
+    def clean_optional_labels(cls, value: str | None, info: object) -> str | None:
+        field_name = getattr(info, "field_name", "name")
+        return _clean_optional_label(value, field=str(field_name).replace("_", " "))
+
+    @field_validator("notes")
+    @classmethod
+    def clean_notes(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if any(
+            (ord(character) < 32 and character not in {"\n", "\t"}) or ord(character) == 127
+            for character in cleaned
+        ):
+            raise ValueError("notes contain unsupported control characters")
+        return cleaned
 
     @model_validator(mode="after")
     def account_scope_is_verified(self) -> DeviceUpdateRequest:

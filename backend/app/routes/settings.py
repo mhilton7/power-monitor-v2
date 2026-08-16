@@ -165,6 +165,7 @@ async def update_home_utility(
     )
     if account is None:
         raise NotFound("utility account does not exist")
+    prior_home_name = home.name
     if payload.timezone is not None:
         try:
             ZoneInfo(payload.timezone)
@@ -196,9 +197,21 @@ async def update_home_utility(
                 "cost_scope": payload.cost_scope,
                 "billing_day": payload.billing_day,
                 "timezone": payload.timezone,
+                "home_name_changed": home.name != prior_home_name,
             },
         )
     )
+    if home.name != prior_home_name:
+        session.add(
+            AuditEvent(
+                actor_user_id=user.id,
+                event_code="HOME_RENAMED",
+                target_type="home",
+                target_id=home.id,
+                correlation_id=request.state.correlation_id,
+                details={},
+            )
+        )
     await session.commit()
     return await home_utility(home_id=home.id, user=user, session=session)
 
@@ -220,7 +233,19 @@ async def update_device(
     if device is None:
         raise NotFound("device does not exist")
     if payload.friendly_name is not None:
-        device.friendly_name = payload.friendly_name
+        device.friendly_name = payload.friendly_name.strip()
+    if "location" in payload.model_fields_set:
+        device.location = payload.location.strip() if payload.location else None
+    if "notes" in payload.model_fields_set:
+        device.notes = payload.notes.strip() if payload.notes else None
+    if payload.display_order is not None:
+        device.display_order = payload.display_order
+    if payload.include_in_aggregate is not None:
+        device.include_in_aggregate = payload.include_in_aggregate
+    if payload.show_on_dashboard is not None:
+        device.show_on_dashboard = payload.show_on_dashboard
+    if payload.monitoring_enabled is not None:
+        device.monitoring_enabled = payload.monitoring_enabled
     if payload.measurement_scope is not None:
         await _validate_account_measurement_scope(
             session,
@@ -246,7 +271,13 @@ async def update_device(
             target_type="device",
             target_id=device.id,
             correlation_id=request.state.correlation_id,
-            details={"measurement_scope": payload.measurement_scope},
+            details={
+                "measurement_scope": payload.measurement_scope,
+                "display_order": payload.display_order,
+                "include_in_aggregate": payload.include_in_aggregate,
+                "show_on_dashboard": payload.show_on_dashboard,
+                "monitoring_enabled": payload.monitoring_enabled,
+            },
         )
     )
     await session.commit()
@@ -254,6 +285,12 @@ async def update_device(
         "id": device.id,
         "friendly_name": device.friendly_name,
         "measurement_scope": device.measurement_scope,
+        "location": device.location,
+        "notes": device.notes,
+        "display_order": device.display_order,
+        "include_in_aggregate": device.include_in_aggregate,
+        "show_on_dashboard": device.show_on_dashboard,
+        "monitoring_enabled": device.monitoring_enabled,
     }
 
 

@@ -40,6 +40,7 @@ class AllowedRateField(BaseModel):
         "tariff_effective_date",
     ]
     normalized_value: str = Field(min_length=1, max_length=500)
+    supporting_label: str | None = Field(default=None, min_length=1, max_length=160)
     confidence: Decimal = Field(ge=0, le=1)
     source: SourceRegion
 
@@ -81,6 +82,16 @@ class RatePlanDraft(BaseModel):
     utility_name: Literal["Southern California Edison"] = "Southern California Edison"
     rate_plan_name: str = Field(min_length=1, max_length=120)
     rate_class: str = Field(min_length=1, max_length=80)
+    plan_classification: Literal["flat", "tiered", "seasonal_tiered", "time_of_use", "unknown"] = (
+        "time_of_use"
+    )
+    holiday_treatment: Literal[
+        "not_applicable",
+        "no_special_treatment",
+        "weekend_schedule",
+        "explicit_schedule",
+        "unresolved",
+    ] = "unresolved"
     cca_or_direct_access_indicator: Literal["sce_generation", "cca", "direct_access", "unknown"]
     summer_months: tuple[int, ...] = (6, 7, 8, 9)
     winter_months: tuple[int, ...] = (1, 2, 3, 4, 5, 10, 11, 12)
@@ -88,12 +99,17 @@ class RatePlanDraft(BaseModel):
     baseline_allocation_rule: str | None = Field(default=None, max_length=500)
     baseline_credit_rate: RateDecimal | None = None
     reusable_charges: tuple[ReusableChargeDraft, ...] = ()
+    billing_period_start: date | None = None
+    billing_period_end: date | None = None
+    billing_period_days: int | None = Field(default=None, ge=1, le=62)
+    tier_threshold_basis: str | None = Field(default=None, max_length=500)
     effective_start_candidate: date | None = None
     effective_end_candidate: date | None = None
     fields: tuple[AllowedRateField, ...]
     parser_version: str = Field(min_length=1, max_length=40)
     source_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     review_required: Literal[True] = True
+    candidate_complete: bool = True
 
     @model_validator(mode="after")
     def validate_period_coverage(self) -> RatePlanDraft:
@@ -102,6 +118,12 @@ class RatePlanDraft(BaseModel):
         months = (*self.summer_months, *self.winter_months)
         if sorted(months) != list(range(1, 13)):
             raise ValueError("summer and winter months must partition all twelve months")
+
+        # A bill can contain authoritative line-item rates for only the billed
+        # season. Preserve that evidence for review without fabricating the
+        # missing season or treating a customer-specific threshold as reusable.
+        if not self.candidate_complete:
+            return self
 
         # Validate the schedule that the pricing engine will actually resolve,
         # including `all` fallbacks, holiday treatment, and tier boundaries.

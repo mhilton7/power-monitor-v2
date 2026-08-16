@@ -55,6 +55,43 @@ class _SandboxSuccess(BaseModel):
     categories: Annotated[tuple[str, ...], Field(max_length=5)]
 
 
+class _SandboxRejected(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_id: Literal["pm-bill-rate-sandbox-output/1.0.0"]
+    status: Literal["rejected"]
+    error_code: Literal[
+        "CHARGES_PAGE_NOT_FOUND",
+        "DOCUMENT_REJECTED",
+        "EXTRACTION_TIMED_OUT",
+        "PDF_ENCRYPTED",
+        "PDF_INVALID",
+        "PDF_PAGE_LIMIT",
+        "PDF_TEXT_UNAVAILABLE",
+        "PDF_TOO_LARGE",
+        "RATE_LINES_NOT_FOUND",
+        "RATE_NAME_NOT_FOUND",
+        "UNSUPPORTED_RATE_STRUCTURE",
+        "UTILITY_NOT_RECOGNIZED",
+    ]
+
+
+_REJECTION_DETAILS: Final[dict[str, str]] = {
+    "CHARGES_PAGE_NOT_FOUND": "No SCE rate-detail charges page was found in the PDF.",
+    "DOCUMENT_REJECTED": "The isolated rate extractor rejected the document.",
+    "EXTRACTION_TIMED_OUT": "Bill rate extraction timed out.",
+    "PDF_ENCRYPTED": "Encrypted or password-protected PDFs are not accepted.",
+    "PDF_INVALID": "The upload is not a valid PDF.",
+    "PDF_PAGE_LIMIT": "The PDF page count is outside the configured limit.",
+    "PDF_TEXT_UNAVAILABLE": "The PDF has no usable text layer and local OCR failed.",
+    "PDF_TOO_LARGE": "The PDF exceeds the configured size limit.",
+    "RATE_LINES_NOT_FOUND": "Required reusable SCE rate lines are missing.",
+    "RATE_NAME_NOT_FOUND": "No supported reusable SCE rate-plan name was found.",
+    "UNSUPPORTED_RATE_STRUCTURE": "The SCE rate structure is not supported.",
+    "UTILITY_NOT_RECOGNIZED": "The rate-detail page is not recognized as SCE.",
+}
+
+
 class _SandboxSelfTest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -220,7 +257,14 @@ async def extract_rate_plan_isolated(
     finally:
         _remove_work_directory(workdir)
     if return_code != 0:
-        raise BillRateImportError("isolated bill rate extraction rejected the document")
+        try:
+            rejected = _SandboxRejected.model_validate(_decode_closed_json(output))
+        except (UnicodeDecodeError, ValueError, ValidationError) as exc:
+            raise BillRateImportError(
+                "The isolated rate extractor returned an invalid rejection.",
+                code="DOCUMENT_REJECTED",
+            ) from exc
+        raise BillRateImportError(_REJECTION_DETAILS[rejected.error_code], code=rejected.error_code)
     try:
         decoded = _decode_closed_json(output)
         result = _SandboxSuccess.model_validate(decoded)

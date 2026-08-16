@@ -360,6 +360,10 @@ code { color: #a6f0c1; background: #0e1513; border: 1px solid var(--border-soft)
 .review-meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; margin: 14px 0; }
 .review-meta > div { min-width: 0; display: grid; gap: 5px; padding: 10px; border: 1px solid var(--border-soft); border-radius: 7px; }
 .review-meta span { color: var(--muted); font-size: .65rem; }
+.rate-evidence-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 9px 0 14px; }
+.rate-evidence-list > div { min-width: 0; display: grid; gap: 4px; padding: 10px; border: 1px solid var(--border-soft); border-radius: 7px; }
+.rate-evidence-list span { color: var(--muted); font-size: .65rem; overflow-wrap: anywhere; }
+.rate-evidence-list strong { font-size: .76rem; overflow-wrap: anywhere; }
 .rate-field-list { display: grid; gap: 8px; }
 .rate-field { display: grid; grid-template-columns: 1fr 210px; align-items: end; gap: 12px; }
 .field-evidence { display: flex; gap: 7px; padding-bottom: 10px; color: var(--muted); font-size: .63rem; }
@@ -375,6 +379,7 @@ code { color: #a6f0c1; background: #0e1513; border: 1px solid var(--border-soft)
 .settings-content { min-width: 0; }
 .settings-content > .card { min-height: 480px; }
 .settings-form { display: grid; gap: 16px; max-width: 720px; }
+.settings-split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
 .settings-form > .button { justify-self: start; }
 .settings-form fieldset { min-width: 0; margin: 0; border: 1px solid var(--border-soft); border-radius: 8px; padding: 10px; }
 .card-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
@@ -523,7 +528,7 @@ html[data-density="compact"] .page { gap: 11px; }
   .rate-layout { grid-template-columns: 1fr 120px; }
   .command-tiles { grid-template-columns: repeat(2, 1fr); }
   .page-heading { align-items: flex-start; flex-direction: column; }
-  .filter-row, .custom-range, .history-summary-grid, .billing-overview, .estimate-grid, .estimate-breakdown, .review-meta, .rate-field, .detail-grid, .control-grid, .service-grid, .rate-date-grid, .rate-charge-grid, .manual-period { grid-template-columns: 1fr; }
+  .filter-row, .custom-range, .history-summary-grid, .billing-overview, .estimate-grid, .estimate-breakdown, .review-meta, .rate-evidence-list, .rate-field, .detail-grid, .control-grid, .service-grid, .rate-date-grid, .rate-charge-grid, .manual-period, .settings-split { grid-template-columns: 1fr; }
   .history-chart { min-height: 320px; height: 56vh; }
   .history-controls { padding-inline: 12px; }
   .preset-tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 5px; }

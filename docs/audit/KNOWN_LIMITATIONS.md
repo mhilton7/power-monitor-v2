@@ -1,8 +1,11 @@
 # Known limitations
 
-These limitations are active for rc.5 preparation after the 2026-08-15 audit.
-Historical rc.3 evidence and the failed-publication rc.4 run are not used to
-close an rc.5 limitation.
+This list preserves the rc.5-preparation snapshot from the 2026-08-15 audit.
+Server rc.5 subsequently completed publication and remains public and
+installable with its attached assets. Hardware execution confirmed that
+firmware rc.1 through rc.5 crash in the main stack before provisioning;
+coordinated rc.6 hotfix publication is pending. Historical evidence is never
+relabeled as proof for a later candidate.
 
 ## 1. The repaired checkout is not an installable release
 
@@ -127,24 +130,24 @@ close an rc.5 limitation.
   isolated target, validate the prior release there, and document a tested
   cutover before permitting rollback.
 
-## 8. The live SCE page is incomplete for strict normalization
+## 8. The live SCE page provides rounded display rates
 
-- **Exact limitation:** The official public page read on 2026-08-15 lacked
-  required holiday treatment and authoritative tariff-effective-date evidence.
-  The strict parser returns `HOLIDAY_RULE_MISSING`.
-- **Reason:** Inferring a holiday rule or treating a mutable page timestamp as a
-  tariff effective date would fabricate rate data. The linked tariff material
-  was not available as complete unauthenticated evidence.
-- **User impact:** A live check can report failure and cannot create or publish
-  a complete new candidate from that page alone.
-- **Workaround:** Continue using the last-known-good reviewed rate or use the
-  exact-home, permissioned manual candidate workflow with authoritative source
-  evidence and separate review, publish, and activate steps. The UI shows the
-  failed refresh and last-known-good status.
-- **Recommended next repair:** Add another official, publicly accessible,
-  machine-readable SCE source only after its terms, completeness, provenance,
-  and parser fixtures are reviewed. Do not bypass authentication or anti-bot
-  controls.
+- **Exact limitation:** The official public Tiered Rate Plan page read on
+  2026-08-15 now parses as `DOMESTIC` seasonal tiered with holiday treatment
+  `not_applicable`, but its public-facing energy prices are rounded display
+  values rather than the five-decimal component rates printed on a bill.
+- **Reason:** Shared page navigation contains TOU material, while the primary
+  DOMESTIC Tier 1/Tier 2 content is a separate semantic region. The parser now
+  gives that primary evidence precedence, but it does not invent precision the
+  page does not publish.
+- **User impact:** `HOLIDAY_RULE_MISSING` is no longer emitted for this valid
+  tiered source. Any changed candidate still requires explicit review before
+  publish and activation.
+- **Workaround:** Review the exact-home candidate and use authoritative tariff
+  or privacy-safe bill rate evidence when five-decimal precision is required.
+  Last-known-good evidence remains active until that workflow completes.
+- **Recommended next repair:** Retain a sanitized fixture and live semantic
+  probe so navigation/template changes cannot silently reclassify the plan.
 
 ## 9. Browser and accessibility coverage is not cross-engine or physical
 

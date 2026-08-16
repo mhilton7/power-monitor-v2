@@ -24,7 +24,7 @@ actual registry digests after push.
 docker build --file backup/Dockerfile --tag pm-backup:test .
 python scripts/render_truenas_release.py --template deploy/truenas/power-monitor-v2.yaml `
   --output release/power-monitor-v2-test.yaml --manifest release/release-manifest-test.json `
-  --version 0.1.0-rc.5 --revision 0123456789abcdef0123456789abcdef01234567 `
+  --version 0.1.0-rc.6 --revision 0123456789abcdef0123456789abcdef01234567 `
   --api-digest sha256:<published-api-digest> `
   --frontend-digest sha256:<published-frontend-digest> `
   --gateway-digest sha256:<published-gateway-digest> `
@@ -33,7 +33,7 @@ docker compose -f release/power-monitor-v2-test.yaml config --quiet
 python scripts/verify_release_artifacts.py --manifest release/release-manifest-test.json
 ```
 
-The rc.5 value above is a local post-rc.3 render example, not a tag or
+The rc.6 value above is a local render example, not a tag or
 publication claim. The checked-in template cannot become installable until a
 new coordinated release supplies real registry digests and passes every gate.
 
@@ -96,22 +96,26 @@ Deployment smoke then failed deterministically because `docker compose start`
 restarted the completed initializer dependency and changed its completion time.
 All runtime services returned healthy, but the invariant correctly failed.
 Assembly was skipped, so there is no server rc.4 GitHub Release or generated
-YAML and rc.4 is not installable. The rc.5 source repairs this check; it has no
-tagged CI or publication evidence until its own workflow runs.
+YAML and rc.4 is not installable. The rc.5 source repaired this check and its
+tagged workflow later published the complete public, installable server rc.5
+asset set.
 
 ## Current audit-candidate local evidence
 
-On 2026-08-15, the full backend suite on real PostgreSQL 17 passed 135 tests
-with 3 expected environment skips. An isolated database upgraded cleanly
-through `20260815_0011`; an 0011 downgrade to 0010 and return to head passed;
-and all 20 rate-workflow concurrency/direct-SQL tests passed. That workflow
+On 2026-08-15, the earlier full backend suite on real PostgreSQL 17 passed 135
+tests with 3 expected environment skips through revision 0011. The current
+remediation then upgraded a fresh pinned PostgreSQL 17.10 database cleanly to
+`20260815_0012`, downgraded to 0011, proved the case-insensitive duplicate-email
+preflight fails transactionally at 0011, and returned to head. Its 25/25 focused
+PostgreSQL settings, home, bill, SCE, and ingestion-guard tests passed. Earlier,
+all 20 rate-workflow concurrency/direct-SQL tests passed. That workflow
 evidence covers database-backed exact-home manual idempotency, shared serialized
 bill/SCE plan-version allocation, non-overlapping assignments with equal-start
 rejection, immutable candidate provenance, and the only legal review paths:
 `reviewed -> published -> activated` or `reviewed -> rejected`. Ruff
 lint/format passed and mypy reported no issues in 81 source files.
 
-Frontend lint, strict TypeScript, production build, 24/24 Vitest tests, and
+Frontend lint, strict TypeScript, production build, 31/31 Vitest tests, and
 36/36 Chromium Playwright tests passed. No whole-repository aggregate count is
 claimed. These are local candidate results, not tagged CI, target TrueNAS,
 publication, or physical hardware evidence.
@@ -224,17 +228,19 @@ certification.
 
 ### Gates that remain closed
 
-- Signed public server/firmware rc.1 and rc.3 releases, plus signed public
+- Signed public server/firmware rc.1, rc.3, and rc.5 releases, plus signed public
   firmware rc.2 and rc.4, are historical evidence. The signed server rc.2 tag's run
   `31866197054` failed the cross-repository OpenAPI-hash check before server
   images or release assets were published.
-- Public rc.1/rc.3 GHCR digests, attestations, generated TrueNAS YAML, and
+- Public rc.1/rc.3/rc.5 GHCR digests, attestations, generated TrueNAS YAML, and
   release smokes are version-specific historical evidence. There is no server
   rc.2 image set or YAML. Server rc.4 published images but no Release or YAML
   after deployment smoke failed; those images are not an installation
-  authority. The rc.5 eight-service/no-shell source remains unpublished and the
-  checked-in template correctly retains `UNPUBLISHED_*` sentinels pending its
-  own coordinated tag.
+  authority. Public server rc.5 remains installable with its attached assets,
+  but hardware execution confirms firmware rc.1 through rc.5 crash in the main
+  stack before provisioning. The rc.6 coordinated hotfix source remains
+  unpublished and the checked-in template correctly retains `UNPUBLISHED_*`
+  sentinels pending its own coordinated tag.
 - The target-TrueNAS clean install, forward upgrade, restored rollback,
   restart, and permission suite has not run for the post-rc.3 initializer model.
 - No marked-unit PZEM/ESP32-S3/SD identity, electrical, TLS/HMAC, OTA rollback,

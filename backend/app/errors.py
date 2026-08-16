@@ -44,6 +44,11 @@ class BillRateImportError(PowerMeterError):
     code = "BILL_RATE_IMPORT_REJECTED"
     status_code = 422
 
+    def __init__(self, detail: str, *, code: str | None = None) -> None:
+        super().__init__(detail)
+        if code is not None:
+            self.code = code
+
 
 class RateWorkflowConflict(PowerMeterError):
     code = "RATE_WORKFLOW_CONFLICT"

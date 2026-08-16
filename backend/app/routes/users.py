@@ -26,7 +26,9 @@ from ..schemas.api import (
     MfaConfirmRequest,
     PasswordChangeRequest,
     RoleCreateRequest,
+    SelfProfileUpdateRequest,
     UserCreateRequest,
+    UserPreferencesUpdateRequest,
     UserUpdateRequest,
 )
 from ..security.auth import ALL_PERMISSIONS, CurrentUser, require_permission
@@ -184,6 +186,9 @@ async def list_users(
         manageable = set(await _home_ids(session, row.id)).issubset(actor_homes) and (
             await _user_permissions(session, row.id)
         ).issubset(actor.permissions)
+        last_login_at = await session.scalar(
+            select(func.max(Session.created_at)).where(Session.user_id == row.id)
+        )
         output.append(
             {
                 "id": row.id,
@@ -191,6 +196,8 @@ async def list_users(
                 "display_name": row.display_name,
                 "enabled": row.enabled,
                 "deleted_at": row.deleted_at,
+                "created_at": row.created_at,
+                "last_login_at": last_login_at,
                 "roles": sorted(roles),
                 "home_ids": visible_homes,
                 "manageable": manageable,
@@ -265,7 +272,16 @@ async def update_user(
     if removes_owner or disables_owner:
         await _protect_home_owners(session, target_homes)
     if payload.display_name is not None:
-        row.display_name = payload.display_name
+        row.display_name = payload.display_name.strip()
+    email_changed = False
+    if payload.email is not None:
+        normalized_email = str(payload.email).lower().strip()
+        email_changed = normalized_email != row.email
+        if email_changed and await session.scalar(
+            select(User.id).where(func.lower(User.email) == normalized_email, User.id != row.id)
+        ):
+            raise IntegrityConflict("email address is already in use")
+        row.email = normalized_email
     if payload.enabled is not None:
         row.enabled = payload.enabled
         if not payload.enabled:
@@ -274,6 +290,12 @@ async def update_user(
                 .where(Session.user_id == row.id, Session.revoked_at.is_(None))
                 .values(revoked_at=datetime.now(UTC))
             )
+    if email_changed:
+        await session.execute(
+            update(Session)
+            .where(Session.user_id == row.id, Session.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(UTC))
+        )
     if role_ids is not None:
         await session.execute(delete(user_roles).where(user_roles.c.user_id == row.id))
         for role_id in role_ids:
@@ -285,16 +307,27 @@ async def update_user(
             target_type="user",
             target_id=row.id,
             correlation_id=request.state.correlation_id,
-            details={"enabled": payload.enabled, "roles": role_names},
+            details={
+                "display_name_changed": payload.display_name is not None,
+                "email_changed": email_changed,
+                "enabled": payload.enabled,
+                "roles": role_names,
+            },
         )
     )
     await session.commit()
-    return {"id": row.id, "enabled": row.enabled, "display_name": row.display_name}
+    return {
+        "id": row.id,
+        "email": row.email,
+        "enabled": row.enabled,
+        "display_name": row.display_name,
+    }
 
 
 @router.delete("/users/{user_id}", status_code=204)
 async def soft_delete_user(
     user_id: str,
+    request: Request,
     actor: CurrentUser = Depends(require_permission("users.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> None:
@@ -314,6 +347,7 @@ async def soft_delete_user(
             event_code="USER_SOFT_DELETED",
             target_type="user",
             target_id=row.id,
+            correlation_id=request.state.correlation_id,
             details={},
         )
     )
@@ -323,6 +357,7 @@ async def soft_delete_user(
 @router.post("/users/{user_id}/restore")
 async def restore_user(
     user_id: str,
+    request: Request,
     actor: CurrentUser = Depends(require_permission("users.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
@@ -335,6 +370,7 @@ async def restore_user(
             event_code="USER_RESTORED",
             target_type="user",
             target_id=row.id,
+            correlation_id=request.state.correlation_id,
             details={},
         )
     )
@@ -345,6 +381,7 @@ async def restore_user(
 @router.post("/auth/change-password", status_code=204)
 async def change_password(
     payload: PasswordChangeRequest,
+    request: Request,
     actor: CurrentUser = Depends(require_permission("dashboard.view")),
     session: AsyncSession = Depends(get_session),
 ) -> None:
@@ -356,18 +393,146 @@ async def change_password(
         update(Session)
         .where(
             Session.user_id == actor.id,
-            Session.id != actor.session_id,
             Session.revoked_at.is_(None),
         )
         .values(revoked_at=datetime.now(UTC))
     )
+    session.add(
+        AuditEvent(
+            actor_user_id=actor.id,
+            event_code="USER_PASSWORD_CHANGED",
+            target_type="user",
+            target_id=actor.id,
+            correlation_id=request.state.correlation_id,
+            details={"sessions_revoked": True},
+        )
+    )
     await session.commit()
+
+
+@router.get("/auth/profile")
+async def get_profile(
+    actor: CurrentUser = Depends(require_permission("dashboard.view")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    row = await session.get(User, actor.id)
+    if row is None:
+        raise NotFound("user does not exist")
+    roles = (
+        await session.scalars(
+            select(Role.name)
+            .join(user_roles, user_roles.c.role_id == Role.id)
+            .where(user_roles.c.user_id == row.id)
+            .order_by(Role.name)
+        )
+    ).all()
+    return {
+        "id": row.id,
+        "email": row.email,
+        "display_name": row.display_name,
+        "enabled": row.enabled,
+        "roles": list(roles),
+        "created_at": row.created_at,
+        "preferences": row.preferences,
+    }
+
+
+@router.patch("/auth/profile")
+async def update_profile(
+    payload: SelfProfileUpdateRequest,
+    request: Request,
+    actor: CurrentUser = Depends(require_permission("dashboard.view")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    row = await session.scalar(select(User).where(User.id == actor.id).with_for_update())
+    if row is None:
+        raise NotFound("user does not exist")
+    email_changed = False
+    if payload.email is not None:
+        if payload.current_password is None or not verify_password(
+            row.password_hash, payload.current_password
+        ):
+            raise AuthenticationError("current password is invalid")
+        normalized_email = str(payload.email).lower().strip()
+        email_changed = normalized_email != row.email
+        if email_changed and await session.scalar(
+            select(User.id).where(func.lower(User.email) == normalized_email, User.id != row.id)
+        ):
+            raise IntegrityConflict("email address is already in use")
+        row.email = normalized_email
+    if payload.display_name is not None:
+        row.display_name = payload.display_name.strip()
+    if email_changed:
+        await session.execute(
+            update(Session)
+            .where(Session.user_id == row.id, Session.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(UTC))
+        )
+    session.add(
+        AuditEvent(
+            actor_user_id=actor.id,
+            event_code="USER_PROFILE_UPDATED",
+            target_type="user",
+            target_id=row.id,
+            correlation_id=request.state.correlation_id,
+            details={
+                "display_name_changed": payload.display_name is not None,
+                "email_changed": email_changed,
+                "sessions_revoked": email_changed,
+            },
+        )
+    )
+    await session.commit()
+    return {
+        "id": row.id,
+        "email": row.email,
+        "display_name": row.display_name,
+        "session_revoked": email_changed,
+    }
+
+
+@router.get("/auth/preferences")
+async def get_preferences(
+    actor: CurrentUser = Depends(require_permission("dashboard.view")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    row = await session.get(User, actor.id)
+    if row is None:
+        raise NotFound("user does not exist")
+    defaults = UserPreferencesUpdateRequest().model_dump(mode="json")
+    return {"preferences": {**defaults, **row.preferences}}
+
+
+@router.put("/auth/preferences")
+async def update_preferences(
+    payload: UserPreferencesUpdateRequest,
+    request: Request,
+    actor: CurrentUser = Depends(require_permission("dashboard.view")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    row = await session.scalar(select(User).where(User.id == actor.id).with_for_update())
+    if row is None:
+        raise NotFound("user does not exist")
+    row.preferences = payload.model_dump(mode="json")
+    session.add(
+        AuditEvent(
+            actor_user_id=actor.id,
+            event_code="USER_DISPLAY_PREFERENCES_UPDATED",
+            target_type="user",
+            target_id=row.id,
+            correlation_id=request.state.correlation_id,
+            details={},
+        )
+    )
+    await session.commit()
+    return {"preferences": row.preferences}
 
 
 @router.post("/users/{user_id}/reset-password", status_code=204)
 async def reset_password(
     user_id: str,
     payload: AdminPasswordResetRequest,
+    request: Request,
     actor: CurrentUser = Depends(require_permission("users.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> None:
@@ -384,6 +549,7 @@ async def reset_password(
             event_code="USER_PASSWORD_RESET",
             target_type="user",
             target_id=row.id,
+            correlation_id=request.state.correlation_id,
             details={"sessions_revoked": True},
         )
     )

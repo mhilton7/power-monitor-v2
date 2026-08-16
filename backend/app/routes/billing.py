@@ -133,12 +133,19 @@ def _safe_extraction(
         "utility_name": row.utility_name,
         "rate_plan_name": row.rate_plan_name,
         "rate_class": row.rate_class,
+        "plan_classification": row.plan_classification,
+        "holiday_treatment": row.holiday_treatment,
         "cca_or_direct_access_indicator": row.cca_or_direct_access_indicator,
         "season_definitions": row.season_definitions,
         "day_type_definitions": row.day_type_definitions,
         "tou_period_definitions": row.tou_period_definitions,
         "tier_threshold_definitions": row.tier_threshold_definitions,
         "reusable_price_components": row.reusable_price_components,
+        "billing_period_start": row.billing_period_start,
+        "billing_period_end": row.billing_period_end,
+        "billing_period_days": row.billing_period_days,
+        "tier_threshold_basis": row.tier_threshold_basis,
+        "candidate_complete": row.candidate_complete,
         "baseline_allocation_rule": row.baseline_allocation_rule,
         "baseline_credit_rate": row.baseline_credit_rate,
         "effective_start_candidate": row.effective_start_candidate,
@@ -205,6 +212,8 @@ async def import_rates_from_bill(
         utility_name=draft.utility_name,
         rate_plan_name=draft.rate_plan_name,
         rate_class=draft.rate_class,
+        plan_classification=draft.plan_classification,
+        holiday_treatment=draft.holiday_treatment,
         cca_or_direct_access_indicator=draft.cca_or_direct_access_indicator,
         season_definitions=[
             {"name": "summer", "months": list(draft.summer_months)},
@@ -223,6 +232,11 @@ async def import_rates_from_bill(
         reusable_price_components=[
             charge.model_dump(mode="json") for charge in draft.reusable_charges
         ],
+        billing_period_start=draft.billing_period_start,
+        billing_period_end=draft.billing_period_end,
+        billing_period_days=draft.billing_period_days,
+        tier_threshold_basis=draft.tier_threshold_basis,
+        candidate_complete=draft.candidate_complete,
         baseline_allocation_rule=draft.baseline_allocation_rule,
         baseline_credit_rate=draft.baseline_credit_rate,
         effective_start_candidate=draft.effective_start_candidate,
@@ -363,6 +377,12 @@ async def publish_bill_rate_import(
     )
     if extraction.state != "review_required":
         raise BillRateImportError("rate extraction is not publishable")
+    if not extraction.candidate_complete:
+        raise BillRateImportError(
+            "This bill provides only seasonal/customer-specific tier evidence. "
+            "Complete and confirm a reusable tariff schedule before publication.",
+            code="RATE_CANDIDATE_INCOMPLETE",
+        )
     plan, version_number = await locked_rate_plan_and_next_version(
         session,
         name=extraction.rate_plan_name,
@@ -382,7 +402,7 @@ async def publish_bill_rate_import(
         effective_start=payload.effective_start.astimezone(UTC),
         effective_end=payload.effective_end.astimezone(UTC) if payload.effective_end else None,
         timezone="America/Los_Angeles",
-        pricing_model="time_of_use",
+        pricing_model=extraction.plan_classification,
         daily_fixed_charge=daily,
         monthly_fixed_charge=monthly,
         baseline_credit_per_kwh=extraction.baseline_credit_rate or Decimal("0"),

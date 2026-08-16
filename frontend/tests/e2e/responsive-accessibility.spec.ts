@@ -77,8 +77,8 @@ test('320px active-home selector and dialogs remain within the viewport', async 
   await mockApi(page, { homeScopesOverride: [{ id: firstHomeId, name: 'Duplicate home' }, { id: secondHomeId, name: 'Duplicate home' }] });
   await page.goto('/');
   const selector = page.getByLabel('Active home');
-  await expect(selector.getByRole('option', { name: `Duplicate home (${firstHomeId})` })).toHaveAttribute('value', firstHomeId);
-  await expect(selector.getByRole('option', { name: `Duplicate home (${secondHomeId})` })).toHaveAttribute('value', secondHomeId);
+  await expect(selector.getByRole('option', { name: 'Duplicate home (1)' })).toHaveAttribute('value', firstHomeId);
+  await expect(selector.getByRole('option', { name: 'Duplicate home (2)' })).toHaveAttribute('value', secondHomeId);
   await expectNoHorizontalOverflow(page);
   const selectorBox = await selector.boundingBox();
   expect(selectorBox?.x).toBeGreaterThanOrEqual(0);
