@@ -30,6 +30,7 @@ function shortHash(value: string): string {
 
 function localDate(value: string | null | undefined): string {
   if (!value) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: RATE_TIMEZONE,
     year: 'numeric',
@@ -146,6 +147,7 @@ function CandidateReview({ candidate, homeId, accounts, onWorkflow, onClose }: {
   const [activateOpen, setActivateOpen] = useState(false);
   const [accountId, setAccountId] = useState(candidate.workflow.utility_account_id ?? accounts[0]?.utility_account_id ?? '');
   const selectedPlan = candidate.normalized_rates.plans.find((plan) => plan.rate_plan_name === planName);
+  const completeCoverage = candidate.validation_evidence.coverage === 'complete';
   const review = useMutation({
     mutationFn: (payload: Parameters<typeof api.reviewRateCandidate>[2]) => api.reviewRateCandidate(homeId, candidate.id, payload),
     onSuccess: (response) => onWorkflow(candidate.id, response.workflow),
@@ -190,6 +192,7 @@ function CandidateReview({ candidate, homeId, accounts, onWorkflow, onClose }: {
   function cancelReject() { setRejectOpen(false); reject.reset(); }
   return <div className="candidate-review">
     <Notice kind="warning"><strong>Manual approval required.</strong> Validate the selected plan, exact effective range and recorded provenance against an official SCE source. Review alone does not publish or activate anything.</Notice>
+    {!completeCoverage && <Notice><strong>Additional baseline evidence required.</strong> The source proves reusable prices but not the exact account baseline threshold. This candidate remains visible for review and comparison but cannot advance until a complete official or manual schedule is supplied.</Notice>}
     <div className="review-meta"><div><span>Source</span><strong>{candidate.source.name}</strong></div><div><span>Parser</span><strong>{candidate.source.parser_version}</strong></div><div><span>Retrieved</span><strong>{dateTime(candidate.source.retrieved_at)}</strong></div><div><span>Artifact SHA-256</span><code title={candidate.source.artifact_sha256}>{shortHash(candidate.source.artifact_sha256)}</code></div></div>
     {candidate.source.url && <p className="source-provenance"><strong>Recorded source URL:</strong> <code>{candidate.source.url}</code></p>}
     <div className="candidate-plan-summary">
@@ -202,7 +205,7 @@ function CandidateReview({ candidate, homeId, accounts, onWorkflow, onClose }: {
       <small>Dates are submitted as midnight in {RATE_TIMEZONE}; the server stores authoritative UTC instants.</small>
       <label className="workflow-confirm"><input name="confirmEffective" type="checkbox" required /> I confirmed this exact effective range against the official source.</label>
       <label className="workflow-confirm"><input name="confirmProvenance" type="checkbox" required /> I confirmed the recorded source and artifact provenance.</label>
-      <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onClose}>Close</button><PermissionGate permission="rates.manage"><button type="button" className="button button-danger" onClick={openReject}>Reject candidate</button><button type="submit" className="button button-primary" disabled={review.isPending}>{review.isPending ? 'Recording review…' : 'Confirm candidate review'}</button></PermissionGate></div>
+      <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onClose}>Close</button><PermissionGate permission="rates.manage"><button type="button" className="button button-danger" onClick={openReject}>Reject candidate</button><button type="submit" className="button button-primary" disabled={review.isPending || !completeCoverage} title={completeCoverage ? undefined : 'Complete reusable schedule evidence is required'}>{review.isPending ? 'Recording review…' : 'Confirm candidate review'}</button></PermissionGate></div>
     </form>}
     {candidate.workflow.state === 'reviewed' && <Notice kind="success"><strong>Review recorded.</strong> Effective {dateTime(candidate.workflow.effective_start)} to {dateTime(candidate.workflow.effective_end)}. This candidate is not published or active.</Notice>}
     {candidate.workflow.state === 'published' && <><Notice kind="success"><strong>Immutable version published.</strong> It does not affect costs until assigned to one exact utility account.</Notice><div className="field"><label htmlFor={`candidate-account-${candidate.id}`}>Activation utility account</label><select id={`candidate-account-${candidate.id}`} value={accountId} onChange={(event) => setAccountId(event.target.value)} required><option value="">Choose an exact account</option>{accounts.map((account) => <option key={account.utility_account_id} value={account.utility_account_id}>{account.plan_name ?? 'Unassigned account'} ({account.utility_account_id})</option>)}</select></div></>}

@@ -466,7 +466,23 @@ async def home_dashboard(
             raise NotFound("device does not exist")
         ids = (device_id,)
     else:
-        ids = (visible_devices[0].id,) if visible_devices else ()
+        # Preserve the one-sensor default scope, but do not pin the dashboard to
+        # a failed first sensor when another visible sensor has a fresh,
+        # authenticated meter reading. Multi-device totals still require an
+        # explicitly configured verified_sum circuit.
+        default_item: dict[str, object] | None = None
+        for item in output_devices:
+            item_measurement = item.get("measurement")
+            if (
+                item["state"] == "live"
+                and isinstance(item_measurement, dict)
+                and item_measurement.get("active_power_w") is not None
+            ):
+                default_item = item
+                break
+        if default_item is None and output_devices:
+            default_item = output_devices[0]
+        ids = (str(default_item["id"]),) if default_item is not None else ()
     home = await session.get(Home, summary_home_id)
     account = await session.scalar(
         select(UtilityAccount).where(UtilityAccount.home_id == summary_home_id)

@@ -13,6 +13,7 @@ describe('Billing rate-source boundary', () => {
     tou_period_definitions: [{ season: 'summer', day_type: 'all', period_name: 'Tier 1', start_minute: 0, end_minute: 1440, price_per_kwh: '0.30863000' }],
     tier_threshold_definitions: [{ season: 'summer', tier: 1, end_kwh: '579.0' }], reusable_price_components: [{ name: 'Base Services Charge', kind: 'daily_fixed', amount: '0.76900000', unit: 'USD/day' }],
     billing_period_start: '2026-06-22', billing_period_end: '2026-07-21', billing_period_days: 30, tier_threshold_basis: 'Bill-period baseline allowance: 579.0 kWh; customer-specific evidence only.', candidate_complete: false,
+    publication_scope: 'bill_period_only', publishable_effective_start: '2026-06-22T07:00:00Z', publishable_effective_end: '2026-07-22T07:00:00Z',
     baseline_allocation_rule: null, baseline_credit_rate: null, effective_start_candidate: null, effective_end_candidate: null,
     source_evidence: [{ name: 'summer_tier_1_all_in_rate', normalized_value: '0.30863000 USD/kWh', supporting_label: 'Summer Tier 1 all-in rate' }], parser_version: '2.0.0',
     state: 'review_required', resulting_rate_version_id: null, review_required: true,
@@ -53,6 +54,7 @@ describe('Billing rate-source boundary', () => {
       plan_classification: 'time_of_use', holiday_treatment: 'weekend_schedule',
       cca_or_direct_access_indicator: null, season_definitions: [], day_type_definitions: [], tou_period_definitions: [],
       tier_threshold_definitions: [], reusable_price_components: [], billing_period_start: null, billing_period_end: null, billing_period_days: null, tier_threshold_basis: null, candidate_complete: true, baseline_allocation_rule: null, baseline_credit_rate: null,
+      publication_scope: 'complete_schedule', publishable_effective_start: null, publishable_effective_end: null,
       effective_start_candidate: null, effective_end_candidate: null, source_evidence: [], parser_version: '1.0.0',
       state: 'review_required', resulting_rate_version_id: null, review_required: true,
       total_kWh: 999,
@@ -77,17 +79,30 @@ describe('Billing rate-source boundary', () => {
     await expect(api.billing(homeScopes[0]!.id)).rejects.toThrow('different home');
   });
 
-  it('shows exact DOMESTIC rate evidence but blocks incomplete publication', async () => {
-    installFetchMock((path, method) => path.includes('/bill-rate-imports') && method === 'GET'
-      ? { status: 200, body: { extractions: [domesticDraft] } }
-      : apiResponse(path, method));
+  it('publishes summer-only DOMESTIC evidence only for its locked bill period', async () => {
+    let published: Record<string, unknown> | undefined;
+    installFetchMock((path, method, body) => {
+      if (path.includes('/bill-rate-imports') && method === 'GET') return { status: 200, body: { extractions: [domesticDraft] } };
+      if (path.endsWith(`/bill-rate-imports/${domesticDraft.id}/publish`) && method === 'POST') {
+        if (typeof body !== 'string') throw new Error('Expected a JSON publish body.');
+        published = JSON.parse(body) as Record<string, unknown>;
+        return { status: 201, body: { rate_plan_version: { id: 'bounded-summer-version' } } };
+      }
+      return apiResponse(path, method);
+    });
     renderWithProviders(<BillingPage />);
     await userEvent.click(await screen.findByRole('button', { name: /DOMESTIC/ }));
     expect(screen.getByText('seasonal tiered')).toBeInTheDocument();
     expect(screen.getByText('not applicable')).toBeInTheDocument();
     expect(screen.getByText('0.30863000 USD/kWh')).toBeInTheDocument();
-    expect(screen.getByText(/does not prove winter rates/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Publish version' })).toBeDisabled();
+    expect(screen.getByText(/Winter rates are not required for this bounded version/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Publish version' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Publish rate version' }));
+    await waitFor(() => expect(published).toMatchObject({
+      effective_start: domesticDraft.publishable_effective_start,
+      effective_end: domesticDraft.publishable_effective_end,
+      administrator_confirmed_effective_date: true,
+    }));
     expect(screen.queryByText(/951 kWh|354\.15/)).not.toBeInTheDocument();
   });
 });

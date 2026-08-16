@@ -151,8 +151,8 @@ export const api = {
     const response = await apiRequest(`/bill-rate-imports/${encodeURIComponent(id)}`, z.object({ extraction: rateDraftSchema }), { method: 'PATCH', body: jsonBody({ field, corrected_value: correctedValue }) });
     return response.extraction;
   },
-  publishRateDraft: async (id: string, effectiveAt: string, utilityAccountId?: string) => apiRequest(`/bill-rate-imports/${encodeURIComponent(id)}/publish`, z.object({ rate_plan_version: z.object({ id: z.string() }).passthrough() }), {
-    method: 'POST', body: jsonBody({ effective_start: effectiveAt, effective_end: null, administrator_confirmed_effective_date: true, assign_to_utility_account_id: utilityAccountId ?? null }),
+  publishRateDraft: async (id: string, effectiveAt: string, effectiveEnd: string | null, utilityAccountId?: string) => apiRequest(`/bill-rate-imports/${encodeURIComponent(id)}/publish`, z.object({ rate_plan_version: z.object({ id: z.string() }).passthrough() }), {
+    method: 'POST', body: jsonBody({ effective_start: effectiveAt, effective_end: effectiveEnd, administrator_confirmed_effective_date: true, assign_to_utility_account_id: utilityAccountId ?? null }),
   }),
   rateSourceStatus: async (homeId: string) => exactHome(homeId, await apiRequest(homePath('/rate-sources/status', homeId), rateSourceStatusSchema)),
   rateSourceCandidates: async (homeId: string) => exactHome(homeId, await apiRequest(homePath('/rate-sources/candidates', homeId), rateCandidatesSchema)),

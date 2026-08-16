@@ -41,6 +41,32 @@ from ..services.commands import create_command
 
 router = APIRouter(prefix="/api/v1", tags=["firmware"])
 SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+OTA_VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-rc\.([1-9]\d*))?$")
+
+
+def _firmware_upgrade_available(installed: str | None, candidate: str) -> bool:
+    """Mirror the device's strict stable/rc numeric upgrade ordering when parseable."""
+    if not installed:
+        return True
+    current_match = OTA_VERSION.fullmatch(installed)
+    candidate_match = OTA_VERSION.fullmatch(candidate)
+    if current_match is None or candidate_match is None:
+        # Unknown legacy identities still reach the device's fail-closed parser;
+        # the server must not invent an ordering for them.
+        return True
+
+    def ordered(match: re.Match[str]) -> tuple[int, int, int, int, int]:
+        major, minor, patch = (int(match.group(index)) for index in range(1, 4))
+        release_candidate = match.group(4)
+        return (
+            major,
+            minor,
+            patch,
+            1 if release_candidate is None else 0,
+            int(release_candidate) if release_candidate is not None else 0,
+        )
+
+    return ordered(candidate_match) > ordered(current_match)
 
 
 def _release_manifest(release: FirmwareRelease) -> dict[str, object]:
@@ -298,6 +324,13 @@ async def deploy_firmware_release(
     ).all()
     if {row.id for row in devices} != set(payload.device_ids):
         raise NotFound("one or more target devices do not exist")
+    if any(
+        not _firmware_upgrade_available(device.firmware_version, release.semantic_version)
+        for device in devices
+    ):
+        raise InvalidRequest(
+            "OTA requires a firmware version newer than every target sensor's installed version"
+        )
     deployments: list[FirmwareDeployment] = []
     for index, device in enumerate(devices):
         existing = await session.scalar(

@@ -28,6 +28,82 @@ describe('exact-home SCE rate workflow', () => {
     })).toThrow();
   });
 
+  it('accepts the locked tiered candidate returned by the official SCE parser', () => {
+    const normalized = {
+      ...rateCandidate.normalized_rates,
+      plan_classification: 'seasonal_tiered',
+      holiday_treatment: 'not_applicable',
+      holiday_rule: 'not_applicable',
+      effective_start: '2026-08-01',
+      plans: [{
+        ...rateCandidate.normalized_rates.plans[0],
+        pricing_model: 'seasonal_tiered',
+        tier_threshold_basis: 'home_baseline_allocation_review_required',
+      }],
+    };
+    expect(rateCandidateSchema.parse({
+      ...rateCandidate,
+      normalized_rates: normalized,
+      validation_evidence: {
+        ...rateCandidate.validation_evidence,
+        plan_classification: 'seasonal_tiered',
+        holiday_treatment: 'not_applicable',
+        day_types: ['all'],
+        coverage: 'semantic_tier_coverage',
+        effective_date: '2026-08-01',
+        warnings: ['HOME_BASELINE_ALLOCATION_REVIEW_REQUIRED'],
+        source_artifact_sha256: rateCandidate.source.artifact_sha256,
+        source_revision_id: rateCandidate.source.revision_id,
+      },
+      diff: {
+        schema: 'sce-rate-diff/1.0.0',
+        previous_candidate_id: null,
+        before: normalized,
+        after: normalized,
+        changes: [],
+        change_count: 0,
+        truncated: false,
+      },
+    }).normalized_rates.effective_start).toBe('2026-08-01');
+  });
+
+  it('shows semantic tier evidence without allowing an incomplete baseline to advance', async () => {
+    const candidate = {
+      ...rateCandidate,
+      normalized_rates: {
+        ...rateCandidate.normalized_rates,
+        plan_classification: 'seasonal_tiered',
+        holiday_treatment: 'not_applicable',
+        holiday_rule: 'not_applicable',
+        effective_start: '2026-08-01',
+        plans: [{
+          ...rateCandidate.normalized_rates.plans[0],
+          rate_plan_name: 'DOMESTIC',
+          pricing_model: 'seasonal_tiered',
+          tier_threshold_basis: 'home_baseline_allocation_review_required',
+        }],
+      },
+      validation_evidence: {
+        ...rateCandidate.validation_evidence,
+        day_types: ['all'],
+        coverage: 'semantic_tier_coverage',
+        effective_date: '2026-08-01',
+      },
+    };
+    installFetchMock((path, method) => {
+      const url = new URL(path, 'http://frontend.test');
+      if (url.pathname.endsWith('/rate-sources/candidates') && method === 'GET') {
+        return { status: 200, body: { ...rateCandidates, candidates: [candidate] } };
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<BillingPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate candidate ${candidate.id}`) }));
+    expect(screen.getByText(/Additional baseline evidence required/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm candidate review' })).toBeDisabled();
+  });
+
   it('rejects a typed rate response whose home UUID does not match the request', async () => {
     installFetchMock((path, method) => {
       const url = new URL(path, 'http://frontend.test');

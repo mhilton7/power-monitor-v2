@@ -286,6 +286,43 @@ async def test_ota_command_and_download_use_one_locked_per_device_contract(
 
 
 @pytest.mark.asyncio
+async def test_ota_rejects_same_version_before_creating_a_device_command(
+    owner_client: AsyncClient,
+) -> None:
+    device_id, _device_secret, _home_id = await _enroll_ota_target(owner_client)
+    image = b"PowerMeter same-version OTA fixture\0" * 64
+    digest = hashlib.sha256(image).hexdigest()
+    uploaded = await owner_client.post(
+        "/api/v1/firmware/releases",
+        files={"image": ("firmware.bin", image, "application/octet-stream")},
+        data={
+            "semantic_version": "0.1.0-rc.7",
+            "build_number": "7",
+            "board_profile": "esp32-s3-devkitc-n16r8-reference/1",
+            "minimum_boot_version": "1",
+            "minimum_config_version": "1",
+            "expected_sha256": digest,
+            "release_notes": "Same-version rejection fixture.",
+        },
+    )
+    assert uploaded.status_code == 201, uploaded.text
+
+    deployed = await owner_client.post(
+        f"/api/v1/firmware/releases/{uploaded.json()['release']['release_id']}/deploy",
+        json={"device_ids": [device_id], "rollout": "immediate"},
+    )
+
+    assert deployed.status_code == 422, deployed.text
+    assert deployed.json()["code"] == "INVALID_REQUEST"
+    assert "newer" in deployed.json()["detail"]
+    async with session_factory() as session:
+        command = await session.scalar(
+            select(DeviceCommand).where(DeviceCommand.command_type == "ota_install")
+        )
+    assert command is None
+
+
+@pytest.mark.asyncio
 async def test_ota_delivery_attempt_never_exceeds_firmware_uint8(
     owner_client: AsyncClient,
 ) -> None:
