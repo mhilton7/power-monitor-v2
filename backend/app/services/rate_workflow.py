@@ -543,6 +543,10 @@ async def publish_rate_candidate(
         raise RateWorkflowConflict("candidate review evidence is incomplete")
     plan_data = selected_candidate_plan(candidate, review.selected_plan_name)
     normalized = candidate.normalized_rates
+    if candidate.validation_evidence.get("coverage") != "complete":
+        raise RateWorkflowConflict(
+            "candidate reusable schedule is incomplete; account baseline evidence is required"
+        )
     utility_name = normalized.get("utility_name")
     timezone = normalized.get("timezone")
     currency = normalized.get("currency")
@@ -555,7 +559,7 @@ async def publish_rate_candidate(
         or not isinstance(rate_class, str)
         or not rate_class
         or len(rate_class) > 80
-        or pricing_model not in {"time_of_use", "time_of_use_plus_baseline_credit"}
+        or pricing_model not in {"flat", "time_of_use", "time_of_use_plus_baseline_credit"}
     ):
         raise RateWorkflowConflict("candidate plan metadata is not publishable")
     periods = _expanded_periods(plan_data)

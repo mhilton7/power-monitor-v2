@@ -139,6 +139,34 @@ describe('Home', () => {
     expect(screen.getByText('Live heartbeat measurement · not yet committed History')).toBeInTheDocument();
   });
 
+  it('uses the server-selected healthy sensor when the first sensor has no meter reading', async () => {
+    const historyRequests: string[] = [];
+    const indoor = {
+      ...home.devices[0]!,
+      state: 'needs_attention',
+      friendly_name: 'Indoor-AC',
+      measurement: { ...home.devices[0]!.measurement, active_power_w: null, pzem_status: 'timeout' },
+    };
+    const outdoor = {
+      ...home.devices[0]!,
+      id: 'device-outdoor',
+      friendly_name: 'Outdoor-AC',
+      measurement: { ...home.devices[0]!.measurement, active_power_w: '12.800' },
+    };
+    installFetchMock((path) => {
+      if (path.includes('/home')) return { status: 200, body: { ...home, devices: [indoor, outdoor], summary_scope: { kind: 'selected_sensor', device_id: 'device-outdoor', device_ids: ['device-outdoor'], aggregate: false, circuit_id: null } } };
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [{ ...device, friendly_name: 'Indoor-AC', pzem_status: 'timeout' }, { ...device, id: 'device-outdoor', friendly_name: 'Outdoor-AC' }] } };
+      if (path.includes('/history')) { historyRequests.push(path); return { status: 200, body: { points: [], energy_kwh: 0, cost: '0', completeness: 1, missing_ranges: [], resolution_seconds: 300, timezone: 'UTC', usage_source: 'authenticated PZEM-004T sensor intervals only' } }; }
+      return { status: 200, body: { alerts: [] } };
+    });
+
+    renderWithProviders(<HomePage />);
+
+    expect(await screen.findByLabelText('12.8 watts')).toBeInTheDocument();
+    expect(screen.getByText(/Authenticated Outdoor-AC reading updated/)).toBeInTheDocument();
+    await waitFor(() => expect(historyRequests.every((path) => path.includes('device_id=device-outdoor'))).toBe(true));
+  });
+
   it('renders only the condensed home summary and keeps charts, commands, and alerts', async () => {
     const commands: string[] = [];
     installFetchMock((path, method, body) => {

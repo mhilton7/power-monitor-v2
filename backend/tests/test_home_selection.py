@@ -111,7 +111,71 @@ async def test_device_presentation_and_monitoring_settings_are_scoped_and_audite
         )
         assert audit is not None
         assert audit.correlation_id
-        assert audit.details["include_in_aggregate"] is False
+    assert audit.details["include_in_aggregate"] is False
+
+
+@pytest.mark.asyncio
+async def test_dashboard_default_scope_prefers_a_fresh_authenticated_meter_reading(
+    owner_client: AsyncClient,
+) -> None:
+    _owner_id, home_id = await _owner_scope()
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        indoor = Device(
+            home_id=home_id,
+            friendly_name="Indoor-AC",
+            display_order=0,
+            pzem_variant="pzem004t-v4-classic-candidate",
+            ct_rating_a=Decimal("100"),
+        )
+        outdoor = Device(
+            home_id=home_id,
+            friendly_name="Outdoor-AC",
+            display_order=1,
+            pzem_variant="pzem004t-v4-classic-candidate",
+            ct_rating_a=Decimal("100"),
+        )
+        session.add_all((indoor, outdoor))
+        await session.flush()
+        session.add_all(
+            (
+                DeviceHeartbeat(
+                    device_id=indoor.id,
+                    boot_id="00000000-0000-0000-0000-000000000001",
+                    received_at=now,
+                    measured_at=None,
+                    active_power_w=None,
+                    pzem_status="timeout",
+                    storage_status="missing",
+                    time_status="untrusted",
+                ),
+                DeviceHeartbeat(
+                    device_id=outdoor.id,
+                    boot_id="00000000-0000-0000-0000-000000000002",
+                    received_at=now,
+                    measured_at=now,
+                    active_power_w=Decimal("12.800"),
+                    pzem_status="ok",
+                    storage_status="healthy",
+                    time_status="trusted",
+                ),
+            )
+        )
+        await session.commit()
+        outdoor_id = outdoor.id
+
+    response = await owner_client.get("/api/v1/home", params={"home_id": home_id})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [row["friendly_name"] for row in body["devices"]] == ["Indoor-AC", "Outdoor-AC"]
+    assert body["devices"][0]["state"] == "needs_attention"
+    assert body["summary_scope"] == {
+        "kind": "selected_sensor",
+        "device_id": outdoor_id,
+        "device_ids": [outdoor_id],
+        "aggregate": False,
+        "circuit_id": None,
+    }
 
 
 def _feature_params(path: str, home_id: str | None = None) -> dict[str, str]:

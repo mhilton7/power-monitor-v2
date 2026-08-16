@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 from backend.app.bill_rate_import.parser import extract_rate_plan_from_pdf
 from backend.app.errors import BillRateImportError
+from httpx import AsyncClient
 from pypdf import PdfReader, PdfWriter
 from reportlab.pdfgen.canvas import Canvas  # type: ignore[import-untyped]
 
@@ -96,6 +97,47 @@ def test_complete_statement_selects_the_charges_page_and_preserves_page_lineage(
         )
     )
     assert {field.source.page for field in draft.fields} == {3}
+
+
+@pytest.mark.asyncio
+async def test_summer_bill_publishes_only_for_its_exact_evidence_period(
+    owner_client: AsyncClient,
+) -> None:
+    uploaded = await owner_client.post(
+        "/api/v1/bill-rate-imports",
+        files={"document": ("summer-rates.pdf", _pdf([RATE_ONLY_CHARGES_PAGE]), "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    extraction = uploaded.json()["extraction"]
+    assert extraction["publication_scope"] == "bill_period_only"
+    assert extraction["publishable_effective_start"] == "2026-06-22T07:00:00Z"
+    assert extraction["publishable_effective_end"] == "2026-07-22T07:00:00Z"
+
+    unbounded = await owner_client.post(
+        f"/api/v1/bill-rate-imports/{extraction['id']}/publish",
+        json={
+            "effective_start": extraction["publishable_effective_start"],
+            "effective_end": None,
+            "administrator_confirmed_effective_date": True,
+            "assign_to_utility_account_id": None,
+        },
+    )
+    assert unbounded.status_code == 422, unbounded.text
+    assert unbounded.json()["code"] == "RATE_EVIDENCE_RANGE_REQUIRED"
+
+    published = await owner_client.post(
+        f"/api/v1/bill-rate-imports/{extraction['id']}/publish",
+        json={
+            "effective_start": extraction["publishable_effective_start"],
+            "effective_end": extraction["publishable_effective_end"],
+            "administrator_confirmed_effective_date": True,
+            "assign_to_utility_account_id": None,
+        },
+    )
+    assert published.status_code == 201, published.text
+    version = published.json()["rate_plan_version"]
+    assert version["effective_start"] == extraction["publishable_effective_start"]
+    assert version["effective_end"] == extraction["publishable_effective_end"]
 
 
 def test_domestic_parser_tolerates_line_wrapping() -> None:

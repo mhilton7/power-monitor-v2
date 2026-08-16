@@ -193,6 +193,64 @@ async def test_manual_candidate_review_publish_activate_preserves_exact_provenan
 
 
 @pytest.mark.asyncio
+async def test_semantic_tier_candidate_cannot_publish_without_account_baseline(
+    owner_client: AsyncClient,
+    rate_artifact_dir: Path,
+) -> None:
+    home_id = (await owner_client.get("/api/v1/home-scopes")).json()["home_scopes"][0]["id"]
+    async with session_factory() as session:
+        source = RateSource(
+            name=SCE_SOURCE_NAME,
+            source_type="official_https",
+            https_url=SCE_TOU_URL,
+            enabled=True,
+        )
+        session.add(source)
+        await session.flush()
+
+        async def fetch(*_args: object, **_kwargs: object):  # type: ignore[no-untyped-def]
+            return _fetched(
+                b"""<html><body><h1>Tiered Rate Plan</h1><p>Schedule D DOMESTIC</p>
+                <p>Current rates as of 6/1/26.</p>
+                <h2>Tier 1</h2><p>30 cents per kWh</p><p>Up to baseline allocation</p>
+                <h2>Tier 2</h2><p>40 cents per kWh</p><p>Over baseline allocation</p>
+                <p>79 cents daily Base Services Charge</p>
+                <p>Summer Daily Allocations (June - September)</p></body></html>"""
+            )
+
+        synced = await sync_official_rate_source(
+            session,
+            Settings(env="test", rate_artifact_dir=rate_artifact_dir),
+            source,
+            home_id=home_id,
+            actor_user_id=None,
+            correlation_id="semantic-tier-workflow",
+            fetcher=fetch,
+        )
+        assert synced.candidate_id is not None
+        await session.commit()
+        candidate_id = synced.candidate_id
+
+    reviewed = await owner_client.post(
+        f"/api/v1/rate-sources/candidates/{candidate_id}/review",
+        params={"home_id": home_id},
+        json={
+            "selected_plan_name": "DOMESTIC",
+            "effective_start": "2026-06-01T00:00:00-07:00",
+            "administrator_confirmed_effective_date": True,
+            "administrator_confirmed_provenance": True,
+        },
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    published = await owner_client.post(
+        f"/api/v1/rate-sources/candidates/{candidate_id}/publish",
+        params={"home_id": home_id},
+    )
+    assert published.status_code == 409, published.text
+    assert "account baseline evidence is required" in published.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_official_status_is_not_masked_by_a_later_manual_candidate(
     owner_client: AsyncClient,
 ) -> None:

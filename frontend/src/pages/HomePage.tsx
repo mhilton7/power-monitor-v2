@@ -196,7 +196,7 @@ export function HomePage() {
   const home = useQuery({ queryKey: ['home', selectedHomeId], queryFn: () => api.home(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: refreshInterval });
   const devices = useQuery({ queryKey: ['devices', selectedHomeId], queryFn: () => api.devices(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: refreshInterval });
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: api.alerts, refetchInterval: refreshInterval });
-  const deviceId = home.data?.devices[0]?.id ?? '';
+  const deviceId = home.data?.summary_scope?.device_id ?? home.data?.devices[0]?.id ?? '';
   const history24 = useQuery({
     queryKey: ['history', selectedHomeId, 'home-dashboard', dashboardDays, deviceId],
     queryFn: () => api.history(historyParams(selectedHomeId, deviceId, new Date(now.getTime() - dashboardDays * 24 * 60 * 60 * 1000), now, 'power', dashboardDays === 1 ? 300 : 3600)),
@@ -221,7 +221,7 @@ export function HomePage() {
     },
   });
 
-  const primary = home.data?.devices[0];
+  const primary = home.data?.devices.find((sensor) => sensor.id === deviceId) ?? home.data?.devices[0];
   const primaryDetail = devices.data?.devices.find((device) => device.id === deviceId);
   const selectedDeviceCurrent = selectedDevice
     ? devices.data?.devices.find((device) => device.id === selectedDevice.id) ?? selectedDevice
@@ -270,7 +270,7 @@ export function HomePage() {
     : measurement?.active_power_w === null || measurement?.active_power_w === undefined
       ? 'Live meter power is unavailable; missing readings remain missing.'
       : primary.state === 'live'
-        ? `Authenticated reading updated ${timeAgo(measurement.measured_at)}.`
+        ? `Authenticated ${primary.friendly_name} reading updated ${timeAgo(measurement.measured_at)}.`
         : `The sensor is ${primary.state.replaceAll('_', ' ')}; showing its latest authenticated reading.`;
 
   return <div className="home-dashboard dashboard-page">

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from sqlalchemy import delete, select
@@ -67,6 +68,7 @@ router = APIRouter(prefix="/api/v1", tags=["billing"])
 # Compatibility seam for existing API tests that replace the parser with a sanitized
 # fixture. It is reached only under PM_ENV=test; production always calls the sandbox.
 extract_rate_plan_from_pdf = extract_rate_plan_portable_for_tests
+RATE_TIMEZONE = ZoneInfo("America/Los_Angeles")
 
 
 async def _user_homes(session: AsyncSession, user_id: str) -> tuple[str, ...]:
@@ -126,6 +128,7 @@ async def _scoped_extraction(
 def _safe_extraction(
     row: UtilityBillRateExtraction, upload: UtilityBillRateUpload
 ) -> dict[str, object]:
+    bounded_period = _bill_period_publish_bounds(row)
     return {
         "id": row.id,
         "home_id": upload.home_id,
@@ -146,6 +149,15 @@ def _safe_extraction(
         "billing_period_days": row.billing_period_days,
         "tier_threshold_basis": row.tier_threshold_basis,
         "candidate_complete": row.candidate_complete,
+        "publication_scope": (
+            "complete_schedule"
+            if row.candidate_complete
+            else "bill_period_only"
+            if bounded_period is not None
+            else "review_only"
+        ),
+        "publishable_effective_start": bounded_period[0] if bounded_period else None,
+        "publishable_effective_end": bounded_period[1] if bounded_period else None,
         "baseline_allocation_rule": row.baseline_allocation_rule,
         "baseline_credit_rate": row.baseline_credit_rate,
         "effective_start_candidate": row.effective_start_candidate,
@@ -156,6 +168,39 @@ def _safe_extraction(
         "resulting_rate_version_id": row.resulting_rate_version_id,
         "review_required": row.state == "review_required",
     }
+
+
+def _bill_period_publish_bounds(
+    row: UtilityBillRateExtraction,
+) -> tuple[datetime, datetime] | None:
+    """Return an exact, exclusive UTC range for safe summer bill evidence."""
+    if (
+        row.candidate_complete
+        or row.plan_classification != "seasonal_tiered"
+        or row.billing_period_start is None
+        or row.billing_period_end is None
+        or row.billing_period_days is None
+        or not row.tier_threshold_basis
+        or not row.tou_period_definitions
+    ):
+        return None
+    inclusive_days = (row.billing_period_end - row.billing_period_start).days + 1
+    if inclusive_days != row.billing_period_days or inclusive_days < 1 or inclusive_days > 62:
+        return None
+    if any(period.get("season") != "summer" for period in row.tou_period_definitions):
+        return None
+    for offset in range(inclusive_days):
+        if (row.billing_period_start + timedelta(days=offset)).month not in {6, 7, 8, 9}:
+            return None
+    local_start = datetime.combine(
+        row.billing_period_start, datetime.min.time(), tzinfo=RATE_TIMEZONE
+    )
+    local_end = datetime.combine(
+        row.billing_period_end + timedelta(days=1),
+        datetime.min.time(),
+        tzinfo=RATE_TIMEZONE,
+    )
+    return local_start.astimezone(UTC), local_end.astimezone(UTC)
 
 
 @router.post("/bill-rate-imports", status_code=201)
@@ -378,11 +423,21 @@ async def publish_bill_rate_import(
     if extraction.state != "review_required":
         raise BillRateImportError("rate extraction is not publishable")
     if not extraction.candidate_complete:
-        raise BillRateImportError(
-            "This bill provides only seasonal/customer-specific tier evidence. "
-            "Complete and confirm a reusable tariff schedule before publication.",
-            code="RATE_CANDIDATE_INCOMPLETE",
-        )
+        bounded_period = _bill_period_publish_bounds(extraction)
+        if bounded_period is None:
+            raise BillRateImportError(
+                "This bill does not provide a safely bounded reusable rate schedule.",
+                code="RATE_CANDIDATE_INCOMPLETE",
+            )
+        if (
+            payload.effective_start != bounded_period[0]
+            or payload.effective_end != bounded_period[1]
+        ):
+            raise BillRateImportError(
+                "Summer-only bill evidence must use its exact billing-period start and "
+                "exclusive end; it cannot be applied to winter or another billing period.",
+                code="RATE_EVIDENCE_RANGE_REQUIRED",
+            )
     plan, version_number = await locked_rate_plan_and_next_version(
         session,
         name=extraction.rate_plan_name,

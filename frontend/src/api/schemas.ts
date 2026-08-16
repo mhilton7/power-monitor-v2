@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const isoDate = z.string().datetime({ offset: true });
 const localDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const rateEffectiveDate = z.union([isoDate, localDate]);
 const decimal = z.union([z.string(), z.number().finite()]);
 const nullableDecimal = decimal.nullable();
 const nullableNumber = z.number().finite().nullable();
@@ -160,6 +161,9 @@ export const rateDraftSchema = z.object({
   billing_period_days: z.number().int().positive().nullable(),
   tier_threshold_basis: z.string().nullable(),
   candidate_complete: z.boolean(),
+  publication_scope: z.enum(['complete_schedule', 'bill_period_only', 'review_only']),
+  publishable_effective_start: isoDate.nullable(),
+  publishable_effective_end: isoDate.nullable(),
   baseline_allocation_rule: z.string().nullable(),
   baseline_credit_rate: nullableDecimal,
   effective_start_candidate: isoDate.nullable(),
@@ -236,11 +240,12 @@ export const rateCandidatePeriodSchema = z.object({
 export const normalizedRatePlanSchema = z.object({
   rate_plan_name: z.string(),
   rate_class: z.string(),
-  pricing_model: z.enum(['time_of_use', 'time_of_use_plus_baseline_credit']),
+  pricing_model: z.enum(['flat', 'tiered', 'seasonal_tiered', 'time_of_use', 'time_of_use_plus_baseline_credit']),
   daily_fixed_charge: decimal,
   monthly_fixed_charge: decimal,
   baseline_credit_per_kwh: decimal,
   rate_components: z.enum(['sce_delivery_and_generation_combined', 'administrator_entered_combined_price']),
+  tier_threshold_basis: z.string().optional(),
   periods: z.array(rateCandidatePeriodSchema).min(1),
 }).strict();
 
@@ -249,13 +254,15 @@ export const normalizedRateCandidateSchema = z.object({
   utility_name: z.literal('Southern California Edison'),
   timezone: z.literal('America/Los_Angeles'),
   currency: z.literal('USD'),
+  plan_classification: z.enum(['flat', 'tiered', 'seasonal_tiered', 'time_of_use']).optional(),
+  holiday_treatment: z.enum(['not_applicable', 'no_special_treatment', 'weekend_schedule', 'explicit_schedule', 'unresolved']).optional(),
   season_definitions: z.object({
     summer: z.object({ start_month: z.number().int().min(1).max(12), end_month: z.number().int().min(1).max(12) }).strict(),
     winter: z.object({ start_month: z.number().int().min(1).max(12), end_month: z.number().int().min(1).max(12) }).strict(),
   }).strict(),
-  holiday_rule: z.enum(['weekend_rates', 'administrator_entered_schedule']),
-  effective_start: isoDate.nullable(),
-  effective_end: isoDate.nullable(),
+  holiday_rule: z.enum(['not_applicable', 'weekend_rates', 'administrator_entered_schedule']),
+  effective_start: rateEffectiveDate.nullable(),
+  effective_end: rateEffectiveDate.nullable(),
   effective_date_confirmation_required: z.literal(true),
   plans: z.array(normalizedRatePlanSchema).min(1),
 }).strict();
@@ -264,13 +271,18 @@ const rateCandidateValidationSchema = z.object({
   origin: z.literal('manual_administrator_entry').optional(),
   parser_version: z.string(),
   schema: z.literal('sce-rate-candidate/1.0.0'),
+  plan_classification: z.enum(['flat', 'tiered', 'seasonal_tiered', 'time_of_use']).optional(),
+  holiday_treatment: z.enum(['not_applicable', 'no_special_treatment', 'weekend_schedule', 'explicit_schedule', 'unresolved']).optional(),
   plan_count: z.number().int().positive().optional(),
   period_count: z.number().int().positive().optional(),
   seasons: z.array(z.enum(['summer', 'winter'])).optional(),
-  day_types: z.array(z.enum(['weekday', 'weekend', 'holiday'])).optional(),
-  coverage: z.literal('complete'),
+  day_types: z.array(z.enum(['weekday', 'weekend', 'holiday', 'weekend_holiday', 'all_days', 'all'])).optional(),
+  coverage: z.enum(['complete', 'semantic_tier_coverage']),
   price_unit: z.literal('USD/kWh'),
-  effective_date: z.enum(['administrator_confirmation_required', 'administrator_review_required']),
+  effective_date: z.union([rateEffectiveDate, z.enum(['administrator_confirmation_required', 'administrator_review_required'])]),
+  warnings: z.array(z.string()).optional(),
+  source_artifact_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  source_revision_id: z.string().optional(),
   source_title: z.string().optional(),
   tariff_identifier: z.string().optional(),
   source_url: z.string().url().nullable().optional(),
