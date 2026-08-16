@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -54,8 +55,8 @@ def test_isolated_domestic_charges_page_extracts_only_reusable_rate_evidence() -
     assert draft.rate_plan_name == "DOMESTIC"
     assert draft.plan_classification == "seasonal_tiered"
     assert draft.holiday_treatment == "not_applicable"
-    assert draft.billing_period_start.isoformat() == "2026-06-22"
-    assert draft.billing_period_end.isoformat() == "2026-07-21"
+    assert draft.billing_period_start == date(2026, 6, 22)
+    assert draft.billing_period_end == date(2026, 7, 21)
     assert draft.billing_period_days == 30
     assert draft.candidate_complete is False
     assert [period.price_per_kwh for period in draft.periods] == [

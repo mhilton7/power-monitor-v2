@@ -14,7 +14,7 @@ OWNER_PASSWORD = "correct horse battery staple 2026!"
 
 @pytest.mark.asyncio
 async def test_self_profile_preferences_and_email_change_are_audited_and_fail_closed(
-    owner_client,  # type: ignore[no-untyped-def]
+    owner_client: AsyncClient,
 ) -> None:
     profile = await owner_client.get("/api/v1/auth/profile")
     assert profile.status_code == 200
@@ -92,7 +92,7 @@ async def test_self_profile_preferences_and_email_change_are_audited_and_fail_cl
 
 @pytest.mark.asyncio
 async def test_admin_user_lifecycle_normalizes_email_and_revokes_sessions(
-    owner_client,  # type: ignore[no-untyped-def]
+    owner_client: AsyncClient,
 ) -> None:
     roles = (await owner_client.get("/api/v1/roles")).json()["roles"]
     role_name = next(role["name"] for role in roles if role["name"] != "Owner")
@@ -209,7 +209,7 @@ async def test_admin_user_lifecycle_normalizes_email_and_revokes_sessions(
 
 @pytest.mark.asyncio
 async def test_regular_user_self_service_cannot_bypass_admin_authorization(
-    owner_client,  # type: ignore[no-untyped-def]
+    owner_client: AsyncClient,
 ) -> None:
     created = await owner_client.post(
         "/api/v1/users",
@@ -269,7 +269,7 @@ async def test_regular_user_self_service_cannot_bypass_admin_authorization(
 
 @pytest.mark.asyncio
 async def test_last_active_owner_cannot_be_demoted_disabled_or_deleted(
-    owner_client,  # type: ignore[no-untyped-def]
+    owner_client: AsyncClient,
 ) -> None:
     owner_id = (await owner_client.get("/api/v1/auth/profile")).json()["id"]
     assert (
