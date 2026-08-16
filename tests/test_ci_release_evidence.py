@@ -244,7 +244,7 @@ def test_public_release_selector_executes_against_paginated_fail_closed_fixtures
             },
             {
                 "draft": False,
-                "published_at": "2026-08-15T05:30:00Z",
+                "published_at": "2026-08-16T01:14:49Z",
                 "prerelease": True,
                 "tag_name": "v0.1.0-rc.6",
             },
