@@ -4,7 +4,7 @@ The PDF is a rate-source document only. It is not a source of consumption, Histo
 
 ## Allowed output
 
-The closed `RatePlanDraft` can hold only utility/plan/class, CCA or Direct Access indicator, seasons/day types/TOU boundaries, tier thresholds/units, baseline allocation rule and credit rate, per-kWh delivery/generation/component rates, recurring fixed charge, reusable recurring tax/surcharge/credit rules, explicitly printed candidate tariff dates, allowed-field page/region/confidence, parser version, and source artifact SHA-256.
+The closed `RatePlanDraft` can hold only utility/plan/class, CCA or Direct Access indicator, seasons/day types/TOU boundaries, tier thresholds/units, baseline allocation rule and credit rate, per-kWh delivery/generation/component rates, recurring fixed charge, reusable recurring tax/surcharge/credit rules, optional statement-period metadata, allowed-field page/region/confidence, parser version, and source artifact SHA-256. Statement dates never become tariff effective dates or candidate identity inputs.
 
 It has no arbitrary JSON extension. A cost run accepts an immutable published rate version, never an extraction object.
 
@@ -21,8 +21,8 @@ Customer/account/address/meter identity; meter readings; hourly/daily/tier/TOU/b
 5. Sensitive areas are detected/redacted and prohibited values are discarded. Temporary OCR is destroyed with the per-job tmpfs directory after success, rejection, timeout, or forced termination.
 6. Stdout is the only worker-to-API channel. It is capped and validated against `pm-bill-rate-sandbox-output/1.0.0`; duplicate JSON keys, extra fields, unknown categories, invalid drafts, and a mismatched source SHA-256 fail closed. Stderr is discarded and never becomes an API or log value.
 7. Only allowed fields, evidence coordinates, and confidence enter the review response. Temporary content is not stored in browser persistence.
-8. The reviewer corrects allowed fields; validators enforce currency/unit, tier ordering, full non-overlapping period coverage, seasons, recurring semantics, and internal consistency.
-9. An official allowlisted source is cross-checked where available. A date on a bill remains a candidate until confirmed.
+8. The reviewer corrects allowed fields; validators enforce currency/unit, tier ordering, full non-overlapping period coverage, seasons, recurring semantics, and internal consistency. A customer-period baseline allowance is not converted into a reusable threshold; the configured threshold is retained and the draft remains review-only until complete tariff evidence is supplied.
+9. An official allowlisted source is cross-checked where available. Missing, malformed, old, or future statement dates do not block exact rate extraction. A statement date is never treated as a tariff effective date.
 10. Save/reject affects only the rate draft. Publish/assign is a separate permissioned action producing an immutable effective-dated rate version.
 11. The original document bytes are released immediately after parsing and are
     never written to persistent storage, even in encrypted form. Only permitted
@@ -46,10 +46,10 @@ Success exits zero and emits exactly `{"pdf_sandbox":"enforced","schema_id":"pm-
 
 Each upload is owned by exactly one authorized `home_id`; its extraction and every review transition inherit that ownership through the upload record. In the single-home default the server resolves the only authorized home. A multi-home actor must submit `home_id` explicitly. List, detail, correction, publication, assignment, and rejection queries join the extraction to its owned upload and apply the actor's home predicate before loading or locking the row. A published draft can be assigned only to a utility account in that same home.
 
-Artifact uniqueness is `(home_id, SHA-256)`, not global SHA-256. A repeat in the same home is rejected, while an identical permitted rate-source document in a disjoint home is imported independently. This makes cross-home duplicate behavior indistinguishable from a first import and prevents an artifact-existence oracle.
+Artifact uniqueness is `(home_id, SHA-256)`, not global SHA-256. A repeat of the same artifact in the same home is rejected, while an identical permitted rate-source document in a disjoint home is imported independently. Within one home, a different bill containing the same operational utility/plan/schedule/component/threshold values reuses the existing non-rejected candidate. Statement dates, import time, filename, customer data, usage, totals, page numbers, and artifact hash are excluded from that semantic rate identity.
 
 ## Invariants
 
-Tests use sanitized digital, scanned, rotated, multi-page, CCA/Direct Access, invariant-rate/different-usage, different-rate/same-usage, missing-rate, line-total-only, malformed, oversized, encrypted, and OCR-timeout fixtures. Linux adversarial tests also place a sentinel secret outside the job directory, inject a sentinel environment value, and attempt a socket open; all must fail while a valid sanitized PDF still parses inside the same Landlock/seccomp boundary. They prove zero readings/intervals/rollups/History points are created; bill kWh/totals cannot affect sensor cost; prohibited values are absent from API/database/log/browser/export/diagnostics/backup; and effective-dated publication never silently rewrites prior immutable cost.
+Tests use sanitized isolated and multi-page charge-detail documents, missing/malformed/old/future date variants, line-wrapped rates, approximate chart values, exact decimal reconciliation, semantic duplicates, scanned/rotated documents, malformed/oversized/encrypted files, and OCR timeouts. Linux adversarial tests also place a sentinel secret outside the job directory, inject a sentinel environment value, and attempt a socket open; all must fail while a valid sanitized PDF still parses inside the same Landlock/seccomp boundary. They prove zero readings/intervals/rollups/History points are created; bill kWh/totals cannot affect sensor cost; prohibited values are absent from API/database/log/browser/export/diagnostics/backup; and effective-dated publication never silently rewrites prior immutable cost.
 
 There is intentionally no historical-bills endpoint, page, comparison chart, reconciliation, usage import, or bill-payment feature.

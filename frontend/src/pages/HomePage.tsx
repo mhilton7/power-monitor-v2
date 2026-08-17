@@ -6,6 +6,7 @@ import { api } from '../api';
 import type { DeviceDetail, HomeData } from '../api/schemas';
 import { PermissionGate } from '../auth/PermissionGate';
 import { SensorDrawer } from '../components/SensorDrawer';
+import { HeartbeatAge } from '../components/HeartbeatAge';
 import { Card, ConfirmDialog, EmptyState, ErrorState, Loading, Notice, StatusPill } from '../components/ui';
 import { useHomeScope } from '../home/useHomeScope';
 import { chartTick, dateTime, money, numeric, percent, timeAgo } from '../lib/format';
@@ -151,7 +152,7 @@ function SensorHealthPanel({ data, details, onSelect }: {
             <div><strong title={sensor.friendly_name}>{sensor.friendly_name}</strong>{subtitle && <small title={subtitle}>{subtitle}</small>}</div>
           </div>
           <SensorMetric label="Status"><StatusPill state={sensor.state} label={sensor.state === 'live' ? 'Online' : humanizeHealth(sensor.state)} /></SensorMetric>
-          <SensorMetric label="Last heartbeat">{timeAgo(sensor.heartbeat_at)}</SensorMetric>
+          <SensorMetric label="Last heartbeat"><HeartbeatAge timestamp={sensor.heartbeat_at} /></SensorMetric>
           <SensorMetric label="Power">{powerDisplay(measurement?.active_power_w).text}</SensorMetric>
           <SensorMetric label="Voltage">{numeric(measurement?.voltage_v, 'V', 1)}</SensorMetric>
           <SensorMetric label="Current">{numeric(measurement?.current_a, 'A', 2)}</SensorMetric>

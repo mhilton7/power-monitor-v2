@@ -6,6 +6,7 @@ import type { Command, DeviceDetail } from '../api/schemas';
 import { PermissionGate } from '../auth/PermissionGate';
 import { formString } from '../lib/form';
 import { bytes, numeric, timeAgo } from '../lib/format';
+import { HeartbeatAge } from './HeartbeatAge';
 import { ConfirmDialog, Dialog, Notice, StatusPill } from './ui';
 
 interface PendingAction {
@@ -77,7 +78,7 @@ export function SensorDrawer({ device, open, onClose }: { device: DeviceDetail |
   function submitConfiguration(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = new FormData(event.currentTarget); const scope = formString(form, 'measurementScope'); const confirmation = formString(form, 'measurementScopeConfirmation'); const location = formString(form, 'location'); const notes = formString(form, 'notes'); configure.mutate({ friendly_name: formString(form, 'friendlyName'), location: location || null, notes: notes || null, display_order: Number(formString(form, 'displayOrder')), include_in_aggregate: form.has('includeInAggregate'), show_on_dashboard: form.has('showOnDashboard'), monitoring_enabled: form.has('monitoringEnabled'), ...(scope ? { measurement_scope: scope } : {}), ...(confirmation ? { measurement_scope_confirmation: confirmation } : {}) }); }
   return <>
     <Dialog open={open} title={device.friendly_name} description={`Device ${device.device_fingerprint}`} onClose={onClose} wide>
-      <div className="sensor-drawer-heading"><StatusPill state={device.heartbeat_at ? 'online' : 'offline'} /><span>Heartbeat {timeAgo(device.heartbeat_at)}</span></div>
+      <div className="sensor-drawer-heading"><StatusPill state={device.heartbeat_at ? 'online' : 'offline'} /><span>Heartbeat <HeartbeatAge timestamp={device.heartbeat_at} /></span></div>
       {lastCommand && <Notice kind="success">Command {lastCommand.command.id} was queued. Success appears only after authenticated device completion evidence.</Notice>}
       {awaitingPrepare && <Notice kind="info">Prepare command {awaitingPrepare.commandId} is queued. Commit stays unavailable until the sensor returns authenticated readiness and impact evidence.</Notice>}
       {command.isError && <Notice kind="warning">{command.error instanceof Error ? command.error.message : 'The command could not be queued.'}</Notice>}

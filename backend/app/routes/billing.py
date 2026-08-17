@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from sqlalchemy import delete, select
@@ -47,6 +47,7 @@ from ..schemas.api import (
     RateCorrectionRequest,
     RatePublishRequest,
 )
+from ..schemas.billing import RatePlanDraft
 from ..security.auth import CurrentUser, require_permission
 from ..services.rate_sync import (
     ensure_default_sce_source,
@@ -68,7 +69,6 @@ router = APIRouter(prefix="/api/v1", tags=["billing"])
 # Compatibility seam for existing API tests that replace the parser with a sanitized
 # fixture. It is reached only under PM_ENV=test; production always calls the sandbox.
 extract_rate_plan_from_pdf = extract_rate_plan_portable_for_tests
-RATE_TIMEZONE = ZoneInfo("America/Los_Angeles")
 
 
 async def _user_homes(session: AsyncSession, user_id: str) -> tuple[str, ...]:
@@ -128,7 +128,6 @@ async def _scoped_extraction(
 def _safe_extraction(
     row: UtilityBillRateExtraction, upload: UtilityBillRateUpload
 ) -> dict[str, object]:
-    bounded_period = _bill_period_publish_bounds(row)
     return {
         "id": row.id,
         "home_id": upload.home_id,
@@ -149,15 +148,9 @@ def _safe_extraction(
         "billing_period_days": row.billing_period_days,
         "tier_threshold_basis": row.tier_threshold_basis,
         "candidate_complete": row.candidate_complete,
-        "publication_scope": (
-            "complete_schedule"
-            if row.candidate_complete
-            else "bill_period_only"
-            if bounded_period is not None
-            else "review_only"
-        ),
-        "publishable_effective_start": bounded_period[0] if bounded_period else None,
-        "publishable_effective_end": bounded_period[1] if bounded_period else None,
+        "publication_scope": ("complete_schedule" if row.candidate_complete else "review_only"),
+        "publishable_effective_start": None,
+        "publishable_effective_end": None,
         "baseline_allocation_rule": row.baseline_allocation_rule,
         "baseline_credit_rate": row.baseline_credit_rate,
         "effective_start_candidate": row.effective_start_candidate,
@@ -170,37 +163,93 @@ def _safe_extraction(
     }
 
 
-def _bill_period_publish_bounds(
-    row: UtilityBillRateExtraction,
-) -> tuple[datetime, datetime] | None:
-    """Return an exact, exclusive UTC range for safe summer bill evidence."""
-    if (
-        row.candidate_complete
-        or row.plan_classification != "seasonal_tiered"
-        or row.billing_period_start is None
-        or row.billing_period_end is None
-        or row.billing_period_days is None
-        or not row.tier_threshold_basis
-        or not row.tou_period_definitions
-    ):
-        return None
-    inclusive_days = (row.billing_period_end - row.billing_period_start).days + 1
-    if inclusive_days != row.billing_period_days or inclusive_days < 1 or inclusive_days > 62:
-        return None
-    if any(period.get("season") != "summer" for period in row.tou_period_definitions):
-        return None
-    for offset in range(inclusive_days):
-        if (row.billing_period_start + timedelta(days=offset)).month not in {6, 7, 8, 9}:
-            return None
-    local_start = datetime.combine(
-        row.billing_period_start, datetime.min.time(), tzinfo=RATE_TIMEZONE
-    )
-    local_end = datetime.combine(
-        row.billing_period_end + timedelta(days=1),
-        datetime.min.time(),
-        tzinfo=RATE_TIMEZONE,
-    )
-    return local_start.astimezone(UTC), local_end.astimezone(UTC)
+def _semantic_rate_values_from_draft(draft: RatePlanDraft) -> dict[str, object]:
+    periods = [period.model_dump(mode="json") for period in draft.periods]
+    return {
+        "utility_name": draft.utility_name,
+        "rate_plan_name": draft.rate_plan_name,
+        "rate_class": draft.rate_class,
+        "plan_classification": draft.plan_classification,
+        "holiday_treatment": draft.holiday_treatment,
+        "cca_or_direct_access_indicator": draft.cca_or_direct_access_indicator,
+        "season_definitions": [
+            {"name": "summer", "months": list(draft.summer_months)},
+            {"name": "winter", "months": list(draft.winter_months)},
+        ],
+        "day_type_definitions": sorted({period.day_type for period in draft.periods}),
+        "tou_period_definitions": periods,
+        "tier_threshold_definitions": [
+            {
+                "start_kwh": str(period.tier_start_kwh),
+                "end_kwh": str(period.tier_end_kwh) if period.tier_end_kwh else None,
+            }
+            for period in draft.periods
+            if period.tier_start_kwh or period.tier_end_kwh
+        ],
+        "reusable_price_components": [
+            charge.model_dump(mode="json") for charge in draft.reusable_charges
+        ],
+        "tier_threshold_basis": draft.tier_threshold_basis,
+        "candidate_complete": draft.candidate_complete,
+        "baseline_allocation_rule": draft.baseline_allocation_rule,
+        "baseline_credit_rate": (
+            str(draft.baseline_credit_rate) if draft.baseline_credit_rate is not None else None
+        ),
+    }
+
+
+def _semantic_rate_values_from_row(row: UtilityBillRateExtraction) -> dict[str, object]:
+    return {
+        "utility_name": row.utility_name,
+        "rate_plan_name": row.rate_plan_name,
+        "rate_class": row.rate_class,
+        "plan_classification": row.plan_classification,
+        "holiday_treatment": row.holiday_treatment,
+        "cca_or_direct_access_indicator": row.cca_or_direct_access_indicator,
+        "season_definitions": row.season_definitions,
+        "day_type_definitions": row.day_type_definitions,
+        "tou_period_definitions": row.tou_period_definitions,
+        "tier_threshold_definitions": row.tier_threshold_definitions,
+        "reusable_price_components": row.reusable_price_components,
+        "tier_threshold_basis": row.tier_threshold_basis,
+        "candidate_complete": row.candidate_complete,
+        "baseline_allocation_rule": row.baseline_allocation_rule,
+        "baseline_credit_rate": (
+            str(row.baseline_credit_rate) if row.baseline_credit_rate is not None else None
+        ),
+    }
+
+
+def _semantic_rate_identity(values: dict[str, object]) -> str:
+    canonical = json.dumps(values, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+async def _existing_semantic_rate_candidate(
+    session: AsyncSession,
+    *,
+    home_id: str,
+    draft: RatePlanDraft,
+) -> tuple[UtilityBillRateExtraction, UtilityBillRateUpload] | None:
+    expected = _semantic_rate_identity(_semantic_rate_values_from_draft(draft))
+    rows = (
+        await session.execute(
+            select(UtilityBillRateExtraction, UtilityBillRateUpload)
+            .join(
+                UtilityBillRateUpload,
+                UtilityBillRateUpload.id == UtilityBillRateExtraction.upload_id,
+            )
+            .where(
+                UtilityBillRateUpload.home_id == home_id,
+                UtilityBillRateExtraction.state != "rejected",
+            )
+            .order_by(UtilityBillRateUpload.created_at.desc())
+        )
+    ).all()
+    for extraction, upload in rows:
+        if _semantic_rate_identity(_semantic_rate_values_from_row(extraction)) == expected:
+            return extraction, upload
+    return None
 
 
 @router.post("/bill-rate-imports", status_code=201)
@@ -234,6 +283,22 @@ async def import_rates_from_bill(
     )
     if duplicate is not None:
         raise BillRateImportError("this rate-source document was already imported")
+    semantic_match = await _existing_semantic_rate_candidate(
+        session,
+        home_id=scoped_home_id,
+        draft=draft,
+    )
+    if semantic_match is not None:
+        data = b""
+        extraction, existing_upload = semantic_match
+        return {
+            "extraction": _safe_extraction(extraction, existing_upload),
+            "usage_source_notice": (
+                "All usage and History come exclusively from authenticated PZEM sensors."
+            ),
+            "ignored_prohibited_categories": list(ignored_categories),
+            "semantic_candidate_unchanged": True,
+        }
     upload = UtilityBillRateUpload(
         home_id=scoped_home_id,
         artifact_sha256=draft.source_artifact_sha256,
@@ -423,21 +488,12 @@ async def publish_bill_rate_import(
     if extraction.state != "review_required":
         raise BillRateImportError("rate extraction is not publishable")
     if not extraction.candidate_complete:
-        bounded_period = _bill_period_publish_bounds(extraction)
-        if bounded_period is None:
-            raise BillRateImportError(
-                "This bill does not provide a safely bounded reusable rate schedule.",
-                code="RATE_CANDIDATE_INCOMPLETE",
-            )
-        if (
-            payload.effective_start != bounded_period[0]
-            or payload.effective_end != bounded_period[1]
-        ):
-            raise BillRateImportError(
-                "Summer-only bill evidence must use its exact billing-period start and "
-                "exclusive end; it cannot be applied to winter or another billing period.",
-                code="RATE_EVIDENCE_RANGE_REQUIRED",
-            )
+        raise BillRateImportError(
+            "This bill provides exact rates but not a complete reusable tariff schedule. "
+            "Retain the configured threshold and complete review through the manual or "
+            "official-source workflow.",
+            code="RATE_CANDIDATE_INCOMPLETE",
+        )
     plan, version_number = await locked_rate_plan_and_next_version(
         session,
         name=extraction.rate_plan_name,

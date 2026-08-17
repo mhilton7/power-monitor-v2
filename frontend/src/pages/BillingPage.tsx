@@ -25,6 +25,30 @@ function draftValue(draft: RateDraft, key: (typeof correctionFields)[number]['ke
   return value === null ? '' : String(value);
 }
 
+function evidenceValue(draft: RateDraft, label: string): string {
+  return draft.source_evidence.find((field) => field.supporting_label === label)?.normalized_value ?? 'Not extracted';
+}
+
+function normalizedDecimal(value: string | number): string | null {
+  const match = String(value).match(/(?:^|=)(\d+(?:\.\d+)?)/);
+  if (!match) return null;
+  const [whole, fraction = ''] = match[1]!.split('.');
+  return `${whole}.${fraction.replace(/0+$/, '')}`;
+}
+
+function activeRateComparison(draft: RateDraft, currentRate: { plan_name: string; price_per_kwh: string | number | null } | null | undefined): string {
+  if (!currentRate) return 'No active rate is available for comparison.';
+  if (currentRate.plan_name !== draft.rate_plan_name) return 'The extracted plan differs from the active plan.';
+  if (currentRate.price_per_kwh === null) return 'The active plan has no current unit rate to compare.';
+  const active = normalizedDecimal(currentRate.price_per_kwh);
+  const candidates = ['Tier 1 all-in rate', 'Tier 2 all-in rate']
+    .map((label) => normalizedDecimal(evidenceValue(draft, label)))
+    .filter((value): value is string => value !== null);
+  return active !== null && candidates.includes(active)
+    ? 'The current active unit rate matches one extracted tier; the complete schedule still requires review.'
+    : 'The extracted tier rates differ from the current active unit rate.';
+}
+
 export function BillingPage() {
   const queryClient = useQueryClient();
   const formRef = useRef<HTMLFormElement>(null);
@@ -51,11 +75,8 @@ export function BillingPage() {
   const publish = useMutation({
     mutationFn: () => {
       if (!review) throw new Error('Choose a reviewed rate draft.');
-      const bounded = review.publication_scope === 'bill_period_only';
-      const effectiveStart = bounded ? review.publishable_effective_start : new Date(publishAt).toISOString();
-      const effectiveEnd = bounded ? review.publishable_effective_end : null;
-      if (!effectiveStart || (bounded && !effectiveEnd)) throw new Error('The evidenced rate period is incomplete.');
-      return api.publishRateDraft(review.id, effectiveStart, effectiveEnd, billing.data?.accounts[0]?.utility_account_id);
+      const effectiveStart = new Date(publishAt).toISOString();
+      return api.publishRateDraft(review.id, effectiveStart, null, billing.data?.accounts[0]?.utility_account_id);
     },
     onSuccess: () => { setPublishOpen(false); setReview(null); setImportOpen(false); void queryClient.invalidateQueries({ queryKey: ['billing'] }); },
   });
@@ -108,15 +129,15 @@ export function BillingPage() {
       {!review ? <><div className="boundary-panel"><FileLock2 aria-hidden="true" /><div><h3>Rates and reusable cost rules only</h3><p>The document is used only to identify reusable schedule and pricing fields. Customer identity, service details, meter readings, consumption, balances, payments, amount due, bill totals and historical charts are discarded and never shown.</p><p>No upload can create or change sensor readings, intervals, History, completeness, calibration, forecasts, energy totals or costs until a separately reviewed rate version is published and assigned.</p></div></div><form ref={formRef} className="upload-form" onSubmit={submitPdf}><div className="file-drop"><Upload aria-hidden="true" /><label htmlFor="rate-document">Choose an SCE PDF rate source</label><input id="rate-document" name="rateDocument" type="file" accept="application/pdf,.pdf" required aria-describedby="upload-limits" /><small id="upload-limits">PDF only · maximum 10 MiB · server-enforced page and processing limits · no cloud OCR</small></div>{upload.isError && <p className="form-error" role="alert">{upload.error instanceof Error ? upload.error.message : 'The document could not be processed.'}</p>}<div className="dialog-actions"><button type="button" className="button button-secondary" onClick={closeImport}>Cancel</button><button type="submit" className="button button-primary" disabled={upload.isPending}>{upload.isPending ? 'Extracting allowed rates…' : 'Create rate draft'}</button></div></form></> : <form className="rate-review" onSubmit={submitCorrections}>
         <Notice kind="warning"><strong>Review required.</strong> Parsing does not activate, publish or assign a rate. Confirm every allowed field directly against the source and an official effective date.</Notice>
         <div className="review-meta"><div><span>Utility</span><strong>{review.utility_name ?? 'Not identified'}</strong></div><div><span>Plan</span><strong>{review.rate_plan_name ?? 'Not identified'}</strong></div><div><span>Structure</span><strong>{review.plan_classification.replaceAll('_', ' ')}</strong></div><div><span>Holiday treatment</span><strong>{review.holiday_treatment.replaceAll('_', ' ')}</strong></div><div><span>Evidence period</span><strong>{review.billing_period_start && review.billing_period_end ? `${review.billing_period_start} – ${review.billing_period_end}` : 'Not supplied'}</strong></div><div><span>Parser</span><strong>{review.parser_version}</strong></div><div><span>Source SHA-256</span><code title={review.artifact_sha256}>{review.artifact_sha256.slice(0, 18)}…</code></div></div>
+        <div className="review-meta" aria-label="Operational rate preview"><div><span>Base daily charge</span><strong>{evidenceValue(review, 'Base services charge')}</strong></div><div><span>Tier 1 all-in</span><strong>{evidenceValue(review, 'Tier 1 all-in rate')}</strong></div><div><span>Tier 2 all-in</span><strong>{evidenceValue(review, 'Tier 2 all-in rate')}</strong></div><div><span>Threshold status</span><strong>{review.tier_threshold_basis ?? 'Review required'}</strong></div><div><span>Active comparison</span><strong>{activeRateComparison(review, currentRate)}</strong></div></div>
         <section aria-labelledby="bill-rate-evidence-title"><h3 id="bill-rate-evidence-title">Extracted reusable rate evidence</h3><div className="rate-evidence-list">{review.source_evidence.map((field, index) => <div key={`${field.name ?? field.field ?? 'field'}-${index}`}><span>{field.supporting_label ?? field.label ?? field.name ?? 'Rate evidence'}</span><strong>{field.normalized_value ?? field.label ?? 'Recorded'}</strong></div>)}</div></section>
-        {review.publication_scope === 'bill_period_only' && <Notice><strong>Summer bill-period evidence retained.</strong> Winter rates are not required for this bounded version. It can be published only from {dateTime(review.publishable_effective_start)} through {dateTime(review.publishable_effective_end)}; the exclusive end prevents these customer-specific summer tiers from affecting winter or another billing period.</Notice>}
-        {review.publication_scope === 'review_only' && <Notice kind="warning"><strong>Incomplete reusable schedule.</strong> This draft remains review-only because its allowed evidence cannot be bounded safely. Supply a complete reusable tariff through the manual or official-source workflow.</Notice>}
+        {review.publication_scope === 'review_only' && <Notice kind="warning"><strong>Exact rates extracted; reusable threshold still required.</strong> Billing dates are optional metadata and never become tariff effective dates. The customer-period allowance was not imported. The existing configured threshold remains unchanged while a complete reusable tariff is supplied through the manual or official-source workflow.</Notice>}
         <div className="rate-field-list">{correctionFields.map((field) => <div className="rate-field" key={field.key}><div className="field"><label htmlFor={`rate-${field.key}`}>{field.label}</label><input id={`rate-${field.key}`} name={field.key} defaultValue={draftValue(review, field.key)} /></div><div className="field-evidence"><span>Allowlisted field</span><span>{review.source_evidence.length} source evidence item{review.source_evidence.length === 1 ? '' : 's'}</span></div></div>)}</div>
         {correct.isError && <p className="form-error" role="alert">{correct.error instanceof Error ? correct.error.message : 'Corrections could not be saved.'}</p>}
         <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={closeImport}>Close review</button><button type="submit" className="button button-secondary" disabled={correct.isPending}>{correct.isPending ? 'Saving…' : 'Save corrections'}</button><PermissionGate permission="rates.manage"><button type="button" className="button button-primary" disabled={review.publication_scope === 'review_only'} title={review.publication_scope === 'review_only' ? 'Safely bounded or complete tariff evidence is required before publication' : undefined} onClick={() => setPublishOpen(true)}>Publish version</button></PermissionGate></div>
       </form>}
     </Dialog>
-    <ConfirmDialog open={publishOpen} title="Publish and assign an immutable rate version?" description={<div><p>Publishing is separate from extraction. This version can affect estimates only within its explicit evidence range and only when assigned to sensor-derived intervals.</p>{review?.publication_scope === 'bill_period_only' ? <Notice><strong>Locked summer evidence range:</strong> {dateTime(review.publishable_effective_start)} through {dateTime(review.publishable_effective_end)}. The end is exclusive; no winter interval can use this version.</Notice> : <div className="field"><label htmlFor="rate-effective-at">Effective date and time</label><input id="rate-effective-at" type="datetime-local" value={publishAt} onChange={(event) => setPublishAt(event.target.value)} required /></div>}</div>} confirmLabel="Publish rate version" busy={publish.isPending} confirmDisabled={review?.publication_scope === 'bill_period_only' ? !review.publishable_effective_start || !review.publishable_effective_end : !publishAt} onCancel={() => setPublishOpen(false)} onConfirm={() => { if (review?.publication_scope === 'bill_period_only' || publishAt) publish.mutate(); }} tone="warning" />
+    <ConfirmDialog open={publishOpen} title="Publish and assign an immutable rate version?" description={<div><p>Publishing is separate from extraction. This version can affect estimates only within an administrator-confirmed effective range and only when assigned to sensor-derived intervals.</p><div className="field"><label htmlFor="rate-effective-at">Effective date and time</label><input id="rate-effective-at" type="datetime-local" value={publishAt} onChange={(event) => setPublishAt(event.target.value)} required /></div></div>} confirmLabel="Publish rate version" busy={publish.isPending} confirmDisabled={!publishAt} onCancel={() => setPublishOpen(false)} onConfirm={() => { if (publishAt) publish.mutate(); }} tone="warning" />
   </div>;
 }
 

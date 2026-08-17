@@ -8,17 +8,16 @@ Repository visibility is **public**, matching the verified public reference repo
 
 Server tags use semantic `vMAJOR.MINOR.PATCH` (prerelease suffix allowed). Breaking device changes require a coordinated protocol bump in both repositories; otherwise the manifest remains `pm-protocol/1.0.0` and names compatible firmware.
 
-`v0.1.0-rc.9` is the current immutable public server installation authority and
-the migration predecessor for rc.10. The valid signed server `v0.1.0-rc.4` tag
+`v0.1.0-rc.10` is the current immutable public server installation authority and
+the migration predecessor for rc.11. The valid signed server `v0.1.0-rc.4` tag
 is historical failed prepublication evidence, not a Release. Hardware execution
 confirmed that firmware rc.1 through rc.5 crash in the main stack before
-provisioning. Public `v0.1.0-rc.9` delivered the condensed dashboard, adaptive
-sensor units, and exact microSD capacity evidence with the additive migration
-chain through `20260816_0013`. Candidate `v0.1.0-rc.10` retains
-`pm-protocol/1.0.0` and that same Alembic head while repairing live-sensor
-selection, OTA upload metadata, closed billing-candidate parsing, exact
-bill-period publication, recurring card-capacity refresh, and trusted-time
-retry. It may be tagged only after the exact firmware rc.10 release is public and
+provisioning. Public `v0.1.0-rc.10` delivered dashboard telemetry recovery,
+upload-safe OTA metadata, exact microSD capacity evidence, and the additive
+migration chain through `20260816_0013`. Candidate `v0.1.0-rc.11` retains
+`pm-protocol/1.0.0` and that same Alembic head while replacing date-dependent
+bill-rate extraction and adding browser-only one-second heartbeat ages without
+changing API polling. It may be tagged only after the exact firmware rc.11 release is public and
 verified, and it may be published only after every automated gate passes.
 Stable publication remains blocked until physical hardware, TLS,
 OTA-install/rollback, and soak certification from the actual marked unit
@@ -40,7 +39,7 @@ Missing, skipped without an approved reason, stale, or failed evidence blocks st
 
 ## Current candidate state
 
-`v0.1.0-rc.9` remains the immutable public server release and is installable
+`v0.1.0-rc.10` remains the immutable public server release and is installable
 with its own attached eight-service assets and instructions. The signed server
 `v0.1.0-rc.2` tag is immutable failed prepublication evidence, not an
 installation authority. Tagged run
@@ -78,17 +77,17 @@ Compose dependency traversal and recording a fixed allowlisted failure
 assertion. Its generated OpenAPI SHA-256 is
 `66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591`.
 
-Public rc.9 includes the condensed dashboard, adaptive sensor units, and exact
-authenticated microSD capacity evidence. Candidate rc.10 repairs live-sensor
-selection, manifest-derived OTA upload metadata, closed billing-candidate
-parsing, and exact bill-period publication. Firmware rc.10 adds recurring
-microSD capacity refresh and trusted-time retry. The generated rc.10 OpenAPI
-SHA-256 is
-`afd08d6bfbac2c2420b1ca304b6d805bd3f685873c03db365f788cbb85c08444`;
+Public rc.10 includes dashboard telemetry recovery, manifest-derived OTA upload
+metadata, recurring microSD capacity refresh, and trusted-time retry. Candidate
+rc.11 replaces the date-dependent bill parser with exact label-scoped rate
+extraction and adds a shared browser heartbeat ticker without backend polling.
+Firmware rc.11 changes only immutable identity and the coordinated contract
+binding. The generated rc.11 OpenAPI SHA-256 is
+`9bfae34ae18fac2f9c2e6937f20c4c65c56a721c44d92ab10c079aaf2dd3a620`;
 the shared protocol remains `pm-protocol/1.0.0` and Alembic head remains
 `20260816_0013`.
 The checked-in YAML retains `UNPUBLISHED_*` sentinels until its tagged workflow
-supplies exact registry digests. Rc.10 must pass clean
+supplies exact registry digests. Rc.11 must pass clean
 dependency/backend/PostgreSQL gates, security scans, public package
 verification, first-run plus idempotent initializer smoke, checksums, and
 attestations. Its explicit migration chain extends to `20260816_0013`; the
@@ -104,8 +103,8 @@ published non-draft same-major public Release other than the current tag, then
 requires that selected tag to be semantically older and to have verified
 signed-tag ancestry. It fails closed if publication-date ordering selects a
 same-major tag that is not older; it does not search past it for a
-`latest lower same-major non-draft public release`. For rc.10, the public metadata
-therefore selects public rc.9; failed rc.2 and non-released rc.4 are never
+`latest lower same-major non-draft public release`. For rc.11, the public metadata
+therefore selects public rc.10; failed rc.2 and non-released rc.4 are never
 predecessors.
 Historical rc.3 evidence proved only forward rc.1-to-rc.3 upgrade. Rollback
 remains separately unproven and its

@@ -62,6 +62,7 @@ class _SandboxRejected(BaseModel):
     status: Literal["rejected"]
     error_code: Literal[
         "CHARGES_PAGE_NOT_FOUND",
+        "BASE_CHARGE_NOT_FOUND",
         "DOCUMENT_REJECTED",
         "EXTRACTION_TIMED_OUT",
         "PDF_ENCRYPTED",
@@ -70,13 +71,17 @@ class _SandboxRejected(BaseModel):
         "PDF_TEXT_UNAVAILABLE",
         "PDF_TOO_LARGE",
         "RATE_LINES_NOT_FOUND",
+        "RATE_COMPONENT_INVALID",
+        "RATE_RECONCILIATION_FAILED",
         "RATE_NAME_NOT_FOUND",
+        "TIER_RATE_NOT_FOUND",
         "UNSUPPORTED_RATE_STRUCTURE",
         "UTILITY_NOT_RECOGNIZED",
     ]
 
 
 _REJECTION_DETAILS: Final[dict[str, str]] = {
+    "BASE_CHARGE_NOT_FOUND": "The SCE daily base service rate is missing.",
     "CHARGES_PAGE_NOT_FOUND": "No SCE rate-detail charges page was found in the PDF.",
     "DOCUMENT_REJECTED": "The isolated rate extractor rejected the document.",
     "EXTRACTION_TIMED_OUT": "Bill rate extraction timed out.",
@@ -86,7 +91,12 @@ _REJECTION_DETAILS: Final[dict[str, str]] = {
     "PDF_TEXT_UNAVAILABLE": "The PDF has no usable text layer and local OCR failed.",
     "PDF_TOO_LARGE": "The PDF exceeds the configured size limit.",
     "RATE_LINES_NOT_FOUND": "Required reusable SCE rate lines are missing.",
+    "RATE_COMPONENT_INVALID": "A required reusable SCE rate component is invalid.",
+    "RATE_RECONCILIATION_FAILED": (
+        "The exact SCE rate components do not reconcile with the printed charge total."
+    ),
     "RATE_NAME_NOT_FOUND": "No supported reusable SCE rate-plan name was found.",
+    "TIER_RATE_NOT_FOUND": "A required SCE tier rate is missing.",
     "UNSUPPORTED_RATE_STRUCTURE": "The SCE rate structure is not supported.",
     "UTILITY_NOT_RECOGNIZED": "The rate-detail page is not recognized as SCE.",
 }

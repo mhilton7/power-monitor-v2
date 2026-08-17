@@ -32,6 +32,7 @@ _O_CLOEXEC: Final = 0x80000
 _SAFE_REJECTION_CODES: Final = frozenset(
     {
         "CHARGES_PAGE_NOT_FOUND",
+        "BASE_CHARGE_NOT_FOUND",
         "EXTRACTION_TIMED_OUT",
         "PDF_ENCRYPTED",
         "PDF_INVALID",
@@ -39,7 +40,10 @@ _SAFE_REJECTION_CODES: Final = frozenset(
         "PDF_TEXT_UNAVAILABLE",
         "PDF_TOO_LARGE",
         "RATE_LINES_NOT_FOUND",
+        "RATE_COMPONENT_INVALID",
+        "RATE_RECONCILIATION_FAILED",
         "RATE_NAME_NOT_FOUND",
+        "TIER_RATE_NOT_FOUND",
         "UNSUPPORTED_RATE_STRUCTURE",
         "UTILITY_NOT_RECOGNIZED",
     }

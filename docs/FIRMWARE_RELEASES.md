@@ -78,14 +78,16 @@ crash in the main stack before provisioning. Those signed releases remain
 immutable evidence. Coordinated public firmware/server rc.6 delivered the
 main-stack hotfix and remains an immutable installation authority.
 
-Candidate firmware rc.10 carries the supported FAT capacity/full-state fix,
+Public firmware rc.10 carries the supported FAT capacity/full-state fix,
 refreshes capacity while mounted so stale full state can recover, and retries
-trusted-time synchronization without changing measurement cadence. It must name server `v0.1.0-rc.10`,
-retain `pm-protocol/1.0.0`, and declare generated OpenAPI SHA-256
-`afd08d6bfbac2c2420b1ca304b6d805bd3f685873c03db365f788cbb85c08444`.
-It must be signed, published, and independently verified before the server rc.10
-tag is created. No earlier tag or release may be moved, rewritten, or
-substituted for rc.10.
+trusted-time synchronization without changing measurement cadence. Candidate
+firmware rc.11 changes only immutable identity and contract binding. It must
+name server `v0.1.0-rc.11`, retain `pm-protocol/1.0.0`, and declare generated
+OpenAPI SHA-256
+`9bfae34ae18fac2f9c2e6937f20c4c65c56a721c44d92ab10c079aaf2dd3a620`.
+It must be signed, published, and independently verified before the server
+rc.11 tag is created. No earlier tag or release may be moved, rewritten, or
+substituted for rc.11.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

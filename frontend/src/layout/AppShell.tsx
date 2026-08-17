@@ -5,7 +5,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { api } from '../api';
 import { useSession } from '../auth/SessionContext';
 import { AlertDrawer } from '../components/AlertDrawer';
-import { timeAgo } from '../lib/format';
+import { HeartbeatAge } from '../components/HeartbeatAge';
 import { useLiveUpdates } from '../hooks/useLiveUpdates';
 import { useHomeScope } from '../home/useHomeScope';
 
@@ -71,7 +71,7 @@ export function AppShell() {
       <nav aria-label="Primary navigation">{navigation.map(({ to, label, icon: Icon }) => <NavLink key={to} to={to} end={to === '/'} aria-label={label}><Icon aria-hidden="true" /><span>{label}</span></NavLink>)}</nav>
       <div className="sidebar-health">
         <div><span className={`health-dot health-${overallState}`} aria-hidden="true" /><strong>{overallState === 'healthy' ? 'All systems normal' : overallState === 'degraded' ? 'Attention needed' : 'Checking systems'}</strong></div>
-        <small>{primary?.heartbeat_at ? `Updated ${timeAgo(primary.heartbeat_at)}` : 'No heartbeat received'}</small>
+        <small>{primary?.heartbeat_at ? <>Updated <HeartbeatAge timestamp={primary.heartbeat_at} /></> : 'No heartbeat received'}</small>
       </div>
     </aside>
     <div className="app-main">

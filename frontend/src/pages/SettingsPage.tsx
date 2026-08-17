@@ -9,7 +9,8 @@ import { useSession } from '../auth/SessionContext';
 import { SensorDrawer } from '../components/SensorDrawer';
 import { Card, ConfirmDialog, Dialog, EmptyState, ErrorState, Loading, Notice, StatusPill } from '../components/ui';
 import { formString } from '../lib/form';
-import { bytes, dateTime, download, timeAgo } from '../lib/format';
+import { bytes, dateTime, download } from '../lib/format';
+import { HeartbeatAge } from '../components/HeartbeatAge';
 import { firmwareUpgradeAvailable, prepareFirmwareUpload, type FirmwareUploadFields, type PreparedFirmwareUpload } from '../lib/firmwareUpload';
 import { useHomeScope } from '../home/useHomeScope';
 
@@ -27,6 +28,10 @@ const sections: SettingsSection[] = [
   { id: 'health', label: 'Advanced system health', icon: <Activity aria-hidden="true" />, permission: 'system.view' },
   { id: 'logs', label: 'Logs & diagnostics', icon: <ServerCog aria-hidden="true" />, permission: 'logs.view' },
 ];
+
+function timeAgo(value: string | null | undefined) {
+  return <HeartbeatAge timestamp={value} />;
+}
 
 export function SettingsPage() {
   const { can } = useSession();

@@ -425,6 +425,7 @@ code { color: #a6f0c1; background: #0e1513; border: 1px solid var(--border-soft)
 .diagnostics-panel span { color: var(--muted); font-size: .66rem; }
 
 .sensor-drawer-heading { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 14px; color: var(--muted); font-size: .71rem; }
+.heartbeat-age { display: inline-block; min-width: 14ch; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .detail-grid section { padding: 13px; border: 1px solid var(--border-soft); border-radius: 8px; }
 .detail-grid h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
