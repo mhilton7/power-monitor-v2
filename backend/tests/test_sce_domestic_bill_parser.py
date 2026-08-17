@@ -89,7 +89,9 @@ def test_isolated_domestic_charges_page_extracts_only_reusable_rate_evidence() -
         "Fixed recovery charge": Decimal("0.00619000"),
         "State tax": Decimal("0.00030000"),
     }
-    serialized = draft.model_dump_json().lower()
+    # The source digest is opaque hexadecimal evidence and can legitimately
+    # contain decimal-looking substrings such as the bill's allowance value.
+    serialized = draft.model_dump_json(exclude={"source_artifact_sha256"}).lower()
     assert all(period.tier_end_kwh is None for period in draft.periods)
     assert all(period.tier_start_kwh == 0 for period in draft.periods)
     assert "579" not in serialized
@@ -177,7 +179,7 @@ def test_page_number_and_customer_period_baseline_are_not_required() -> None:
     draft, _categories = extract_rate_plan_from_pdf(_pdf([page]))
     assert draft.rate_plan_name == "DOMESTIC"
     assert draft.tier_threshold_basis is not None
-    assert "579" not in draft.model_dump_json()
+    assert "579" not in draft.model_dump_json(exclude={"source_artifact_sha256"})
 
 
 def test_full_utility_name_is_an_independent_sce_signal() -> None:

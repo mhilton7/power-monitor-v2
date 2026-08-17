@@ -4,6 +4,10 @@ Firmware is built and released from the independent `power-monitor-sensor-headle
 
 The server stores immutable firmware release metadata: semantic version/build, project, target chip, board profile, minimum boot/config/protocol versions, image size/SHA-256, release notes, signed provenance/SBOM/checksums, hardware-certification status, and source release URL. It never treats a filename or version string as sufficient evidence.
 
+The uploaded firmware binary is a disposable installation artifact. After every intended target has reached a terminal deployment state, an administrator may remove its server-side bytes from Settings. Removal is blocked while any deployment is staged, queued, downloading, or validating. The release identity, SHA-256, deployment outcomes, and audit evidence remain, and the removed version cannot be deployed again. A newer signed release must be uploaded for a future OTA.
+
+For staged rollouts, target order is preserved. Exactly one sensor is queued at a time. An authenticated post-reboot heartbeat reporting the exact target semantic version completes the validating deployment at 100% and releases the next staged sensor. Repeating a deploy request cannot bypass an already-active staged rollout.
+
 An administrator with `firmware.manage` selects compatible devices or a staged rollout. Each device receives a per-device signed/HMAC-authenticated manifest through its outbound heartbeat, downloads through authenticated HTTPS with bounded resume/restart, writes only the inactive OTA slot, verifies all compatibility metadata and SHA-256, reads back boot selection, and reboots. The server completes deployment only after a healthy version heartbeat and subsequent reading evidence.
 
 Interrupted/partial/hash-mismatched/incompatible images never boot. Post-boot validation checks project/target/config/scheduler/watchdog while allowing temporary server, Wi-Fi, PZEM, SD, or SCE unavailability. Boot-loop/crash evidence triggers rollback and reports the original deployment/command ID.
@@ -78,17 +82,17 @@ crash in the main stack before provisioning. Those signed releases remain
 immutable evidence. Coordinated public firmware/server rc.6 delivered the
 main-stack hotfix and remains an immutable installation authority.
 
-Public firmware rc.11 carries the supported FAT capacity/full-state fix,
+Public firmware rc.12 carries the supported FAT capacity/full-state fix,
 refreshes capacity while mounted so stale full state can recover, retries
 trusted-time synchronization without changing measurement cadence, and binds
-the public server rc.11 contract. Candidate firmware rc.12 changes only
-immutable identity and contract binding. It must name server `v0.1.0-rc.12`,
+the public server rc.12 contract. Candidate firmware rc.13 changes only
+immutable identity and contract binding. It must name server `v0.1.0-rc.13`,
 retain `pm-protocol/1.0.0`, and declare generated
 OpenAPI SHA-256
-`68c5f5a34e3ef1f8d71607896a70d7fa09c3a001cc1fc1e077a043e801b599fc`.
+`253494a6fbbf7cdb06467ea3bb670c748f5cb95a547770dce39a53b6e6624518`.
 It must be signed, published, and independently verified before the server
-rc.12 tag is created. No earlier tag or release may be moved, rewritten, or
-substituted for rc.12.
+rc.13 tag is created. No earlier tag or release may be moved, rewritten, or
+substituted for rc.13.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

@@ -2,6 +2,8 @@
 
 The PDF is a rate-source document only. It is not a source of consumption, History, readings, balances, identity, bill totals, calibration, forecasts, gap filling, or comparison data.
 
+Original PDF bytes are discarded immediately after the bounded sandboxed parse and are never stored. An administrator may permanently delete the resulting review draft and its correction records from the Billing review dialog. Deleting that disposable working record retains only redacted audit/hash evidence and never deletes or rewrites a separately published immutable rate version.
+
 ## Allowed output
 
 The closed `RatePlanDraft` can hold only utility/plan/class, CCA or Direct Access indicator, seasons/day types/TOU boundaries, tier thresholds/units, baseline allocation rule and credit rate, per-kWh delivery/generation/component rates, recurring fixed charge, reusable recurring tax/surcharge/credit rules, optional statement-period metadata, allowed-field page/region/confidence, parser version, and source artifact SHA-256. Statement dates never become tariff effective dates or candidate identity inputs.

@@ -60,6 +60,7 @@ from ..services.commands import (
     deliver_commands,
     expire_rotation_credentials,
 )
+from ..services.firmware_deployments import reconcile_firmware_version_heartbeat
 from ..services.ingestion import find_gaps, ingest_batch, record_permanent_loss
 
 router = APIRouter(prefix="/api/v1", tags=["devices"])
@@ -508,6 +509,12 @@ async def heartbeat(
     )
     device.last_heartbeat_at = now
     device.firmware_version = payload.firmware_version
+    await reconcile_firmware_version_heartbeat(
+        session,
+        device_id=device.id,
+        firmware_version=payload.firmware_version,
+        now=now,
+    )
     device.maximum_sequence = max(device.maximum_sequence, payload.newest_sequence or 0)
     if payload.acknowledged_sequence > device.contiguous_ack:
         raise IntegrityConflict("device claims an acknowledgement the server has not committed")

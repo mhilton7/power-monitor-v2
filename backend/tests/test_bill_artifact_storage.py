@@ -6,7 +6,7 @@ import pytest
 from backend.app.bill_rate_import.parser import extract_rate_plan_from_text
 from backend.app.config import Settings
 from backend.app.main import session_factory
-from backend.app.models import UtilityBillRateUpload
+from backend.app.models import AuditEvent, UtilityBillRateExtraction, UtilityBillRateUpload
 from backend.tests.test_bill_rate_boundary import SCHEDULE
 from httpx import AsyncClient
 from sqlalchemy import select, text
@@ -79,3 +79,33 @@ async def test_database_rejects_any_original_bill_artifact_path(
             )
             await session.commit()
         await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_bill_rate_working_record_can_be_permanently_deleted(
+    owner_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_sanitized_parser(monkeypatch, "a" * 64)
+    uploaded = await owner_client.post(
+        "/api/v1/bill-rate-imports",
+        files={"document": ("rates.pdf", b"%PDF-1.7 disposable", "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    extraction_id = uploaded.json()["extraction"]["id"]
+
+    deleted = await owner_client.delete(f"/api/v1/bill-rate-imports/{extraction_id}")
+    assert deleted.status_code == 204, deleted.text
+    listed = await owner_client.get("/api/v1/bill-rate-imports")
+    assert listed.json()["extractions"] == []
+    async with session_factory() as session:
+        assert await session.get(UtilityBillRateExtraction, extraction_id) is None
+        assert await session.scalar(select(UtilityBillRateUpload.id)) is None
+        audit = await session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.event_code == "BILL_RATE_IMPORT_DELETED",
+                AuditEvent.target_id == extraction_id,
+            )
+        )
+        assert audit is not None
+        assert audit.details["original_pdf_bytes_retained"] is False

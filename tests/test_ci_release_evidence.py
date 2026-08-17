@@ -229,13 +229,19 @@ def test_public_release_selector_executes_against_paginated_fail_closed_fixtures
     arguments = (
         "--arg",
         "current",
-        "v0.1.0-rc.12",
+        "v0.1.0-rc.13",
         "--arg",
         "major_prefix",
         "v0.",
     )
     pages = [
         [
+            {
+                "draft": False,
+                "published_at": "2026-08-17T06:12:35Z",
+                "prerelease": True,
+                "tag_name": "v0.1.0-rc.12",
+            },
             {
                 "draft": False,
                 "published_at": "2026-08-17T04:08:04Z",
@@ -303,7 +309,7 @@ def test_public_release_selector_executes_against_paginated_fail_closed_fixtures
     # Failed RC2 and RC4 have Git tags but no Releases, so they are intentionally absent.
     selected = _run_jq(program, pages, *arguments)
     assert selected.returncode == 0, selected.stderr
-    assert selected.stdout.strip() == "v0.1.0-rc.11"
+    assert selected.stdout.strip() == "v0.1.0-rc.12"
 
     for rejected in ([[]], [[{}]], {"not": "slurped release pages"}):
         result = _run_jq(program, rejected, *arguments)
@@ -329,11 +335,11 @@ def test_release_predecessor_version_check_rejects_equal_or_newer_versions() -> 
             check=False,
         )
 
-    assert validate("v0.1.0-rc.11", "v0.1.0-rc.12").returncode == 0
-    assert validate("v0.1.0-rc.12", "v0.1.0-rc.12").returncode != 0
-    assert validate("v0.1.0-rc.13", "v0.1.0-rc.12").returncode != 0
-    assert validate("v0.1.0", "v0.1.0-rc.12").returncode != 0
-    assert validate("not-a-version", "v0.1.0-rc.12").returncode != 0
+    assert validate("v0.1.0-rc.12", "v0.1.0-rc.13").returncode == 0
+    assert validate("v0.1.0-rc.13", "v0.1.0-rc.13").returncode != 0
+    assert validate("v0.1.0-rc.14", "v0.1.0-rc.13").returncode != 0
+    assert validate("v0.1.0", "v0.1.0-rc.13").returncode != 0
+    assert validate("not-a-version", "v0.1.0-rc.13").returncode != 0
 
 
 def test_release_tag_metadata_filters_execute_and_reject_invalid_verification() -> None:
@@ -849,11 +855,11 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     assert "prepare-host.sh" not in installation
     assert "pm-protocol/1.0.0" in installation
     assert "authenticated PZEM-004T readings" in installation
-    assert "$Tag = 'v0.1.0-rc.12'" in installation
+    assert "$Tag = 'v0.1.0-rc.13'" in installation
     assert "$env:TEMP" in installation
     assert "[guid]::NewGuid().ToString('N')" in installation
     assert "Join-Path $HOME" not in installation
-    assert "signed v0.1.0-rc.12 release" in normalized_installation
+    assert "signed v0.1.0-rc.13 release" in normalized_installation
     assert "Stage-PowerMeterTrueNAS.ps1" in installation
     assert "power-monitor.home.arpa -> 192.168.0.175" in installation
     assert "Direct-IP HTTPS is not supported" in installation
@@ -909,18 +915,18 @@ def test_candidate_notes_describe_workflow_output_without_claiming_source_public
     notes = (ROOT / "release/RELEASE_NOTES.md").read_text(encoding="utf-8")
     normalized = " ".join(notes.split())
     assert "source copy alone is not publication evidence" in normalized
-    assert "power-monitor-v2-v0.1.0-rc.12.yaml" in normalized
+    assert "power-monitor-v2-v0.1.0-rc.13.yaml" in normalized
     assert "Keep all existing application secrets" in normalized
-    assert "Alembic head `20260816_0013`" in normalized
+    assert "Alembic head `20260817_0014`" in normalized
     assert "Revision 0009 adds the exact-home rate-candidate" in normalized
     assert "permanent-loss rows immutable" in normalized
-    assert "firmware `v0.1.0-rc.12`" in normalized
-    assert "68c5f5a34e3ef1f8d71607896a70d7fa09c3a001cc1fc1e077a043e801b599fc" in normalized
+    assert "firmware `v0.1.0-rc.13`" in normalized
+    assert "253494a6fbbf7cdb06467ea3bb670c748f5cb95a547770dce39a53b6e6624518" in normalized
     assert "failed release run" in normalized
     assert "31866197054" in normalized
     assert "There is no server rc.2 GitHub Release" in normalized
-    assert "Public server rc.11 remains installable" in normalized
-    assert "Firmware rc.12 must be published and verified" in normalized
+    assert "Public server rc.12 remains installable" in normalized
+    assert "Firmware rc.13 must be published and verified" in normalized
     assert "31893354667" in normalized
     assert "no server rc.4 GitHub Release" in normalized
     assert "deterministically" in normalized
@@ -956,7 +962,7 @@ def test_rc3_recovery_docs_separate_failed_rc2_forward_upgrade_and_publication()
     assert "migration report can permit" not in rollback
     assert "Historical rc.3 evidence proved only forward rc.1-to-rc.3 upgrade" in release_process
     assert "latest lower same-major non-draft public release" in release_process
-    assert "therefore selects public rc.11" in release_process
+    assert "therefore selects public rc.12" in release_process
     assert "exercises only the forward path" in testing
 
     assert "Historical published v0.1.0-rc.1 evidence" in firmware
@@ -969,7 +975,7 @@ def test_rc3_recovery_docs_separate_failed_rc2_forward_upgrade_and_publication()
     assert "7caada9c6295f4c201fd7ce7d383822e6b5785a960022de8355e3b6acc9a4e2c" in firmware
     assert "matching server rc.5 release completed publication" in firmware
     assert "firmware rc.1 through rc.5 crash in the main stack before provisioning" in firmware
-    assert "Candidate firmware rc.12" in firmware
+    assert "Candidate firmware rc.13" in firmware
 
     assert "Signed public firmware `v0.1.0-rc.2` is historical" in traceability
     assert "Signed server tag `v0.1.0-rc.2` and failed run `31866197054`" in traceability

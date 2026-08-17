@@ -8,11 +8,12 @@ import os
 import re
 import secrets
 from datetime import UTC, datetime
+from pathlib import Path as LocalPath
 from typing import Any
 
 from anyio import Path
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
@@ -38,6 +39,11 @@ from ..security.protocol import (
     sign_request,
 )
 from ..services.commands import create_command
+from ..services.firmware_deployments import (
+    ACTIVE_FIRMWARE_DEPLOYMENT_STATES,
+    advance_next_staged_firmware_deployment,
+    queue_staged_firmware_deployment,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["firmware"])
 SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
@@ -202,6 +208,10 @@ async def _home_ids(session: AsyncSession, user_id: str) -> tuple[str, ...]:
     )
 
 
+async def _artifact_available(release: FirmwareRelease) -> bool:
+    return bool(release.image_path) and await Path(release.image_path).is_file()
+
+
 @router.get("/firmware/releases")
 async def list_firmware_releases(
     _user: CurrentUser = Depends(require_permission("firmware.view")),
@@ -210,16 +220,17 @@ async def list_firmware_releases(
     rows = (
         await session.scalars(select(FirmwareRelease).order_by(FirmwareRelease.created_at.desc()))
     ).all()
-    return {
-        "releases": [
+    releases: list[dict[str, object]] = []
+    for row in rows:
+        releases.append(
             {
                 **_release_manifest(row),
                 "release_notes": row.release_notes,
                 "physical_certification": "pending" if row.candidate else "required",
+                "artifact_available": await _artifact_available(row),
             }
-            for row in rows
-        ]
-    }
+        )
+    return {"releases": releases}
 
 
 @router.post("/firmware/releases", status_code=201)
@@ -294,7 +305,12 @@ async def upload_firmware_release(
     await session.commit()
     data = b""
     return {
-        "release": _release_manifest(release),
+        "release": {
+            **_release_manifest(release),
+            "release_notes": release.release_notes,
+            "physical_certification": "pending",
+            "artifact_available": True,
+        },
         "manifest_signature": release.manifest_signature,
         "physical_certification": "pending",
     }
@@ -309,9 +325,15 @@ async def deploy_firmware_release(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
-    release = await session.get(FirmwareRelease, release_id)
+    release = await session.scalar(
+        select(FirmwareRelease).where(FirmwareRelease.id == release_id).with_for_update()
+    )
     if release is None:
         raise NotFound("firmware release does not exist")
+    if not await _artifact_available(release):
+        raise IntegrityConflict(
+            "firmware artifact has been removed; upload a newer release before deploying"
+        )
     homes = await _home_ids(session, user.id)
     devices = (
         await session.scalars(
@@ -331,8 +353,24 @@ async def deploy_firmware_release(
         raise InvalidRequest(
             "OTA requires a firmware version newer than every target sensor's installed version"
         )
+    devices_by_id = {device.id: device for device in devices}
+    ordered_devices = [devices_by_id[device_id] for device_id in payload.device_ids]
+    release_has_active_deployment = (
+        await session.scalar(
+            select(FirmwareDeployment.id)
+            .where(
+                FirmwareDeployment.firmware_release_id == release.id,
+                FirmwareDeployment.state.in_(("queued", "downloading", "validating")),
+            )
+            .limit(1)
+        )
+        is not None
+    )
     deployments: list[FirmwareDeployment] = []
-    for index, device in enumerate(devices):
+    for index, device in enumerate(ordered_devices):
+        should_queue = payload.rollout == "immediate" or (
+            index == 0 and not release_has_active_deployment
+        )
         existing = await session.scalar(
             select(FirmwareDeployment).where(
                 FirmwareDeployment.firmware_release_id == release.id,
@@ -341,12 +379,17 @@ async def deploy_firmware_release(
             )
         )
         if existing is not None:
+            if existing.state == "staged" and should_queue:
+                if payload.rollout == "immediate":
+                    await queue_staged_firmware_deployment(session, existing)
+                else:
+                    await advance_next_staged_firmware_deployment(session, release.id)
             deployments.append(existing)
             continue
         deployment = FirmwareDeployment(
             firmware_release_id=release.id,
             device_id=device.id,
-            state="queued" if payload.rollout == "immediate" or index == 0 else "staged",
+            state="queued" if should_queue else "staged",
             progress_percent=0,
             evidence={"issued_by_user_id": user.id},
         )
@@ -389,6 +432,60 @@ async def deploy_firmware_release(
             {"id": row.id, "device_id": row.device_id, "state": row.state} for row in deployments
         ]
     }
+
+
+@router.delete("/firmware/releases/{release_id}", status_code=204)
+async def delete_firmware_artifact(
+    release_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("firmware.manage")),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    release = await session.scalar(
+        select(FirmwareRelease).where(FirmwareRelease.id == release_id).with_for_update()
+    )
+    if release is None:
+        raise NotFound("firmware release does not exist")
+    active_count = int(
+        await session.scalar(
+            select(func.count(FirmwareDeployment.id)).where(
+                FirmwareDeployment.firmware_release_id == release.id,
+                FirmwareDeployment.state.in_(ACTIVE_FIRMWARE_DEPLOYMENT_STATES),
+            )
+        )
+        or 0
+    )
+    if active_count:
+        raise IntegrityConflict(
+            "firmware artifact cannot be removed while deployments are active or staged"
+        )
+    if release.image_path:
+        firmware_root = LocalPath(settings.firmware_dir).resolve()
+        configured_path = LocalPath(release.image_path)
+        if configured_path.is_symlink():
+            raise IntegrityConflict("firmware artifact path is outside the configured store")
+        stored_path = configured_path.resolve()
+        if stored_path.parent != firmware_root:
+            raise IntegrityConflict("firmware artifact path is outside the configured store")
+        if stored_path.is_file():
+            stored_path.unlink()
+        release.image_path = ""
+        session.add(
+            AuditEvent(
+                actor_user_id=user.id,
+                event_code="FIRMWARE_ARTIFACT_DELETED",
+                target_type="firmware_release",
+                target_id=release.id,
+                correlation_id=request.state.correlation_id,
+                details={
+                    "semantic_version": release.semantic_version,
+                    "sha256": release.sha256,
+                    "metadata_retained": True,
+                },
+            )
+        )
+        await session.commit()
 
 
 @router.get("/device/firmware/{release_id}")

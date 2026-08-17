@@ -98,4 +98,25 @@ describe('Billing rate-source boundary', () => {
     expect(screen.getByRole('button', { name: 'Publish version' })).toBeDisabled();
     expect(screen.queryByText(/951 kWh|354\.15/)).not.toBeInTheDocument();
   });
+
+  it('permanently deletes a disposable PDF extraction after explicit confirmation', async () => {
+    let deletedPath = '';
+    installFetchMock((path, method) => {
+      if (path.includes('/bill-rate-imports') && method === 'GET') {
+        return { status: 200, body: { extractions: [domesticDraft] } };
+      }
+      if (path.endsWith(`/bill-rate-imports/${domesticDraft.id}`) && method === 'DELETE') {
+        deletedPath = path;
+        return { status: 204 };
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<BillingPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /DOMESTIC/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Delete draft' }));
+    expect(screen.getByRole('dialog', { name: 'Delete this PDF rate draft?' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Delete rate draft' }));
+    await waitFor(() => expect(deletedPath).toContain(`/bill-rate-imports/${domesticDraft.id}`));
+  });
 });

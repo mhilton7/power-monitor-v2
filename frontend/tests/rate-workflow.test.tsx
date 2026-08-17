@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { api } from '../src/api';
@@ -228,6 +228,30 @@ describe('exact-home SCE rate workflow', () => {
     expect(screen.queryByRole('button', { name: 'Reject candidate' })).not.toBeInTheDocument();
     expect(attempts).toBe(2);
     expect(requestBodies).toEqual([undefined, undefined]);
+  });
+
+  it('deletes an unpublished candidate only after explicit confirmation', async () => {
+    let deletedHome = '';
+    let deletedCandidate = '';
+    installFetchMock((path, method) => {
+      const url = new URL(path, 'http://frontend.test');
+      if (url.pathname.endsWith('/rate-sources/candidates') && method === 'GET') {
+        return { status: 200, body: rateCandidates };
+      }
+      if (url.pathname.endsWith(`/rate-sources/candidates/${rateCandidate.id}`) && method === 'DELETE') {
+        deletedHome = url.searchParams.get('home_id') ?? '';
+        deletedCandidate = rateCandidate.id;
+        return { status: 204 };
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<BillingPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate candidate ${rateCandidate.id}`) }));
+    await userEvent.click(screen.getByRole('button', { name: 'Delete candidate' }));
+    const confirmation = screen.getByRole('dialog', { name: 'Delete this disposable rate candidate?' });
+    await userEvent.click(within(confirmation).getByRole('button', { name: 'Delete candidate' }));
+    await waitFor(() => expect({ deletedHome, deletedCandidate }).toEqual({ deletedHome: homeId, deletedCandidate: rateCandidate.id }));
   });
 
   it('creates a closed manual fallback payload and clears prior-home dialog state', async () => {

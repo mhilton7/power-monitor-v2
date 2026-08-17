@@ -145,6 +145,7 @@ function CandidateReview({ candidate, homeId, accounts, onWorkflow, onClose }: {
   const [rejectOpen, setRejectOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
   const [activateOpen, setActivateOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [accountId, setAccountId] = useState(candidate.workflow.utility_account_id ?? accounts[0]?.utility_account_id ?? '');
   const selectedPlan = candidate.normalized_rates.plans.find((plan) => plan.rate_plan_name === planName);
   const completeCoverage = candidate.validation_evidence.coverage === 'complete';
@@ -170,6 +171,16 @@ function CandidateReview({ candidate, homeId, accounts, onWorkflow, onClose }: {
       void queryClient.invalidateQueries({ queryKey: ['home', homeId] });
     },
   });
+  const remove = useMutation({
+    mutationFn: () => api.deleteRateCandidate(homeId, candidate.id),
+    onSuccess: () => {
+      setDeleteOpen(false);
+      onClose();
+      void queryClient.invalidateQueries({ queryKey: rateCandidatesKey(homeId) });
+      void queryClient.invalidateQueries({ queryKey: rateStatusKey(homeId) });
+    },
+    onError: () => setDeleteOpen(false),
+  });
 
   function submitReview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -186,7 +197,7 @@ function CandidateReview({ candidate, homeId, accounts, onWorkflow, onClose }: {
     });
   }
 
-  const workflowError = review.error ?? reject.error ?? publish.error ?? activate.error;
+  const workflowError = review.error ?? reject.error ?? publish.error ?? activate.error ?? remove.error;
   const canReject = candidate.workflow.state === 'review_required' || candidate.workflow.state === 'reviewed';
   function openReject() { reject.reset(); setRejectOpen(true); }
   function cancelReject() { setRejectOpen(false); reject.reset(); }
@@ -205,17 +216,18 @@ function CandidateReview({ candidate, homeId, accounts, onWorkflow, onClose }: {
       <small>Dates are submitted as midnight in {RATE_TIMEZONE}; the server stores authoritative UTC instants.</small>
       <label className="workflow-confirm"><input name="confirmEffective" type="checkbox" required /> I confirmed this exact effective range against the official source.</label>
       <label className="workflow-confirm"><input name="confirmProvenance" type="checkbox" required /> I confirmed the recorded source and artifact provenance.</label>
-      <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onClose}>Close</button><PermissionGate permission="rates.manage"><button type="button" className="button button-danger" onClick={openReject}>Reject candidate</button><button type="submit" className="button button-primary" disabled={review.isPending || !completeCoverage} title={completeCoverage ? undefined : 'Complete reusable schedule evidence is required'}>{review.isPending ? 'Recording review…' : 'Confirm candidate review'}</button></PermissionGate></div>
+      <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onClose}>Close</button><PermissionGate permission="rates.manage"><button type="button" className="button button-danger" onClick={() => setDeleteOpen(true)}><Trash2 aria-hidden="true" /> Delete candidate</button><button type="button" className="button button-danger" onClick={openReject}>Reject candidate</button><button type="submit" className="button button-primary" disabled={review.isPending || !completeCoverage} title={completeCoverage ? undefined : 'Complete reusable schedule evidence is required'}>{review.isPending ? 'Recording review…' : 'Confirm candidate review'}</button></PermissionGate></div>
     </form>}
     {candidate.workflow.state === 'reviewed' && <Notice kind="success"><strong>Review recorded.</strong> Effective {dateTime(candidate.workflow.effective_start)} to {dateTime(candidate.workflow.effective_end)}. This candidate is not published or active.</Notice>}
     {candidate.workflow.state === 'published' && <><Notice kind="success"><strong>Immutable version published.</strong> It does not affect costs until assigned to one exact utility account.</Notice><div className="field"><label htmlFor={`candidate-account-${candidate.id}`}>Activation utility account</label><select id={`candidate-account-${candidate.id}`} value={accountId} onChange={(event) => setAccountId(event.target.value)} required><option value="">Choose an exact account</option>{accounts.map((account) => <option key={account.utility_account_id} value={account.utility_account_id}>{account.plan_name ?? 'Unassigned account'} ({account.utility_account_id})</option>)}</select></div></>}
     {candidate.workflow.state === 'activated' && <Notice kind="success"><strong>Active for account {candidate.workflow.utility_account_id}.</strong> Sensor-derived intervals may now use immutable rate version {candidate.workflow.rate_plan_version_id} within its effective range.</Notice>}
     {candidate.workflow.state === 'rejected' && <Notice kind="warning">This candidate was rejected and cannot advance.</Notice>}
     {workflowError && <Notice kind="warning"><strong>Workflow action failed.</strong> {workflowError instanceof Error ? workflowError.message : 'The candidate was not advanced.'}</Notice>}
-    {candidate.workflow.state !== 'review_required' && <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onClose}>Close</button>{canReject && <PermissionGate permission="rates.manage"><button type="button" className="button button-danger" onClick={openReject}>Reject candidate</button></PermissionGate>}{candidate.workflow.state === 'reviewed' && <PermissionGate permission="rates.manage"><button type="button" className="button button-primary" onClick={() => setPublishOpen(true)}>Publish reviewed version</button></PermissionGate>}{candidate.workflow.state === 'published' && <PermissionGate permission="rates.manage"><button type="button" className="button button-primary" onClick={() => setActivateOpen(true)} disabled={!accountId}>Activate for selected account</button></PermissionGate>}</div>}
+    {candidate.workflow.state !== 'review_required' && <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onClose}>Close</button>{candidate.workflow.state === 'rejected' && <PermissionGate permission="rates.manage"><button type="button" className="button button-danger" onClick={() => setDeleteOpen(true)}><Trash2 aria-hidden="true" /> Delete candidate</button></PermissionGate>}{canReject && <PermissionGate permission="rates.manage"><button type="button" className="button button-danger" onClick={openReject}>Reject candidate</button></PermissionGate>}{candidate.workflow.state === 'reviewed' && <PermissionGate permission="rates.manage"><button type="button" className="button button-primary" onClick={() => setPublishOpen(true)}>Publish reviewed version</button></PermissionGate>}{candidate.workflow.state === 'published' && <PermissionGate permission="rates.manage"><button type="button" className="button button-primary" onClick={() => setActivateOpen(true)} disabled={!accountId}>Activate for selected account</button></PermissionGate>}</div>}
     <ConfirmDialog open={rejectOpen} title="Reject this rate candidate?" description={<p>Candidate <code>{candidate.id}</code> will become terminal for home <code>{homeId}</code>. It cannot then be reviewed, published or activated.</p>} confirmLabel="Reject candidate permanently" busy={reject.isPending} onCancel={cancelReject} onConfirm={() => reject.mutate()} tone="warning" />
     <ConfirmDialog open={publishOpen} title="Publish this reviewed rate version?" description={<p>Publication creates an immutable effective-dated version. It remains inactive until a separate account assignment.</p>} confirmLabel="Publish immutable version" busy={publish.isPending} onCancel={() => setPublishOpen(false)} onConfirm={() => publish.mutate()} tone="warning" />
     <ConfirmDialog open={activateOpen} title="Activate this version for the selected account?" description={<p>Only account <code>{accountId}</code> will receive this version for its reviewed effective range. Usage remains authenticated sensor evidence only.</p>} confirmLabel="Activate exact account" busy={activate.isPending} confirmDisabled={!accountId} onCancel={() => setActivateOpen(false)} onConfirm={() => activate.mutate()} tone="warning" />
+    <ConfirmDialog open={deleteOpen} title="Delete this disposable rate candidate?" description="Unpublished candidate values and any rejected review record will be permanently removed. Published or activated rate provenance cannot be deleted." confirmLabel="Delete candidate" busy={remove.isPending} onCancel={() => setDeleteOpen(false)} onConfirm={() => remove.mutate()} tone="danger" />
   </div>;
 }
 
