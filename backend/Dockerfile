@@ -53,6 +53,7 @@ RUN install -d \
     && cp backend/app/bill_rate_import/__init__.py \
       backend/app/bill_rate_import/ocr.py \
       backend/app/bill_rate_import/parser.py \
+      backend/app/bill_rate_import/sce_domestic.py \
       backend/app/bill_rate_import/sandbox_worker.py \
       /sandbox-runtime/usr/local/lib/python3.13/site-packages/backend/app/bill_rate_import/
 

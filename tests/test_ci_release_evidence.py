@@ -465,6 +465,7 @@ def test_api_image_uses_the_zero_finding_alpine_base_and_pinned_ocr() -> None:
     assert "tesseract-ocr=5.5.1-r0" in dockerfile
     assert "tesseract-ocr-data-eng=5.5.1-r0" in dockerfile
     assert "font-dejavu=2.37-r6" in dockerfile
+    assert "backend/app/bill_rate_import/sce_domestic.py" in dockerfile
     assert "timeout=10" in dockerfile
     assert "HEALTHCHECK --interval=15s --timeout=15s" in dockerfile
     assert '"--loop", "asyncio"' in dockerfile
