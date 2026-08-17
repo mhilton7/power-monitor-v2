@@ -60,6 +60,15 @@ class RateSyncBusy(PowerMeterError):
     status_code = 409
 
 
+class OTAWorkflowError(PowerMeterError):
+    code = "OTA_JOB_CONFLICT"
+    status_code = 409
+
+    def __init__(self, detail: str, *, code: str = "OTA_JOB_CONFLICT") -> None:
+        super().__init__(detail)
+        self.code = code
+
+
 class InvalidRequest(PowerMeterError):
     code = "INVALID_REQUEST"
     status_code = 422

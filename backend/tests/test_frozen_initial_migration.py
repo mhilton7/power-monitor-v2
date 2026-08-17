@@ -595,3 +595,107 @@ def test_settings_revision_refuses_case_insensitive_duplicate_emails(
     finally:
         get_settings.cache_clear()
         database.unlink(missing_ok=True)
+
+
+def test_sce_ota_revision_backfills_populated_legacy_deployment_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = ROOT / ".test-runtime" / f"sce-ota-migration-{uuid.uuid4().hex}.sqlite3"
+    async_url = _sqlite_url(database, async_driver=True)
+    sync_url = _sqlite_url(database, async_driver=False)
+    monkeypatch.setenv("PM_ENV", "test")
+    monkeypatch.setenv("PM_DATABASE_URL", async_url)
+    get_settings.cache_clear()
+    config = _config()
+    home_id = str(uuid.uuid4())
+    device_id = str(uuid.uuid4())
+    release_id = str(uuid.uuid4())
+    deployment_id = str(uuid.uuid4())
+    try:
+        command.upgrade(config, "20260817_0014")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO homes (id, name, timezone, created_at) VALUES "
+                        "(:id, 'Migration home', 'America/Los_Angeles', CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": home_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO devices (id, home_id, friendly_name, protocol_id, "
+                        "pzem_variant, ct_rating_a, measurement_scope, state, firmware_version, "
+                        "contiguous_ack, maximum_sequence, reset_generation, created_at) VALUES "
+                        "(:id, :home_id, 'Legacy OTA sensor', 'pm-protocol/1.0.0', "
+                        "'pzem004t-v4-classic-candidate', 100, 'energy_only', 'online', "
+                        "'0.1.0-rc.12', 0, 0, 0, CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": device_id, "home_id": home_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO firmware_releases (id, semantic_version, build_number, "
+                        "project_name, target_chip, board_profile, minimum_protocol, "
+                        "minimum_config_version, minimum_boot_version, image_size, sha256, "
+                        "image_path, release_notes, manifest_signature, candidate, created_at) "
+                        "VALUES (:id, '0.1.0-rc.13', '13', 'power-monitor-sensor-headless', "
+                        "'esp32s3', 'esp32-s3-reference/1', 'pm-protocol/1.0.0', 1, 1, 1024, "
+                        ":digest, 'firmware.bin', 'legacy fixture', :signature, true, "
+                        "CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": release_id, "digest": "a" * 64, "signature": "b" * 64},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO firmware_deployments (id, firmware_release_id, device_id, "
+                        "state, progress_percent, evidence, created_at) VALUES "
+                        "(:id, :release_id, :device_id, 'validating', 90, '{}', "
+                        "CURRENT_TIMESTAMP)"
+                    ),
+                    {
+                        "id": deployment_id,
+                        "release_id": release_id,
+                        "device_id": device_id,
+                    },
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(config, "head")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                row = connection.execute(
+                    sa.text(
+                        "SELECT d.device_id, d.state, d.progress_percent, d.attempt, "
+                        "d.batch_id, b.rollout, b.state, b.created_by_user_id "
+                        "FROM firmware_deployments d JOIN firmware_deployment_batches b "
+                        "ON b.id = d.batch_id WHERE d.id = :id"
+                    ),
+                    {"id": deployment_id},
+                ).one()
+                assert row[0:4] == (device_id, "validating", 90, 1)
+                assert row[4] is not None
+                assert row[5:] == ("legacy", "in_progress", None)
+        finally:
+            engine.dispose()
+
+        command.downgrade(config, "20260817_0014")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.execute(
+                    sa.text(
+                        "SELECT device_id, state, progress_percent FROM firmware_deployments "
+                        "WHERE id = :id"
+                    ),
+                    {"id": deployment_id},
+                ).one() == (device_id, "validating", 90)
+                assert "firmware_deployment_batches" not in sa.inspect(connection).get_table_names()
+        finally:
+            engine.dispose()
+    finally:
+        get_settings.cache_clear()
+        database.unlink(missing_ok=True)

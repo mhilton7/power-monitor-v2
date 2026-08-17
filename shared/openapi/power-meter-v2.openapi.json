@@ -620,6 +620,25 @@
         "title": "FirmwareDeploymentRequest",
         "type": "object"
       },
+      "FirmwareDeploymentRetryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "device_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Device Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "device_ids"
+        ],
+        "title": "FirmwareDeploymentRetryRequest",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1127,7 +1146,8 @@
               "rate_class",
               "cca_or_direct_access_indicator",
               "baseline_allocation_rule",
-              "baseline_credit_rate"
+              "baseline_credit_rate",
+              "billing_period_days"
             ],
             "title": "Field",
             "type": "string"
@@ -1568,7 +1588,7 @@
   },
   "info": {
     "title": "PowerMeter V2 API",
-    "version": "0.1.0-rc.13"
+    "version": "0.1.0-rc.14"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -4510,6 +4530,168 @@
         "summary": "Server Events",
         "tags": [
           "dashboard"
+        ]
+      }
+    },
+    "/api/v1/firmware/deployment-batches/{batch_id}/cancel": {
+      "post": {
+        "operationId": "cancel_firmware_deployment_batch_api_v1_firmware_deployment_batches__batch_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cancel Firmware Deployment Batch Api V1 Firmware Deployment Batches  Batch Id  Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Firmware Deployment Batch",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
+    "/api/v1/firmware/deployment-batches/{batch_id}/retry": {
+      "post": {
+        "operationId": "retry_firmware_deployment_batch_api_v1_firmware_deployment_batches__batch_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirmwareDeploymentRetryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Retry Firmware Deployment Batch Api V1 Firmware Deployment Batches  Batch Id  Retry Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Firmware Deployment Batch",
+        "tags": [
+          "firmware"
         ]
       }
     },

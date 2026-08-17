@@ -30,6 +30,7 @@ from .routes import (
 from .routes import (
     settings as settings_routes,
 )
+from .services.firmware_deployments import reconcile_stale_firmware_deployments
 
 settings = get_settings()
 engine = make_engine(settings)
@@ -71,6 +72,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     logger.info("application_started", version=VERSION)
+    async with session_factory() as session:
+        reconciled = await reconcile_stale_firmware_deployments(session)
+        if reconciled:
+            await session.commit()
+            logger.info(
+                "ota_state_reconciled",
+                error_code="OTA_STATE_RECONCILED",
+                deployment_count=len(reconciled),
+            )
     try:
         yield
     finally:

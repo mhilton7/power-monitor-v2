@@ -162,7 +162,9 @@ export async function mockApi(page: Page, options: MockOptions = {}) {
     if (path.endsWith('/firmware/releases') && method === 'POST') { await json(route, { release: firmwareReleases.releases[0], manifest_signature: 'fixture-signature', physical_certification: 'pending' }, 201); return; }
     if (path.includes('/firmware/releases/') && method === 'DELETE') { await route.fulfill({ status: 204 }); return; }
     if (path.endsWith('/firmware/releases')) { await json(route, firmwareReleases); return; }
-    if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) { await json(route, { deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] }, 202); return; }
+    if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) { await json(route, { batch_id: 'deployment-batch-1', batch_state: 'in_progress', deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] }, 202); return; }
+    if (path.includes('/firmware/deployment-batches/') && path.endsWith('/retry')) { await json(route, { batch_id: 'deployment-batch-retry', batch_state: 'in_progress', deployments: [{ id: 'deployment-retry', device_id: 'device-outdoor', state: 'queued' }] }, 202); return; }
+    if (path.includes('/firmware/deployment-batches/') && path.endsWith('/cancel')) { await json(route, { batch_id: 'deployment-batch-1', state: 'cancelled' }); return; }
     if (path.endsWith('/commands')) {
       if (options.forbiddenCommands) { await problem(route, 403, 'The server refused this command.'); return; }
       const body = request.postDataJSON() as { command_type: string };

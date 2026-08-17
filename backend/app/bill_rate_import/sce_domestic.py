@@ -11,10 +11,11 @@ from ..schemas.billing import (
     RatePlanDraft,
     ReusableChargeDraft,
     SourceRegion,
+    TierThresholdRuleDraft,
     TouPeriodDraft,
 )
 
-PARSER_VERSION = "sce-domestic-rates-v3"
+PARSER_VERSION = "sce-domestic-rates-v4"
 _RATE_QUANTUM = Decimal("0.00000001")
 _MONEY_QUANTUM = Decimal("0.01")
 _UTILITY_PATTERN = re.compile(r"\b(?:SCE|SOUTHERN\s+CALIFORNIA\s+EDISON)\b", re.IGNORECASE)
@@ -112,6 +113,89 @@ def _optional_billing_period(text: str) -> tuple[date | None, date | None, int |
     if not 1 <= days <= 62:
         return None, None, None
     return start, end, days
+
+
+def _explicit_billing_days(text: str) -> int | None:
+    patterns = (
+        r"billing\s+period[^\d]{0,120}\(\s*(\d{1,2})\s+days?\s*\)",
+        r"base\s+services?\s+charge\s+(\d{1,2})\s+days?\b",
+        r"\b(\d{1,2})\s+billing\s+days?\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match is not None:
+            days = int(match.group(1))
+            return days if 1 <= days <= 62 else None
+    return None
+
+
+def _allowance_kwh(text: str) -> Decimal | None:
+    match = re.search(
+        r"(?:your\s+)?summer\s+baseline\s+allowance\s*:?\s*"
+        r"([\d,]+(?:\.\d+)?)\s*kwh\b",
+        text,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    try:
+        value = Decimal(match.group(1).replace(",", ""))
+    except InvalidOperation:
+        return None
+    return value if value.is_finite() and value > 0 else None
+
+
+def _usage_quantity(text: str, label: str) -> Decimal | None:
+    return _multiplier(text, label, "kwh")
+
+
+def _total_usage_kwh(text: str) -> Decimal | None:
+    match = re.search(
+        r"(?:your\s+)?total\s+usage\s*:?\s*([\d,]+(?:\.\d+)?)\s*kwh\b",
+        text,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    try:
+        value = Decimal(match.group(1).replace(",", ""))
+    except InvalidOperation:
+        return None
+    return value if value.is_finite() and value >= 0 else None
+
+
+def _threshold_rule(
+    *, primary: str, delivery: str, generation: str, billing_days: int | None
+) -> TierThresholdRuleDraft | None:
+    allowance = _allowance_kwh(primary)
+    if allowance is None:
+        return None
+    delivery_one = _usage_quantity(delivery, r"tier\s*1\s*\(\s*within\s+baseline\s*\)")
+    delivery_two = _usage_quantity(delivery, r"tier\s*2\s*\(\s*over\s+baseline\s*\)")
+    generation_one = _usage_quantity(generation, r"tier\s*1\s*\(\s*within\s+baseline\s*\)")
+    generation_two = _usage_quantity(generation, r"tier\s*2\s*\(\s*over\s+baseline\s*\)")
+    tier_one_values = {value for value in (delivery_one, generation_one) if value is not None}
+    tier_two_values = {value for value in (delivery_two, generation_two) if value is not None}
+    if tier_one_values != {allowance} or len(tier_two_values) != 1:
+        return None
+    tier_two = next(iter(tier_two_values))
+    stated_total = _total_usage_kwh(primary)
+    charged_total = _usage_quantity(delivery, r"wildfire\s+fund\s+charge")
+    totals = {value for value in (stated_total, charged_total) if value is not None}
+    if len(totals) != 1 or allowance + tier_two != next(iter(totals)):
+        return None
+    per_day = allowance / Decimal(billing_days) if billing_days is not None else None
+    if per_day is not None:
+        exponent = per_day.as_tuple().exponent
+        if not isinstance(exponent, int) or exponent < -8:
+            return None
+    return TierThresholdRuleDraft(
+        season="summer",
+        kwh_per_day=per_day,
+        source_allowance_kwh=allowance,
+        source_billing_days=billing_days,
+        tier1_boundary_inclusive=True,
+    )
 
 
 def _multiplier(text: str, label: str, unit: Literal["kwh", "days"]) -> Decimal | None:
@@ -273,15 +357,36 @@ def extract_sce_domestic_rate_draft(
     )
 
     period_start, period_end, period_days = _optional_billing_period(primary)
-    threshold_status = (
-        "No reusable tier threshold was established from this bill; retain the existing "
-        "configured threshold and require administrator review."
+    period_days = period_days or _explicit_billing_days(primary)
+    threshold_rule = _threshold_rule(
+        primary=normalized,
+        delivery=delivery,
+        generation=generation,
+        billing_days=period_days,
     )
+    threshold_status = "bill_baseline_allowance" if threshold_rule else "review_required"
     fields = (
         _field("rate_plan_name", "DOMESTIC", source_page, "Your rate"),
         _field("rate_class", "residential_tiered", source_page, "Your rate"),
         _field("season_definition", "summer", source_page, "Energy-Summer", "0.97"),
-        _field("tier_threshold", threshold_status, source_page, "Tier threshold status", "0.99"),
+        _field(
+            "tier_threshold",
+            (
+                f"summer_daily_allowance={threshold_rule.kwh_per_day} kWh/day; "
+                f"source_allowance={threshold_rule.source_allowance_kwh} kWh; "
+                f"source_days={threshold_rule.source_billing_days}; boundary=inclusive"
+                if threshold_rule and threshold_rule.kwh_per_day is not None
+                else (
+                    f"summer_source_allowance={threshold_rule.source_allowance_kwh} kWh; "
+                    "billing_days=review_required"
+                    if threshold_rule
+                    else threshold_status
+                )
+            ),
+            source_page,
+            "Summer baseline allowance",
+            "0.99" if threshold_rule else "0.50",
+        ),
         _field(
             "delivery_rate_component",
             f"tier_1={delivery_one} USD/kWh",
@@ -353,6 +458,11 @@ def extract_sce_domestic_rate_draft(
             price_per_kwh=tier_one,
             delivery_per_kwh=delivery_one,
             generation_per_kwh=generation_one,
+            tier_end_kwh=(
+                threshold_rule.source_allowance_kwh
+                if threshold_rule and threshold_rule.kwh_per_day is not None
+                else None
+            ),
         ),
         TouPeriodDraft(
             season="summer",
@@ -363,6 +473,11 @@ def extract_sce_domestic_rate_draft(
             price_per_kwh=tier_two,
             delivery_per_kwh=delivery_two,
             generation_per_kwh=generation_two,
+            tier_start_kwh=(
+                threshold_rule.source_allowance_kwh
+                if threshold_rule and threshold_rule.kwh_per_day is not None
+                else Decimal("0")
+            ),
         ),
     )
     charges = (
@@ -397,18 +512,17 @@ def extract_sce_domestic_rate_draft(
         plan_classification="seasonal_tiered",
         holiday_treatment="not_applicable",
         cca_or_direct_access_indicator="sce_generation",
+        verified_seasons=("summer",),
         periods=periods,
+        tier_threshold_rule=threshold_rule,
         reusable_charges=charges,
         billing_period_start=period_start,
         billing_period_end=period_end,
         billing_period_days=period_days,
         tier_threshold_basis=threshold_status,
-        baseline_allocation_rule=(
-            "Retain the existing configured reusable baseline threshold; the customer-specific "
-            "bill-period allowance is not imported."
-        ),
+        baseline_allocation_rule="daily_allowance" if threshold_rule else None,
         fields=fields,
         parser_version=PARSER_VERSION,
         source_artifact_sha256=source_sha256,
-        candidate_complete=False,
+        candidate_complete=threshold_rule is not None and threshold_rule.kwh_per_day is not None,
     )

@@ -203,4 +203,30 @@ describe('Settings', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Remove firmware artifact' }));
     await waitFor(() => expect(deletedRelease).toContain('/firmware/releases/'));
   });
+
+  it('shows independent partial OTA results and retries only the failed sensor', async () => {
+    let retryRequest: { path: string; body: Record<string, unknown> } | undefined;
+    installFetchMock((path, method, body) => {
+      if (path.includes('/firmware/deployment-batches/') && path.endsWith('/retry') && method === 'POST') {
+        if (typeof body !== 'string') throw new Error('Expected retry request JSON body');
+        retryRequest = { path, body: JSON.parse(body) as Record<string, unknown> };
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<SettingsPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Firmware' }));
+    expect(await screen.findByText('2 sensors targeted · 1 updated · 1 failed · 0 pending')).toBeInTheDocument();
+    expect(screen.getByText('Indoor-AC')).toBeInTheDocument();
+    expect(screen.getByText('Outdoor-AC')).toBeInTheDocument();
+    expect(screen.getByText(/Outdoor-AC reconnected on 1.2.3 instead of 1.2.4/)).toBeInTheDocument();
+    expect(screen.queryByText(/awaiting upload/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Upload release' })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry sensor' }));
+    await waitFor(() => expect(retryRequest).toMatchObject({
+      path: expect.stringContaining('/firmware/deployment-batches/00000000-0000-0000-0000-000000000031/retry'),
+      body: { device_ids: ['device-outdoor'] },
+    }));
+  });
 });

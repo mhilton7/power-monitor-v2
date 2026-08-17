@@ -75,6 +75,34 @@ class ReusableChargeDraft(BaseModel):
     unit: Literal["USD/day", "USD/month", "USD/kWh", "percent"]
 
 
+class TierThresholdRuleDraft(BaseModel):
+    """Structured, operational tier boundary derived from rate-only evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+    rule_type: Literal["daily_allowance"] = "daily_allowance"
+    season: Literal["summer", "winter"]
+    kwh_per_day: Decimal | None = Field(
+        default=None, gt=0, le=Decimal("1000"), max_digits=18, decimal_places=8
+    )
+    source_allowance_kwh: Decimal = Field(
+        gt=0, le=Decimal("100000"), max_digits=18, decimal_places=8
+    )
+    source_billing_days: int | None = Field(default=None, ge=1, le=62)
+    tier1_boundary_inclusive: Literal[True] = True
+
+    @model_validator(mode="after")
+    def source_values_reconcile(self) -> TierThresholdRuleDraft:
+        if (self.kwh_per_day is None) != (self.source_billing_days is None):
+            raise ValueError("daily allowance and billing-day evidence must be completed together")
+        if (
+            self.kwh_per_day is not None
+            and self.source_billing_days is not None
+            and self.kwh_per_day * self.source_billing_days != self.source_allowance_kwh
+        ):
+            raise ValueError("daily tier allowance does not reconcile with its source period")
+        return self
+
+
 class RatePlanDraft(BaseModel):
     """Closed rate-only parser output. No arbitrary metadata or consumption fields."""
 
@@ -96,6 +124,8 @@ class RatePlanDraft(BaseModel):
     summer_months: tuple[int, ...] = (6, 7, 8, 9)
     winter_months: tuple[int, ...] = (1, 2, 3, 4, 5, 10, 11, 12)
     periods: tuple[TouPeriodDraft, ...]
+    verified_seasons: tuple[Literal["summer", "winter"], ...] = ("summer", "winter")
+    tier_threshold_rule: TierThresholdRuleDraft | None = None
     baseline_allocation_rule: str | None = Field(default=None, max_length=500)
     baseline_credit_rate: RateDecimal | None = None
     reusable_charges: tuple[ReusableChargeDraft, ...] = ()
@@ -119,11 +149,26 @@ class RatePlanDraft(BaseModel):
         if sorted(months) != list(range(1, 13)):
             raise ValueError("summer and winter months must partition all twelve months")
 
-        # A bill can contain authoritative line-item rates for only the billed
-        # season. Preserve that evidence for review without fabricating the
-        # missing season or treating a customer-specific threshold as reusable.
+        if not self.verified_seasons or len(set(self.verified_seasons)) != len(
+            self.verified_seasons
+        ):
+            raise ValueError("verified rate seasons must be non-empty and unique")
+        if (
+            self.tier_threshold_rule is not None
+            and self.tier_threshold_rule.season not in self.verified_seasons
+        ):
+            raise ValueError("tier threshold season must be supported by verified rate evidence")
+
+        # A genuinely incomplete draft may retain rate evidence for correction.
         if not self.candidate_complete:
             return self
+
+        if self.plan_classification == "seasonal_tiered" and (
+            self.tier_threshold_rule is None
+            or self.tier_threshold_rule.kwh_per_day is None
+            or self.tier_threshold_rule.source_billing_days is None
+        ):
+            raise ValueError("a complete seasonal tiered plan requires a structured threshold")
 
         # Validate the schedule that the pricing engine will actually resolve,
         # including `all` fallbacks, holiday treatment, and tier boundaries.
@@ -140,7 +185,7 @@ class RatePlanDraft(BaseModel):
             tier_samples.add((left + right) / Decimal(2))
         tier_samples.add(ordered_thresholds[-1] + Decimal("1"))
 
-        for season in ("summer", "winter"):
+        for season in self.verified_seasons:
             for day_type in ("weekday", "weekend", "holiday"):
                 for minute in range(1440):
                     for cumulative in tier_samples:

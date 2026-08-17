@@ -1,6 +1,6 @@
 # Upgrade PowerMeter V2 on TrueNAS
 
-> This UI-only flow is prepared for the complete signed v0.1.0-rc.13 release
+> This UI-only flow is prepared for the complete signed v0.1.0-rc.14 release
 > asset set. Public rc.12, rc.11, rc.10, rc.9, rc.8, rc.6, rc.5, and immutable rc.3 assets retain their attached
 > procedures. Never mix release asset sets.
 
@@ -23,9 +23,10 @@ Never edit one image tag/digest, accept a generic image-update suggestion, use
    `Apps/PowerMeterV2` named with the old version and UTC time. A snapshot
    supplements rather than replaces the verified logical backup.
 
-The coordinated rc.13 release extends public rc.12 to Alembic head
-`20260817_0014`; revision 0014 changes only PostgreSQL lifecycle guards and adds
-no table or column. Upgrades from rc.5 or
+The coordinated rc.14 release extends public rc.13 to Alembic head
+`20260817_0015`; revision 0015 adds structured SCE thresholds and per-sensor
+OTA batches while preserving and linking every legacy deployment. No existing
+home, sensor, reading, rate, release, deployment, or command is deleted. Upgrades from rc.5 or
 earlier still traverse the additive fail-closed revisions. The 0008 preflight can
 stop when existing immutable ingestion evidence conflicts, including a raw
 reading whose sequence was also recorded as permanent loss or overlapping
@@ -34,7 +35,7 @@ that evidence automatically. It also stops if a legacy database row references
 a retained original bill document; the new runtime forbids all persistent
 original-bill storage, including encrypted storage, and does not silently
 delete an operator's legacy file. Complete and verify the backup and snapshot
-above before applying rc.13. If either preflight stops, leave the prior datasets
+above before applying rc.14. If either preflight stops, leave the prior datasets
 intact and preserve the exact failure for reviewed recovery; do not edit
 evidence or delete a referenced file merely to make the migration pass.
 
@@ -49,6 +50,11 @@ Revision 0014 preserves immutable source revisions and published-rate
 provenance while allowing an explicit administrator deletion of only an
 unreviewed or rejected candidate working record. A protected review or shared
 home reference stops deletion; never bypass the guard to perform cleanup.
+
+Revision 0015 backfills each historical firmware deployment into an explicit
+`legacy` batch before making that relationship required. Its downgrade removes
+only the additive batch and threshold fields and preserves the original
+deployment identity, state, progress, evidence, and timestamps.
 
 Unchanged secrets are not restaged and the secrets dataset is not reshared.
 Never rotate a database/application/TLS value merely to upgrade. If a future

@@ -189,7 +189,9 @@ export const api = {
     body.set('release_notes', fields.release_notes);
     return apiRequest('/firmware/releases', z.object({ release: firmwareReleaseSchema, manifest_signature: z.string(), physical_certification: z.string() }), { method: 'POST', body });
   },
-  deployFirmware: (releaseId: string, deviceIds: string[], rollout: 'immediate' | 'staged') => apiRequest(`/firmware/releases/${encodeURIComponent(releaseId)}/deploy`, z.object({ deployments: z.array(z.object({ id: z.string(), device_id: z.string(), state: z.string() })) }), { method: 'POST', body: jsonBody({ device_ids: deviceIds, rollout }) }),
+  deployFirmware: (releaseId: string, deviceIds: string[], rollout: 'immediate' | 'staged') => apiRequest(`/firmware/releases/${encodeURIComponent(releaseId)}/deploy`, z.object({ batch_id: z.string(), batch_state: z.string(), deployments: z.array(z.object({ id: z.string(), device_id: z.string(), state: z.string() })) }), { method: 'POST', body: jsonBody({ device_ids: deviceIds, rollout }) }),
+  retryFirmwareBatch: (batchId: string, deviceIds: string[]) => apiRequest(`/firmware/deployment-batches/${encodeURIComponent(batchId)}/retry`, z.object({ batch_id: z.string(), batch_state: z.string(), deployments: z.array(z.object({ id: z.string(), device_id: z.string(), state: z.string() })) }), { method: 'POST', body: jsonBody({ device_ids: deviceIds }) }),
+  cancelFirmwareBatch: (batchId: string) => apiRequest(`/firmware/deployment-batches/${encodeURIComponent(batchId)}/cancel`, z.object({ batch_id: z.string(), state: z.string() }), { method: 'POST' }),
   deleteFirmwareArtifact: (releaseId: string) => apiRequest(`/firmware/releases/${encodeURIComponent(releaseId)}`, z.undefined(), { method: 'DELETE' }),
   exportDiagnostics: async () => {
     const response = await fetch('/api/v1/diagnostics/bundle', { credentials: 'same-origin', headers: { Accept: 'application/zip' } });

@@ -24,6 +24,10 @@ from ..models import (
 )
 from ..schemas.device import CommandEnvelope, CommandResult
 from ..security.crypto import decrypt_secret
+from .firmware_deployments import (
+    halt_staged_siblings_after_failure,
+    recalculate_firmware_batch,
+)
 
 COMMAND_PERMISSIONS = {
     "reboot": "sensors.command.reboot",
@@ -123,11 +127,15 @@ async def _terminalize_linked_ota_deployment(
         "succeeded",
         "failed",
         "rolled_back",
+        "timed_out",
         "cancelled",
     }:
         return
     deployment.state = "failed"
     deployment.completed_at = now
+    deployment.updated_at = now
+    deployment.error_code = result_code
+    deployment.error_message = "The OTA delivery command could not complete"
     deployment.evidence = {
         **deployment.evidence,
         "server_result_code": result_code,
@@ -136,6 +144,8 @@ async def _terminalize_linked_ota_deployment(
         "delivery_attempt": command.attempt,
         **(evidence or {}),
     }
+    await halt_staged_siblings_after_failure(session, deployment, now=now)
+    await recalculate_firmware_batch(session, deployment.batch_id, now=now)
 
 
 async def expire_rotation_credentials(session: AsyncSession, *, now: datetime | None = None) -> int:
@@ -522,6 +532,7 @@ async def apply_command_results(
                     "COMMAND_EXPIRED",
                     "DELIVERY_ATTEMPTS_EXHAUSTED",
                     "DELIVERY_RESPONSE_TOO_LARGE",
+                    "OTA_JOB_TIMED_OUT",
                 }:
                     # Server expiry/failure is authoritative. A device that
                     # parsed the final delivery may still report its local
@@ -814,17 +825,43 @@ async def apply_command_results(
                 else None
             )
             if deployment is not None:
-                if result.state == "succeeded":
+                transition_at = datetime.now(UTC)
+                if result.state in {"accepted", "running"}:
+                    deployment.state = "downloading"
+                    deployment.progress_percent = max(
+                        deployment.progress_percent, result.progress_percent
+                    )
+                    deployment.updated_at = transition_at
+                elif result.state == "awaiting_reboot":
+                    deployment.state = "rebooting"
+                    deployment.progress_percent = max(
+                        deployment.progress_percent, result.progress_percent
+                    )
+                    deployment.updated_at = transition_at
+                elif result.state in {"awaiting_heartbeat", "succeeded"}:
                     deployment.state = "validating"
                     deployment.progress_percent = max(deployment.progress_percent, 90)
+                    deployment.updated_at = transition_at
+                    deployment.error_code = None
+                    deployment.error_message = None
                 elif result.state in ("failed", "rolled_back"):
                     deployment.state = result.state
-                    deployment.completed_at = datetime.now(UTC)
+                    terminal_at = transition_at
+                    deployment.completed_at = terminal_at
+                    deployment.updated_at = terminal_at
+                    deployment.error_code = (
+                        "OTA_FIRMWARE_ROLLED_BACK"
+                        if result.state == "rolled_back"
+                        else result.result_code or "OTA_INSTALL_FAILED"
+                    )
+                    deployment.error_message = "The sensor did not complete the firmware update"
+                    await halt_staged_siblings_after_failure(session, deployment, now=terminal_at)
                 deployment.evidence = {
                     **deployment.evidence,
                     "device_result_code": result.result_code,
                     "device_result_evidence": result.evidence,
                 }
+                await recalculate_firmware_batch(session, deployment.batch_id)
         attempt = await session.scalar(
             select(DeviceCommandAttempt).where(
                 DeviceCommandAttempt.command_id == command.id,

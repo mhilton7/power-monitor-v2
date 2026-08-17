@@ -10,12 +10,12 @@ describe('Billing rate-source boundary', () => {
   const domesticDraft = {
     id: 'draft-domestic', home_id: homeScopes[0]!.id, artifact_sha256: 'a'.repeat(64), utility_name: 'Southern California Edison', rate_plan_name: 'DOMESTIC', rate_class: 'residential_tiered',
     plan_classification: 'seasonal_tiered', holiday_treatment: 'not_applicable', cca_or_direct_access_indicator: 'sce_generation', season_definitions: [{ name: 'summer' }], day_type_definitions: [{ name: 'all' }],
-    tou_period_definitions: [{ season: 'summer', day_type: 'all', period_name: 'Tier 1', start_minute: 0, end_minute: 1440, price_per_kwh: '0.30863000' }, { season: 'summer', day_type: 'all', period_name: 'Tier 2', start_minute: 0, end_minute: 1440, price_per_kwh: '0.40962000' }],
-    tier_threshold_definitions: [], reusable_price_components: [{ name: 'Base Services Charge', kind: 'daily_fixed', amount: '0.76900000', unit: 'USD/day' }],
-    billing_period_start: null, billing_period_end: null, billing_period_days: null, tier_threshold_basis: 'No reusable tier threshold was established from this bill; retain the existing configured threshold and require administrator review.', candidate_complete: false,
-    publication_scope: 'review_only', publishable_effective_start: null, publishable_effective_end: null,
-    baseline_allocation_rule: 'Retain the existing configured reusable baseline threshold; the customer-specific bill-period allowance is not imported.', baseline_credit_rate: null, effective_start_candidate: null, effective_end_candidate: null,
-    source_evidence: [{ name: 'recurring_fixed_charge', normalized_value: '0.76900000 USD/day', supporting_label: 'Base services charge' }, { name: 'per_kwh_rate', normalized_value: 'tier_1=0.30863000 USD/kWh', supporting_label: 'Tier 1 all-in rate' }, { name: 'per_kwh_rate', normalized_value: 'tier_2=0.40962000 USD/kWh', supporting_label: 'Tier 2 all-in rate' }], parser_version: 'sce-domestic-rates-v3',
+    tou_period_definitions: [{ season: 'summer', day_type: 'all', period_name: 'Tier 1', start_minute: 0, end_minute: 1440, price_per_kwh: '0.30863000', tier_end_kwh: '579.0' }, { season: 'summer', day_type: 'all', period_name: 'Tier 2', start_minute: 0, end_minute: 1440, price_per_kwh: '0.40962000', tier_start_kwh: '579.0' }],
+    tier_threshold_definitions: [{ start_kwh: '0', end_kwh: '579.0' }, { start_kwh: '579.0', end_kwh: null }], tier_threshold_rule: { rule_type: 'daily_allowance', season: 'summer', kwh_per_day: '19.3', source_allowance_kwh: '579.0', source_billing_days: 30, tier1_boundary_inclusive: true }, reusable_price_components: [{ name: 'Base Services Charge', kind: 'daily_fixed', amount: '0.76900000', unit: 'USD/day' }],
+    billing_period_start: null, billing_period_end: null, billing_period_days: 30, tier_threshold_basis: 'bill_baseline_allowance', candidate_complete: true,
+    publication_scope: 'complete_schedule', publishable_effective_start: null, publishable_effective_end: null,
+    baseline_allocation_rule: 'daily_allowance', baseline_credit_rate: null, effective_start_candidate: null, effective_end_candidate: null,
+    source_evidence: [{ name: 'recurring_fixed_charge', normalized_value: '0.76900000 USD/day', supporting_label: 'Base services charge' }, { name: 'per_kwh_rate', normalized_value: 'tier_1=0.30863000 USD/kWh', supporting_label: 'Tier 1 all-in rate' }, { name: 'per_kwh_rate', normalized_value: 'tier_2=0.40962000 USD/kWh', supporting_label: 'Tier 2 all-in rate' }], parser_version: 'sce-domestic-rates-v4',
     state: 'review_required', resulting_rate_version_id: null, review_required: true,
   } as const;
 
@@ -79,7 +79,7 @@ describe('Billing rate-source boundary', () => {
     await expect(api.billing(homeScopes[0]!.id)).rejects.toThrow('different home');
   });
 
-  it('previews exact date-independent DOMESTIC rates and keeps an incomplete threshold review-only', async () => {
+  it('previews a complete structured summer threshold with friendly labels', async () => {
     installFetchMock((path, method) => {
       if (path.includes('/bill-rate-imports') && method === 'GET') return { status: 200, body: { extractions: [domesticDraft] } };
       return apiResponse(path, method);
@@ -91,11 +91,15 @@ describe('Billing rate-source boundary', () => {
     expect(screen.getAllByText('0.76900000 USD/day').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('tier_1=0.30863000 USD/kWh').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('tier_2=0.40962000 USD/kWh').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Not supplied')).toBeInTheDocument();
-    expect(screen.getByText(/Billing dates are optional metadata/)).toBeInTheDocument();
-    expect(screen.getAllByText(/existing configured threshold/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Residential tiered')).toBeInTheDocument();
+    expect(screen.getByText('SCE generation service')).toBeInTheDocument();
+    expect(screen.getByText('579 kWh')).toBeInTheDocument();
+    expect(screen.getByText('19.3 kWh/day')).toBeInTheDocument();
+    expect(screen.getByText('579 kWh for this 30-day bill')).toBeInTheDocument();
+    expect(screen.getByText(/stored as 19.3 kWh per billing day/)).toBeInTheDocument();
+    expect(screen.queryByText(/Exact rates extracted; reusable threshold still required/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save corrections' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Publish version' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Publish version' })).toBeEnabled();
     expect(screen.queryByText(/951 kWh|354\.15/)).not.toBeInTheDocument();
   });
 

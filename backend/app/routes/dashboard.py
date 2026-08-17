@@ -7,7 +7,7 @@ import io
 import math
 from collections import defaultdict
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -297,6 +297,16 @@ async def _current_rate(
         or 0
     )
     cumulative_kwh = Decimal(cumulative_mwh) / Decimal(1_000_000)
+    effective_tier_threshold: Decimal | None = None
+    if version.tier_threshold_kwh_per_day is not None and version.tier_threshold_season in (
+        season,
+        "all",
+    ):
+        cycle_local = cycle_start.astimezone(ZoneInfo(account.timezone))
+        next_year = cycle_local.year + (1 if cycle_local.month == 12 else 0)
+        next_month = 1 if cycle_local.month == 12 else cycle_local.month + 1
+        cycle_days = (date(next_year, next_month, account.billing_day) - cycle_local.date()).days
+        effective_tier_threshold = version.tier_threshold_kwh_per_day * cycle_days
     candidates = (
         await session.scalars(
             select(RatePeriod).where(
@@ -305,11 +315,32 @@ async def _current_rate(
                 RatePeriod.day_type.in_((day_type, "all")),
                 RatePeriod.start_minute <= minute,
                 RatePeriod.end_minute > minute,
-                RatePeriod.tier_start_kwh <= cumulative_kwh,
-                (RatePeriod.tier_end_kwh.is_(None) | (RatePeriod.tier_end_kwh > cumulative_kwh)),
             )
         )
     ).all()
+    candidates = [
+        period
+        for period in candidates
+        if cumulative_kwh
+        >= (
+            effective_tier_threshold
+            if effective_tier_threshold is not None
+            and version.tier_threshold_source_kwh is not None
+            and period.tier_start_kwh == version.tier_threshold_source_kwh
+            else period.tier_start_kwh
+        )
+        and (
+            period.tier_end_kwh is None
+            or cumulative_kwh
+            < (
+                effective_tier_threshold
+                if effective_tier_threshold is not None
+                and version.tier_threshold_source_kwh is not None
+                and period.tier_end_kwh == version.tier_threshold_source_kwh
+                else period.tier_end_kwh
+            )
+        )
+    ]
     if candidates:
         specificity = max(
             int(period.season == season) + int(period.day_type == day_type) for period in candidates

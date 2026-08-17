@@ -56,7 +56,15 @@ export const firmwareReleases = {
   releases: [{
     schema: 'pm-ota-manifest/1.0.0', release_id: '00000000-0000-0000-0000-000000000030', semantic_version: '1.2.4', build_number: 851,
     project_name: 'power-monitor-sensor-headless', target_chip: 'esp32s3', board_profile: 'esp32-s3-devkitc-n16r8-reference/1', minimum_boot_version: 1, minimum_protocol: 'pm-protocol/1.0.0', minimum_config_version: 1,
-    image_size: 1_048_576, sha256: 'b'.repeat(64), candidate: true, artifact_available: true, release_notes: 'Candidate release for staged validation.', physical_certification: 'pending',
+    image_size: 1_048_576, sha256: 'b'.repeat(64), candidate: true, artifact_available: true, upload_status: 'uploaded', validation_status: 'ready', release_notes: 'Candidate release for staged validation.', physical_certification: 'pending',
+    deployment_batches: [{
+      id: '00000000-0000-0000-0000-000000000031', release_id: '00000000-0000-0000-0000-000000000030', target_version: '1.2.4', rollout: 'staged', state: 'partial', targeted: 2, succeeded: 1, failed: 1, pending: 0,
+      created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:10:00Z', completed_at: '2026-08-13T17:10:00Z',
+      jobs: [
+        { id: '00000000-0000-0000-0000-000000000032', device_id: 'device-main', device_name: 'Indoor-AC', previous_version: '1.2.3', current_version: '1.2.4', target_version: '1.2.4', target_build: 851, state: 'succeeded', progress_percent: 100, attempt: 1, error_code: null, error_message: null, created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:08:00Z', completed_at: '2026-08-13T17:08:00Z', confirmation_heartbeat_at: '2026-08-13T17:08:00Z', reported_firmware_after_reboot: '1.2.4', retry_eligible: false, cancel_eligible: false },
+        { id: '00000000-0000-0000-0000-000000000033', device_id: 'device-outdoor', device_name: 'Outdoor-AC', previous_version: '1.2.3', current_version: '1.2.3', target_version: '1.2.4', target_build: 851, state: 'failed', progress_percent: 0, attempt: 1, error_code: 'OTA_VERSION_NOT_CONFIRMED', error_message: 'Outdoor-AC reconnected on 1.2.3 instead of 1.2.4', created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:10:00Z', completed_at: '2026-08-13T17:10:00Z', confirmation_heartbeat_at: null, reported_firmware_after_reboot: '1.2.3', retry_eligible: true, cancel_eligible: false },
+      ],
+    }],
   }],
 };
 
@@ -136,7 +144,7 @@ export const rateSourceStatus = {
 };
 
 export const systemHealth = {
-  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.13', protocol: 'pm-protocol/1.0.0', database: 'reachable',
+  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.14', protocol: 'pm-protocol/1.0.0', database: 'reachable',
   sensors: [{ device_id: 'device-main', state: 'online', heartbeat_age_seconds: 5, pzem_status: 'ok', storage_status: 'healthy', backlog: 3 }],
   open_alert_count: 1, last_rate_sync: { id: 'rate-run-old', state: 'review_required', event_code: 'RATE_SOURCE_SNAPSHOT_CAPTURED', completed_at: '2026-08-13T16:00:00Z' },
   backup: {}, restore_test: {}, physical_hardware_certification: 'pending',
@@ -209,7 +217,9 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (path.endsWith('/firmware/releases') && method === 'POST') return { status: 201, body: { release: firmwareReleases.releases[0], manifest_signature: 'fixture-signature', physical_certification: 'pending' } };
   if (path.includes('/firmware/releases/') && method === 'DELETE') return { status: 204 };
   if (path.endsWith('/firmware/releases')) return { status: 200, body: firmwareReleases };
-  if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) return { status: 202, body: { deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] } };
+  if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) return { status: 202, body: { batch_id: 'deployment-batch-1', batch_state: 'in_progress', deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] } };
+  if (path.includes('/firmware/deployment-batches/') && path.endsWith('/retry')) return { status: 202, body: { batch_id: 'deployment-batch-retry', batch_state: 'in_progress', deployments: [{ id: 'deployment-retry', device_id: 'device-outdoor', state: 'queued' }] } };
+  if (path.includes('/firmware/deployment-batches/') && path.endsWith('/cancel')) return { status: 200, body: { batch_id: 'deployment-batch-1', state: 'cancelled' } };
   if (path.endsWith('/system/health')) return { status: 200, body: systemHealth };
   if (path.endsWith('/backups/status')) return { status: 200, body: backupStatus };
   if (path.endsWith('/diagnostics/bundle')) return { status: 200, body: 'redacted', contentType: 'application/zip' };

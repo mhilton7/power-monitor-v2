@@ -47,7 +47,7 @@ from ..schemas.api import (
     RateCorrectionRequest,
     RatePublishRequest,
 )
-from ..schemas.billing import RatePlanDraft
+from ..schemas.billing import RatePlanDraft, TierThresholdRuleDraft
 from ..security.auth import CurrentUser, require_permission
 from ..services.rate_sync import (
     ensure_default_sce_source,
@@ -142,6 +142,7 @@ def _safe_extraction(
         "day_type_definitions": row.day_type_definitions,
         "tou_period_definitions": row.tou_period_definitions,
         "tier_threshold_definitions": row.tier_threshold_definitions,
+        "tier_threshold_rule": row.tier_threshold_rule,
         "reusable_price_components": row.reusable_price_components,
         "billing_period_start": row.billing_period_start,
         "billing_period_end": row.billing_period_end,
@@ -173,8 +174,16 @@ def _semantic_rate_values_from_draft(draft: RatePlanDraft) -> dict[str, object]:
         "holiday_treatment": draft.holiday_treatment,
         "cca_or_direct_access_indicator": draft.cca_or_direct_access_indicator,
         "season_definitions": [
-            {"name": "summer", "months": list(draft.summer_months)},
-            {"name": "winter", "months": list(draft.winter_months)},
+            {
+                "name": "summer",
+                "months": list(draft.summer_months),
+                "source_verified": "summer" in draft.verified_seasons,
+            },
+            {
+                "name": "winter",
+                "months": list(draft.winter_months),
+                "source_verified": "winter" in draft.verified_seasons,
+            },
         ],
         "day_type_definitions": sorted({period.day_type for period in draft.periods}),
         "tou_period_definitions": periods,
@@ -186,6 +195,11 @@ def _semantic_rate_values_from_draft(draft: RatePlanDraft) -> dict[str, object]:
             for period in draft.periods
             if period.tier_start_kwh or period.tier_end_kwh
         ],
+        "tier_threshold_rule": (
+            draft.tier_threshold_rule.model_dump(mode="json")
+            if draft.tier_threshold_rule is not None
+            else None
+        ),
         "reusable_price_components": [
             charge.model_dump(mode="json") for charge in draft.reusable_charges
         ],
@@ -210,6 +224,7 @@ def _semantic_rate_values_from_row(row: UtilityBillRateExtraction) -> dict[str, 
         "day_type_definitions": row.day_type_definitions,
         "tou_period_definitions": row.tou_period_definitions,
         "tier_threshold_definitions": row.tier_threshold_definitions,
+        "tier_threshold_rule": row.tier_threshold_rule,
         "reusable_price_components": row.reusable_price_components,
         "tier_threshold_basis": row.tier_threshold_basis,
         "candidate_complete": row.candidate_complete,
@@ -326,8 +341,16 @@ async def import_rates_from_bill(
         holiday_treatment=draft.holiday_treatment,
         cca_or_direct_access_indicator=draft.cca_or_direct_access_indicator,
         season_definitions=[
-            {"name": "summer", "months": list(draft.summer_months)},
-            {"name": "winter", "months": list(draft.winter_months)},
+            {
+                "name": "summer",
+                "months": list(draft.summer_months),
+                "source_verified": "summer" in draft.verified_seasons,
+            },
+            {
+                "name": "winter",
+                "months": list(draft.winter_months),
+                "source_verified": "winter" in draft.verified_seasons,
+            },
         ],
         day_type_definitions=sorted({period.day_type for period in draft.periods}),
         tou_period_definitions=[period.model_dump(mode="json") for period in draft.periods],
@@ -339,6 +362,11 @@ async def import_rates_from_bill(
             for period in draft.periods
             if period.tier_start_kwh or period.tier_end_kwh
         ],
+        tier_threshold_rule=(
+            draft.tier_threshold_rule.model_dump(mode="json")
+            if draft.tier_threshold_rule is not None
+            else None
+        ),
         reusable_price_components=[
             charge.model_dump(mode="json") for charge in draft.reusable_charges
         ],
@@ -447,7 +475,47 @@ async def correct_bill_rate_import(
         "unknown",
     ):
         raise BillRateImportError("invalid generation-service indicator")
-    setattr(extraction, payload.field, corrected)
+    if payload.field == "billing_period_days":
+        if not isinstance(extraction.tier_threshold_rule, dict):
+            raise BillRateImportError("the bill has no reviewed baseline allowance to prorate")
+        try:
+            days = int(payload.corrected_value)
+            allowance = Decimal(str(extraction.tier_threshold_rule["source_allowance_kwh"]))
+            per_day = allowance / Decimal(days)
+            rule = TierThresholdRuleDraft.model_validate(
+                {
+                    **extraction.tier_threshold_rule,
+                    "source_billing_days": days,
+                    "kwh_per_day": per_day,
+                }
+            )
+        except (InvalidOperation, KeyError, ValueError) as exc:
+            raise BillRateImportError(
+                "billing days do not produce an exact supported daily allowance"
+            ) from exc
+        corrected = days
+        extraction.billing_period_days = days
+        extraction.tier_threshold_rule = rule.model_dump(mode="json")
+        extraction.tier_threshold_basis = "bill_baseline_allowance"
+        extraction.baseline_allocation_rule = "daily_allowance"
+        extraction.candidate_complete = True
+        updated_periods: list[dict[str, object]] = []
+        for period in extraction.tou_period_definitions:
+            updated = dict(period)
+            if updated.get("name") == "tier_1":
+                updated["tier_start_kwh"] = "0"
+                updated["tier_end_kwh"] = str(allowance)
+            elif updated.get("name") == "tier_2":
+                updated["tier_start_kwh"] = str(allowance)
+                updated["tier_end_kwh"] = None
+            updated_periods.append(updated)
+        extraction.tou_period_definitions = updated_periods
+        extraction.tier_threshold_definitions = [
+            {"start_kwh": "0", "end_kwh": str(allowance)},
+            {"start_kwh": str(allowance), "end_kwh": None},
+        ]
+    else:
+        setattr(extraction, payload.field, corrected)
     session.add(
         UtilityBillRateCorrection(
             extraction_id=extraction.id,
@@ -494,6 +562,24 @@ async def publish_bill_rate_import(
             "official-source workflow.",
             code="RATE_CANDIDATE_INCOMPLETE",
         )
+    try:
+        threshold_rule = (
+            TierThresholdRuleDraft.model_validate(extraction.tier_threshold_rule)
+            if extraction.plan_classification == "seasonal_tiered"
+            else None
+        )
+    except ValueError as exc:
+        raise BillRateImportError(
+            "The structured tier threshold is incomplete or invalid.",
+            code="RATE_CANDIDATE_INCOMPLETE",
+        ) from exc
+    if threshold_rule is not None and (
+        threshold_rule.kwh_per_day is None or threshold_rule.source_billing_days is None
+    ):
+        raise BillRateImportError(
+            "The structured tier threshold still requires billing days.",
+            code="RATE_CANDIDATE_INCOMPLETE",
+        )
     plan, version_number = await locked_rate_plan_and_next_version(
         session,
         name=extraction.rate_plan_name,
@@ -517,6 +603,19 @@ async def publish_bill_rate_import(
         daily_fixed_charge=daily,
         monthly_fixed_charge=monthly,
         baseline_credit_per_kwh=extraction.baseline_credit_rate or Decimal("0"),
+        tier_threshold_kwh_per_day=(
+            threshold_rule.kwh_per_day if threshold_rule is not None else None
+        ),
+        tier_threshold_season=(threshold_rule.season if threshold_rule is not None else None),
+        tier_threshold_source_kwh=(
+            threshold_rule.source_allowance_kwh if threshold_rule is not None else None
+        ),
+        tier_threshold_source_days=(
+            threshold_rule.source_billing_days if threshold_rule is not None else None
+        ),
+        tier1_boundary_inclusive=(
+            threshold_rule.tier1_boundary_inclusive if threshold_rule is not None else True
+        ),
         source_hash=upload.artifact_sha256,
         algorithm_version="cost-v1",
         state="draft",

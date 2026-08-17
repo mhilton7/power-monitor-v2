@@ -119,6 +119,78 @@ def test_energy_is_split_exactly_at_tier_threshold() -> None:
     assert [item.period_name for item in result.slices] == ["tier-one", "tier-two"]
 
 
+def _sce_domestic_rate() -> RateVersion:
+    source_threshold = Decimal("579.0")
+    return rate(
+        (
+            PricePeriod(
+                "summer",
+                "all",
+                "tier-one",
+                0,
+                1440,
+                Decimal("0.30863"),
+                tier_end_kwh=source_threshold,
+            ),
+            PricePeriod(
+                "summer",
+                "all",
+                "tier-two",
+                0,
+                1440,
+                Decimal("0.40962"),
+                tier_start_kwh=source_threshold,
+            ),
+        ),
+        tier_threshold_kwh_per_day=Decimal("19.3"),
+        tier_threshold_season="summer",
+        tier_threshold_source_kwh=source_threshold,
+        daily_fixed_charge=Decimal("0.769"),
+    )
+
+
+def test_sce_daily_allowance_prorates_and_keeps_the_boundary_in_tier_one() -> None:
+    version = _sce_domestic_rate()
+    for days, threshold in ((28, Decimal("540.4")), (30, Decimal("579.0")), (31, Decimal("598.3"))):
+        exact = price_sensor_interval(
+            start_utc=datetime(2026, 7, 1, tzinfo=UTC),
+            end_utc=datetime(2026, 7, 1, 0, 1, tzinfo=UTC),
+            energy_mwh=int(threshold * Decimal(1_000_000)),
+            rate=version,
+            context=CostContext(billing_cycle_days=days),
+        )
+        assert {item.period_name for item in exact.slices} == {"tier-one"}
+        crossing = price_sensor_interval(
+            start_utc=datetime(2026, 7, 1, tzinfo=UTC),
+            end_utc=datetime(2026, 7, 1, 0, 1, tzinfo=UTC),
+            energy_mwh=100_000,
+            rate=version,
+            context=CostContext(
+                cumulative_cycle_kwh_before=threshold,
+                billing_cycle_days=days,
+            ),
+        )
+        assert {item.period_name for item in crossing.slices} == {"tier-two"}
+
+
+def test_sce_source_bill_reconciles_through_the_existing_cost_engine() -> None:
+    version = _sce_domestic_rate()
+    result = price_sensor_interval(
+        start_utc=datetime(2026, 7, 1, tzinfo=UTC),
+        end_utc=datetime(2026, 7, 1, 0, 1, tzinfo=UTC),
+        energy_mwh=951_000_000,
+        rate=version,
+        context=CostContext(billing_cycle_days=30),
+    )
+    fixed = fixed_charge_microdollars(
+        version, date(2026, 6, 22), date(2026, 7, 22), scope="full_account"
+    )
+    assert [item.energy_mwh for item in result.slices] == [579_000_000, 372_000_000]
+    assert result.energy_cost_microdollars == 331_075_410
+    assert fixed == 23_070_000
+    assert result.total_microdollars + fixed == 354_145_410
+
+
 def test_cca_adjustment_and_surcharge_use_decimal_arithmetic() -> None:
     periods = (PricePeriod("all", "all", "flat", 0, 1440, Decimal("0.20")),)
     version = rate(

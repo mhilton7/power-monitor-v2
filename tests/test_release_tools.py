@@ -34,7 +34,7 @@ DIGEST_C = "sha256:" + "3" * 64
 DIGEST_D = "sha256:" + "4" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
-VERSION = "0.1.0-rc.13"
+VERSION = "0.1.0-rc.14"
 
 
 @pytest.fixture

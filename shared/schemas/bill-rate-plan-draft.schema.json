@@ -201,6 +201,82 @@
       "title": "SourceRegion",
       "type": "object"
     },
+    "TierThresholdRuleDraft": {
+      "additionalProperties": false,
+      "description": "Structured, operational tier boundary derived from rate-only evidence.",
+      "properties": {
+        "kwh_per_day": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "maximum": 1000.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kwh Per Day"
+        },
+        "rule_type": {
+          "const": "daily_allowance",
+          "default": "daily_allowance",
+          "title": "Rule Type",
+          "type": "string"
+        },
+        "season": {
+          "enum": [
+            "summer",
+            "winter"
+          ],
+          "title": "Season",
+          "type": "string"
+        },
+        "source_allowance_kwh": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "maximum": 100000.0,
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Source Allowance Kwh"
+        },
+        "source_billing_days": {
+          "anyOf": [
+            {
+              "maximum": 62,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Billing Days"
+        },
+        "tier1_boundary_inclusive": {
+          "const": true,
+          "default": true,
+          "title": "Tier1 Boundary Inclusive",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "season",
+        "source_allowance_kwh"
+      ],
+      "title": "TierThresholdRuleDraft",
+      "type": "object"
+    },
     "TouPeriodDraft": {
       "additionalProperties": false,
       "properties": {
@@ -535,11 +611,37 @@
       "default": null,
       "title": "Tier Threshold Basis"
     },
+    "tier_threshold_rule": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TierThresholdRuleDraft"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "utility_name": {
       "const": "Southern California Edison",
       "default": "Southern California Edison",
       "title": "Utility Name",
       "type": "string"
+    },
+    "verified_seasons": {
+      "default": [
+        "summer",
+        "winter"
+      ],
+      "items": {
+        "enum": [
+          "summer",
+          "winter"
+        ],
+        "type": "string"
+      },
+      "title": "Verified Seasons",
+      "type": "array"
     },
     "winter_months": {
       "default": [

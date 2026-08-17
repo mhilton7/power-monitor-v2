@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 from backend.app.config import Settings, get_settings
@@ -167,6 +167,11 @@ async def _rate_for_interval(
             for period in periods
         ),
         baseline_credit_per_kwh=version.baseline_credit_per_kwh,
+        tier_threshold_kwh_per_day=version.tier_threshold_kwh_per_day,
+        tier_threshold_season=cast(
+            Literal["summer", "winter"] | None, version.tier_threshold_season
+        ),
+        tier_threshold_source_kwh=version.tier_threshold_source_kwh,
         daily_fixed_charge=version.daily_fixed_charge,
         monthly_fixed_charge=version.monthly_fixed_charge,
         cca_adjustment_per_kwh=version.cca_adjustment_per_kwh,
@@ -254,6 +259,15 @@ def _billing_cycle_start(interval_start: datetime, account: UtilityAccount) -> d
     return datetime(year, month, account.billing_day, tzinfo=zone).astimezone(UTC)
 
 
+def _billing_cycle_days(cycle_start: datetime, account: UtilityAccount) -> int:
+    zone = ZoneInfo(account.timezone)
+    local_start = aware_utc(cycle_start).astimezone(zone)
+    year = local_start.year + (1 if local_start.month == 12 else 0)
+    month = 1 if local_start.month == 12 else local_start.month + 1
+    local_end = datetime(year, month, account.billing_day, tzinfo=zone)
+    return (local_end.date() - local_start.date()).days
+
+
 async def _cost_context(
     session: AsyncSession,
     interval: NormalizedInterval,
@@ -283,6 +297,7 @@ async def _cost_context(
     return CostContext(
         cumulative_cycle_kwh_before=cumulative,
         baseline_remaining_kwh=max(Decimal("0"), allocation - cumulative),
+        billing_cycle_days=_billing_cycle_days(cycle_start, account),
         scope=effective_scope,  # type: ignore[arg-type]
         holidays=rate.holidays,
     )
@@ -479,6 +494,11 @@ async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | 
                 for period in periods
             ),
             baseline_credit_per_kwh=version.baseline_credit_per_kwh,
+            tier_threshold_kwh_per_day=version.tier_threshold_kwh_per_day,
+            tier_threshold_season=cast(
+                Literal["summer", "winter"] | None, version.tier_threshold_season
+            ),
+            tier_threshold_source_kwh=version.tier_threshold_source_kwh,
             daily_fixed_charge=version.daily_fixed_charge,
             monthly_fixed_charge=version.monthly_fixed_charge,
             cca_adjustment_per_kwh=version.cca_adjustment_per_kwh,

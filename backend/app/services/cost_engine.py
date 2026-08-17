@@ -32,6 +32,9 @@ class RateVersion:
     periods: tuple[PricePeriod, ...]
     summer_months: tuple[int, ...] = (6, 7, 8, 9)
     baseline_credit_per_kwh: Decimal = Decimal("0")
+    tier_threshold_kwh_per_day: Decimal | None = None
+    tier_threshold_season: Literal["summer", "winter"] | None = None
+    tier_threshold_source_kwh: Decimal | None = None
     daily_fixed_charge: Decimal = Decimal("0")
     monthly_fixed_charge: Decimal = Decimal("0")
     cca_adjustment_per_kwh: Decimal = Decimal("0")
@@ -44,6 +47,7 @@ class RateVersion:
 class CostContext:
     cumulative_cycle_kwh_before: Decimal = Decimal("0")
     baseline_remaining_kwh: Decimal = Decimal("0")
+    billing_cycle_days: int | None = None
     scope: Literal["energy_only", "allocated_account", "full_account"] = "energy_only"
     holidays: frozenset[date] = frozenset()
 
@@ -86,22 +90,45 @@ def _day_type(local: datetime, holidays: frozenset[date]) -> str:
     return "weekend" if local.weekday() >= 5 else "weekday"
 
 
+def _effective_tier_bounds(
+    rate: RateVersion, period: PricePeriod, context: CostContext
+) -> tuple[Decimal, Decimal | None]:
+    source = rate.tier_threshold_source_kwh
+    if (
+        rate.tier_threshold_kwh_per_day is None
+        or rate.tier_threshold_season is None
+        or source is None
+        or context.billing_cycle_days is None
+        or period.season not in (rate.tier_threshold_season, "all")
+    ):
+        return period.tier_start_kwh, period.tier_end_kwh
+    threshold = rate.tier_threshold_kwh_per_day * context.billing_cycle_days
+    start = threshold if period.tier_start_kwh == source else period.tier_start_kwh
+    end = threshold if period.tier_end_kwh == source else period.tier_end_kwh
+    return start, end
+
+
 def _period_for(
-    rate: RateVersion, instant_utc: datetime, cumulative_kwh: Decimal, holidays: frozenset[date]
+    rate: RateVersion,
+    instant_utc: datetime,
+    cumulative_kwh: Decimal,
+    context: CostContext,
 ) -> PricePeriod:
     local = instant_utc.astimezone(ZoneInfo(rate.timezone))
     minute = local.hour * 60 + local.minute
     season = _season(rate, local)
-    day_type = _day_type(local, holidays)
-    candidates = [
-        period
-        for period in rate.periods
-        if period.season in (season, "all")
-        and period.day_type in (day_type, "all")
-        and period.start_minute <= minute < period.end_minute
-        and cumulative_kwh >= period.tier_start_kwh
-        and (period.tier_end_kwh is None or cumulative_kwh < period.tier_end_kwh)
-    ]
+    day_type = _day_type(local, context.holidays)
+    candidates = []
+    for period in rate.periods:
+        tier_start, tier_end = _effective_tier_bounds(rate, period, context)
+        if (
+            period.season in (season, "all")
+            and period.day_type in (day_type, "all")
+            and period.start_minute <= minute < period.end_minute
+            and cumulative_kwh >= tier_start
+            and (tier_end is None or cumulative_kwh < tier_end)
+        ):
+            candidates.append(period)
     if candidates:
         specificity = max(
             int(period.season == season) + int(period.day_type == day_type) for period in candidates
@@ -207,11 +234,12 @@ def price_sensor_interval(
                 segment_start
                 + timedelta(microseconds=_timedelta_microseconds(right - segment_start) // 2),
                 cumulative,
-                context.holidays,
+                context,
             )
             segment_mwh = remaining_mwh
-            if period.tier_end_kwh is not None:
-                tier_capacity = int((period.tier_end_kwh - cumulative) * MWH_PER_KWH)
+            _tier_start, tier_end = _effective_tier_bounds(rate, period, context)
+            if tier_end is not None:
+                tier_capacity = int((tier_end - cumulative) * MWH_PER_KWH)
                 if tier_capacity <= 0:
                     raise ValueError("tier schedule does not advance at its threshold")
                 segment_mwh = min(segment_mwh, tier_capacity)

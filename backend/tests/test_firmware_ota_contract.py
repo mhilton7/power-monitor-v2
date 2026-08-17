@@ -11,7 +11,14 @@ import orjson
 import pytest
 from backend.app.constants import MAX_COMMAND_DELIVERY_ATTEMPT, MAX_DEVICE_RESPONSE_BYTES
 from backend.app.main import session_factory
-from backend.app.models import DeviceCommand, FirmwareDeployment, FirmwareRelease, Home
+from backend.app.models import (
+    DeviceCommand,
+    FirmwareDeployment,
+    FirmwareDeploymentBatch,
+    FirmwareRelease,
+    Home,
+    User,
+)
 from backend.app.routes.firmware import OTA_MANIFEST_FIELDS, ota_manifest_canonical
 from backend.app.schemas.device import CommandEnvelope, DeviceResponse
 from backend.app.security.protocol import (
@@ -21,6 +28,8 @@ from backend.app.security.protocol import (
     sign_request,
     verify_signature,
 )
+from backend.app.services.commands import create_command
+from backend.app.services.firmware_deployments import reconcile_stale_firmware_deployments
 from httpx import AsyncClient, Response
 from sqlalchemy import select
 
@@ -480,26 +489,30 @@ async def test_expired_ota_command_terminalizes_linked_deployment(
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_defers_ota_commands_to_fit_firmware_response_buffer(
+async def test_heartbeat_defers_commands_to_fit_firmware_response_buffer(
     owner_client: AsyncClient,
 ) -> None:
     device_id, device_secret, _home_id = await _enroll_ota_target(owner_client)
-    deployment_ids: list[str] = []
-    for sequence in range(30, 34):
-        _release_id, deployment_id = await _upload_and_deploy(
-            owner_client,
-            device_id=device_id,
-            sequence=sequence,
-            maximize_manifest=True,
-        )
-        deployment_ids.append(deployment_id)
+    async with session_factory() as session:
+        actor_id = await session.scalar(select(User.id))
+        assert actor_id is not None
+        for sequence in range(30, 34):
+            await create_command(
+                session,
+                device_id=device_id,
+                command_type="diagnostics_snapshot",
+                issued_by_user_id=actor_id,
+                idempotency_key=f"response-budget-{sequence}",
+                payload={"sequence": sequence, "padding": "x" * 1_300},
+            )
+        await session.commit()
 
     heartbeat = await _heartbeat(owner_client, device_id=device_id, secret=device_secret)
     assert heartbeat.status_code == 200, heartbeat.text
     assert len(heartbeat.content) <= MAX_DEVICE_RESPONSE_BYTES
     assert int(heartbeat.headers["content-length"]) == len(heartbeat.content)
     delivered = heartbeat.json()["commands"]
-    assert 0 < len(delivered) < len(deployment_ids)
+    assert 0 < len(delivered) < 4
     assert all(command["attempt"] <= MAX_COMMAND_DELIVERY_ATTEMPT for command in delivered)
     response_model = DeviceResponse.model_validate(heartbeat.json())
     serialized_response = orjson.dumps(
@@ -522,14 +535,12 @@ async def test_heartbeat_defers_ota_commands_to_fit_firmware_response_buffer(
     async with session_factory() as session:
         commands = (
             await session.scalars(
-                select(DeviceCommand).where(DeviceCommand.command_type == "ota_install")
+                select(DeviceCommand).where(DeviceCommand.command_type == "diagnostics_snapshot")
             )
         ).all()
-        assert len(commands) == len(deployment_ids)
+        assert len(commands) == 4
         assert sum(command.state == "delivered" for command in commands) == len(delivered)
-        assert sum(command.state == "queued" for command in commands) == (
-            len(deployment_ids) - len(delivered)
-        )
+        assert sum(command.state == "queued" for command in commands) == (4 - len(delivered))
         assert all(
             command.attempt == (1 if command.state == "delivered" else 0) for command in commands
         )
@@ -667,3 +678,262 @@ async def test_post_reboot_version_evidence_completes_and_advances_staged_ota(
         assert first.completed_at is not None
         assert second.state == "queued"
         assert second_command.state in {"queued", "delivered"}
+
+
+@pytest.mark.asyncio
+async def test_two_sensor_partial_ota_retries_only_outdated_sensor(
+    owner_client: AsyncClient,
+) -> None:
+    indoor_id, indoor_secret, _home_id = await _enroll_ota_target(owner_client, name="Indoor-AC")
+    outdoor_id, outdoor_secret, _home_id = await _enroll_ota_target(owner_client, name="Outdoor-AC")
+    image = b"PowerMeter two-sensor OTA fixture\0" * 64
+    digest = hashlib.sha256(image).hexdigest()
+    uploaded = await owner_client.post(
+        "/api/v1/firmware/releases",
+        files={"image": ("firmware.bin", image, "application/octet-stream")},
+        data={
+            "semantic_version": "0.1.0-rc.8",
+            "build_number": "8",
+            "board_profile": "esp32-s3-devkitc-n16r8-reference/1",
+            "minimum_boot_version": "1",
+            "minimum_config_version": "1",
+            "expected_sha256": digest,
+            "release_notes": "Two-sensor partial OTA fixture.",
+        },
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    release_id = uploaded.json()["release"]["release_id"]
+    deployed = await owner_client.post(
+        f"/api/v1/firmware/releases/{release_id}/deploy",
+        json={"device_ids": [indoor_id, outdoor_id], "rollout": "immediate"},
+    )
+    assert deployed.status_code == 202, deployed.text
+    original_batch_id = deployed.json()["batch_id"]
+    assert {row["device_id"] for row in deployed.json()["deployments"]} == {
+        indoor_id,
+        outdoor_id,
+    }
+
+    indoor_offer = await _heartbeat(owner_client, device_id=indoor_id, secret=indoor_secret)
+    outdoor_offer = await _heartbeat(owner_client, device_id=outdoor_id, secret=outdoor_secret)
+    indoor_command = indoor_offer.json()["commands"][0]
+    outdoor_command = outdoor_offer.json()["commands"][0]
+    succeeded_result = {
+        "state": "succeeded",
+        "progress_percent": 100,
+        "result_code": "ok",
+        "evidence": {"post_boot_valid": True},
+    }
+    indoor_result = await _heartbeat(
+        owner_client,
+        device_id=indoor_id,
+        secret=indoor_secret,
+        firmware_version="v0.1.0-rc.8",
+        command_results=[{"command_id": indoor_command["command_id"], **succeeded_result}],
+    )
+    assert indoor_result.status_code == 200, indoor_result.text
+    outdoor_result = await _heartbeat(
+        owner_client,
+        device_id=outdoor_id,
+        secret=outdoor_secret,
+        firmware_version="0.1.0-rc.7",
+        command_results=[{"command_id": outdoor_command["command_id"], **succeeded_result}],
+    )
+    assert outdoor_result.status_code == 200, outdoor_result.text
+
+    listed = await owner_client.get("/api/v1/firmware/releases")
+    assert listed.status_code == 200, listed.text
+    release = next(row for row in listed.json()["releases"] if row["release_id"] == release_id)
+    batch = next(row for row in release["deployment_batches"] if row["id"] == original_batch_id)
+    assert batch["state"] == "partial"
+    assert (batch["succeeded"], batch["failed"], batch["pending"]) == (1, 1, 0)
+    jobs = {row["device_id"]: row for row in batch["jobs"]}
+    assert jobs[indoor_id]["state"] == "succeeded"
+    assert jobs[indoor_id]["reported_firmware_after_reboot"] == "v0.1.0-rc.8"
+    assert jobs[outdoor_id]["state"] == "failed"
+    assert jobs[outdoor_id]["error_code"] == "OTA_VERSION_NOT_CONFIRMED"
+    assert jobs[outdoor_id]["reported_firmware_after_reboot"] == "0.1.0-rc.7"
+    assert jobs[outdoor_id]["retry_eligible"] is True
+
+    retried = await owner_client.post(
+        f"/api/v1/firmware/deployment-batches/{original_batch_id}/retry",
+        json={"device_ids": [outdoor_id]},
+    )
+    assert retried.status_code == 202, retried.text
+    assert [row["device_id"] for row in retried.json()["deployments"]] == [outdoor_id]
+    async with session_factory() as session:
+        deployments = list(
+            (
+                await session.scalars(
+                    select(FirmwareDeployment).where(
+                        FirmwareDeployment.firmware_release_id == release_id
+                    )
+                )
+            ).all()
+        )
+        assert sum(row.device_id == indoor_id for row in deployments) == 1
+        assert sorted(row.attempt for row in deployments if row.device_id == outdoor_id) == [1, 2]
+
+    retry_offer = await _heartbeat(owner_client, device_id=outdoor_id, secret=outdoor_secret)
+    retry_command = retry_offer.json()["commands"][0]
+    retry_result = await _heartbeat(
+        owner_client,
+        device_id=outdoor_id,
+        secret=outdoor_secret,
+        firmware_version="0.1.0-rc.8",
+        command_results=[{"command_id": retry_command["command_id"], **succeeded_result}],
+    )
+    assert retry_result.status_code == 200, retry_result.text
+
+    next_image = b"PowerMeter upload after partial fixture\0" * 64
+    next_digest = hashlib.sha256(next_image).hexdigest()
+    next_upload = await owner_client.post(
+        "/api/v1/firmware/releases",
+        files={"image": ("firmware.bin", next_image, "application/octet-stream")},
+        data={
+            "semantic_version": "0.1.0-rc.9",
+            "build_number": "9",
+            "board_profile": "esp32-s3-devkitc-n16r8-reference/1",
+            "minimum_boot_version": "1",
+            "minimum_config_version": "1",
+            "expected_sha256": next_digest,
+            "release_notes": "Upload remains available after a partial batch.",
+        },
+    )
+    assert next_upload.status_code == 201, next_upload.text
+
+
+@pytest.mark.asyncio
+async def test_ota_rollback_is_terminal_and_does_not_complete_from_another_sensor(
+    owner_client: AsyncClient,
+) -> None:
+    indoor_id, indoor_secret, _home_id = await _enroll_ota_target(
+        owner_client, name="Rollback target"
+    )
+    outdoor_id, outdoor_secret, _home_id = await _enroll_ota_target(
+        owner_client, name="Unrelated version witness"
+    )
+    release_id, deployment_id = await _upload_and_deploy(
+        owner_client, device_id=indoor_id, sequence=71
+    )
+    offer = await _heartbeat(owner_client, device_id=indoor_id, secret=indoor_secret)
+    command = offer.json()["commands"][0]
+
+    async with session_factory() as session:
+        deployment = await session.get(FirmwareDeployment, deployment_id)
+        release = await session.get(FirmwareRelease, release_id)
+        assert deployment is not None and release is not None
+        deployment.state = "validating"
+        deployment.progress_percent = 90
+        await session.commit()
+        target_version = release.semantic_version
+
+    unrelated = await _heartbeat(
+        owner_client,
+        device_id=outdoor_id,
+        secret=outdoor_secret,
+        firmware_version=target_version,
+    )
+    assert unrelated.status_code == 200, unrelated.text
+    async with session_factory() as session:
+        deployment = await session.get(FirmwareDeployment, deployment_id)
+        assert deployment is not None
+        assert deployment.state == "validating"
+        assert "post_reboot_firmware_version" not in deployment.evidence
+
+    rolled_back = await _heartbeat(
+        owner_client,
+        device_id=indoor_id,
+        secret=indoor_secret,
+        firmware_version="0.1.0-rc.7",
+        command_results=[
+            {
+                "command_id": command["command_id"],
+                "state": "rolled_back",
+                "progress_percent": 100,
+                "result_code": "rollback_confirmed",
+                "evidence": {"rollback_confirmed": True},
+            }
+        ],
+    )
+    assert rolled_back.status_code == 200, rolled_back.text
+    async with session_factory() as session:
+        deployment = await session.get(FirmwareDeployment, deployment_id)
+        assert deployment is not None
+        batch = await session.get(FirmwareDeploymentBatch, deployment.batch_id)
+        assert batch is not None
+        assert deployment.state == "rolled_back"
+        assert deployment.error_code == "OTA_FIRMWARE_ROLLED_BACK"
+        assert batch.state == "failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stale_state", ["queued", "downloading", "rebooting", "validating"])
+async def test_stale_ota_job_reconciliation_is_terminal_and_retryable(
+    owner_client: AsyncClient, stale_state: str
+) -> None:
+    device_id, _secret, _home_id = await _enroll_ota_target(
+        owner_client, name=f"Stale {stale_state} target"
+    )
+    _release_id, deployment_id = await _upload_and_deploy(
+        owner_client, device_id=device_id, sequence=70
+    )
+    stale_at = datetime.now(UTC) - timedelta(days=2)
+    async with session_factory() as session:
+        deployment = await session.get(FirmwareDeployment, deployment_id)
+        assert deployment is not None
+        deployment.state = stale_state
+        deployment.updated_at = stale_at
+        batch_id = deployment.batch_id
+        await session.commit()
+
+    async with session_factory() as session:
+        reconciled = await reconcile_stale_firmware_deployments(session, now=datetime.now(UTC))
+        assert reconciled == (deployment_id,)
+        await session.commit()
+
+    async with session_factory() as session:
+        deployment = await session.get(FirmwareDeployment, deployment_id)
+        batch = await session.get(FirmwareDeploymentBatch, batch_id)
+        assert deployment is not None and batch is not None
+        assert deployment.state == "timed_out"
+        assert deployment.error_code == "OTA_JOB_TIMED_OUT"
+        assert deployment.evidence["last_confirmed_stage"] == stale_state
+        assert batch.state == "failed"
+        command = await session.scalar(
+            select(DeviceCommand).where(
+                DeviceCommand.device_id == device_id,
+                DeviceCommand.command_type == "ota_install",
+            )
+        )
+        if command is not None and command.payload.get("deployment_id") == deployment_id:
+            assert command.state in {"expired", "succeeded"}
+
+
+@pytest.mark.asyncio
+async def test_duplicate_ota_job_is_rejected_and_queued_batch_can_be_cancelled(
+    owner_client: AsyncClient,
+) -> None:
+    device_id, _secret, _home_id = await _enroll_ota_target(
+        owner_client, name="Cancelable OTA target"
+    )
+    release_id, _deployment_id = await _upload_and_deploy(
+        owner_client, device_id=device_id, sequence=80
+    )
+    listed = await owner_client.get("/api/v1/firmware/releases")
+    release = next(row for row in listed.json()["releases"] if row["release_id"] == release_id)
+    batch_id = release["deployment_batches"][0]["id"]
+    duplicate = await owner_client.post(
+        f"/api/v1/firmware/releases/{release_id}/deploy",
+        json={"device_ids": [device_id], "rollout": "immediate"},
+    )
+    assert duplicate.status_code == 409, duplicate.text
+
+    cancelled = await owner_client.post(f"/api/v1/firmware/deployment-batches/{batch_id}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["state"] == "cancelled"
+    async with session_factory() as session:
+        deployment = await session.get(FirmwareDeployment, _deployment_id)
+        assert deployment is not None
+        assert deployment.state == "cancelled"
+        assert deployment.error_code == "OTA_CANCELLED_BY_ADMINISTRATOR"

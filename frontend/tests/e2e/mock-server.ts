@@ -43,7 +43,9 @@ const server = createServer((request, response) => {
   if (path.endsWith('/firmware/releases') && request.method === 'POST') return json(response, 201, { release: firmwareReleases.releases[0], manifest_signature: 'fixture-signature', physical_certification: 'pending' });
   if (path.includes('/firmware/releases/') && request.method === 'DELETE') { response.writeHead(204); response.end(); return; }
   if (path.endsWith('/firmware/releases')) return json(response, 200, firmwareReleases);
-  if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) return json(response, 202, { deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] });
+  if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) return json(response, 202, { batch_id: 'deployment-batch-1', batch_state: 'in_progress', deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] });
+  if (path.includes('/firmware/deployment-batches/') && path.endsWith('/retry')) return json(response, 202, { batch_id: 'deployment-batch-retry', batch_state: 'in_progress', deployments: [{ id: 'deployment-retry', device_id: 'device-outdoor', state: 'queued' }] });
+  if (path.includes('/firmware/deployment-batches/') && path.endsWith('/cancel')) return json(response, 200, { batch_id: 'deployment-batch-1', state: 'cancelled' });
   if (path.endsWith('/commands')) return collectJson(request, (body) => {
     const command = body as { command_type?: string };
     if (command.command_type === 'format_storage_prepare') return json(response, 202, { command: { id: 'prepare-command-00000000-0000-0000-0000-000000000001', type: command.command_type, state: 'queued' }, confirmation_token: 'bound-token' });

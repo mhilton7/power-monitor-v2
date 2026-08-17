@@ -1,4 +1,4 @@
-# PowerMeter V2 v0.1.0-rc.13
+# PowerMeter V2 v0.1.0-rc.14
 
 PowerMeter V2 is a central, authenticated PZEM-004T monitoring system paired
 with the independent
@@ -8,38 +8,39 @@ Authenticated sensor evidence remains the only source of live measurements,
 History, energy, completeness, forecasts, and usage-based cost. Utility-bill
 PDFs remain rate-source documents only.
 
-This source file is the release-body input for candidate `v0.1.0-rc.13`. This
+This source file is the release-body input for candidate `v0.1.0-rc.14`. This
 source copy alone is not publication evidence. Installation is authorized only after the
 signed tagged workflow publishes the complete checksummed and attested asset
 set, digest-pinned YAML, public multi-architecture images, deployment evidence,
 and coordinated firmware release.
 
-## Why rc.13 follows public server rc.12
+## Why rc.14 follows public server rc.13
 
-Server [`v0.1.0-rc.12`](https://github.com/mhilton7/power-monitor-v2/releases/tag/v0.1.0-rc.12)
+Server [`v0.1.0-rc.13`](https://github.com/mhilton7/power-monitor-v2/releases/tag/v0.1.0-rc.13)
 completed its tagged workflow and remains a public, immutable, installable
-prerelease with its complete attached asset set. Rc.13 carries forward rc.12's
-date-independent bill-rate extraction, dashboard telemetry recovery, upload-safe
-OTA metadata, exact microSD capacity evidence, SCE rate workflow, and privacy
-boundaries.
+prerelease with its complete attached asset set. Rc.14 carries forward rc.13's
+protected disposal of working artifacts, dashboard telemetry recovery,
+upload-safe OTA metadata, exact microSD capacity evidence, SCE rate workflow,
+and privacy boundaries.
 
-Rc.12 made the Home dashboard's one operator-configured `verified_sum` circuit
+Rc.13 made the Home dashboard's one operator-configured `verified_sum` circuit
 the unambiguous default live and History scope. It combines authenticated live
 power only when every included non-overlapping member is fresh, never converts
 a missing member to zero, and preserves explicit single-device overrides. Home
 and History now query the same aggregate circuit. When durable interval values
 are absent but authenticated records remain queued, both views explain that
 server acknowledgement is pending instead of rendering an unexplained empty
-chart. Rc.13 now lets administrators remove disposable PDF extraction drafts,
-unpublished or rejected SCE candidates, and terminal firmware binaries without
-weakening published-rate, source, deployment, hash, or audit provenance. A
-post-reboot exact-version heartbeat completes OTA validation and advances
-exactly one next staged sensor, repairing later targets that could otherwise
-remain held after the first successful install. Firmware rc.13 changes only
+chart. Rc.14 converts the reviewed SCE DOMESTIC summer allowance into an exact
+structured daily threshold, applies it through the existing Decimal cost engine
+for the actual billing-cycle day count, and retains summer-only evidence without
+inventing winter rates. OTA now uses explicit immutable release,
+deployment-batch, and per-sensor job records; every sensor must reconnect on the
+target version, stale stages time out, and failed or outdated sensors can be
+retried without reflashing successful peers. Firmware rc.14 changes only
 immutable identity and the coordinated server-contract binding; runtime
-behavior remains public firmware rc.12. The shared protocol remains
-`pm-protocol/1.0.0`; Alembic head is `20260817_0014`. The generated OpenAPI SHA-256 is
-`253494a6fbbf7cdb06467ea3bb670c748f5cb95a547770dce39a53b6e6624518`.
+behavior remains public firmware rc.13. The shared protocol remains
+`pm-protocol/1.0.0`; Alembic head is `20260817_0015`. The generated OpenAPI SHA-256 is
+`26dbc5cf443cb63a29ca1f22bc069b566afa4eb026ed5c86023a81ffd299d1fe`.
 
 ### Historical rc.4 recovery carried by rc.5
 
@@ -145,7 +146,7 @@ protocol, or migration revision changed for this repair.
 
 ### Ingestion and database integrity
 
-- Alembic head `20260817_0014` extends the frozen chain without rewriting an
+- Alembic head `20260817_0015` extends the frozen chain without rewriting an
   applied migration. Revision 0008 enforces
   `sample_count <= expected_sample_count` and prevents authenticated raw
   readings from overlapping permanent-loss evidence or two loss ranges from
@@ -167,6 +168,8 @@ protocol, or migration revision changed for this repair.
   Revision 0014 permits deletion only for disposable unreviewed or rejected
   rate candidates while retaining direct-database guards against deletion of
   reviewed, published, activated, or otherwise protected provenance.
+  Revision 0015 adds structured SCE threshold evidence and non-destructively
+  backfills every legacy OTA deployment into an explicit deployment batch.
 - The migrations take write-blocking table locks, preflight existing evidence,
   and fail closed before installing PostgreSQL guards. Revision 0011 also locks
   its rate workflow tables across preflight and guard installation. Conflicting
@@ -187,7 +190,7 @@ protocol, or migration revision changed for this repair.
   are not part of the normal path.
 - Operators create exactly nine Generic/POSIX child ZFS datasets below
   `/mnt/Apps/PowerMeterV2`. The former `bill-rate-source-artifacts` dataset is
-  not mounted by rc.5, rc.6, rc.8, rc.9, rc.10, rc.11, rc.12, or rc.13; an existing rc.3 dataset is left untouched and should
+  not mounted by rc.5, rc.6, rc.8, rc.9, rc.10, rc.11, rc.12, rc.13, or rc.14; an existing rc.3 dataset is left untouched and should
   remain unshared until an operator chooses a separately reviewed cleanup.
 - TLS verification remains strict for `power-monitor.home.arpa`, including
   hostname, key match, current validity, and at least seven days of remaining
@@ -208,11 +211,11 @@ protocol, or migration revision changed for this repair.
 ## Upgrade and rollback boundary
 
 Back up and verify the database, perform an isolated restore check, and take a
-recursive ZFS snapshot before installing rc.13. Keep all existing application
+recursive ZFS snapshot before installing rc.14. Keep all existing application
 secrets, database credentials, the backup encryption key, TLS material, and
 datasets. Do not recreate storage or rotate secrets during this upgrade.
 
-The migration chain through `20260817_0014` is intentionally fail-closed. The
+The migration chain through `20260817_0015` is intentionally fail-closed. The
 0008 preflight blocks an overlap in immutable reading/loss evidence or a
 historical retained-bill reference for review. Revision 0010 requires the exact
 legacy raw-reading immutability guard before changing trigger ordering.
@@ -222,8 +225,8 @@ write locks until its guards are installed. Do not bypass a guard, edit an
 applied migration, or delete evidence merely to continue.
 
 The release migration report proves only the forward upgrade from the latest
-lower same-major public release. It does not prove that rc.12 binaries can use
-state touched by rc.13. Application-only rollback is not authorized. A
+lower same-major public release. It does not prove that rc.13 binaries can use
+state touched by rc.14. Application-only rollback is not authorized. A
 rollback requires a separately validated restore or clone of the matching
 pre-upgrade snapshot or verified backup, paired with the exact older release
 assets. GitHub-hosted smoke records rollback as
@@ -231,26 +234,26 @@ assets. GitHub-hosted smoke records rollback as
 
 ## Release contents and firmware pairing
 
-A successfully published rc.13 candidate includes:
+A successfully published rc.14 candidate includes:
 
 - four immutable multi-architecture GHCR images referenced by registry digest;
-- `power-monitor-v2-v0.1.0-rc.13.yaml` and `release-manifest.json`;
+- `power-monitor-v2-v0.1.0-rc.14.yaml` and `release-manifest.json`;
 - the Windows SMB staging helper and auditable initializer source;
 - checksums, strict attestations, SBOMs, vulnerability results, dependency and
   test reports, migration evidence, and deployment-smoke evidence;
 - installation, secrets/TLS, dataset/ACL, backup/restore, upgrade, and rollback
   instructions; and
-- an exact coordinated public firmware `v0.1.0-rc.13` release whose server
+- an exact coordinated public firmware `v0.1.0-rc.14` release whose server
   contract declares OpenAPI SHA-256
-  `253494a6fbbf7cdb06467ea3bb670c748f5cb95a547770dce39a53b6e6624518`.
+  `26dbc5cf443cb63a29ca1f22bc069b566afa4eb026ed5c86023a81ffd299d1fe`.
 
 The signed server rc.2 tag and failed release run `31866197054` remain
 immutable prepublication evidence. There is no server rc.2 GitHub Release.
-Public server rc.12 remains installable with its own attached eight-service
-assets and instructions and is the migration predecessor for rc.13. Firmware
-rc.13 must be published and verified with the exact server rc.13 contract before
-a server rc.13 tag is created. No historical tag or release is modified or
-relabeled by rc.13; rc.7 remains an unpublished local firmware candidate.
+Public server rc.13 remains installable with its own attached eight-service
+assets and instructions and is the migration predecessor for rc.14. Firmware
+rc.14 must be published and verified with the exact server rc.14 contract before
+a server rc.14 tag is created. No historical tag or release is modified or
+relabeled by rc.14; rc.7 remains an unpublished local firmware candidate.
 
 This remains a prerelease candidate. Hardware status is honestly `pending`.
 Marked-unit electrical identity, physical TLS/HMAC behavior, OTA installation

@@ -1,6 +1,6 @@
 # Roll back PowerMeter V2 on TrueNAS
 
-> This UI-oriented source document is prepared for v0.1.0-rc.13. Public rc.12, rc.11, rc.10, rc.9, rc.8, rc.6, rc.5,
+> This UI-oriented source document is prepared for v0.1.0-rc.14. Public rc.13, rc.12, rc.11, rc.10, rc.9, rc.8, rc.6, rc.5,
 > and immutable older releases retain their own attached instructions. Never
 > combine asset sets.
 
@@ -21,10 +21,10 @@ read a database touched by the new release.
 
 ## Restored rollback only
 
-A direct application-only rollback from v0.1.0-rc.13 to public v0.1.0-rc.12 is
-unauthorized without a separate recovery test. Rc.13 uses Alembic head
-`20260817_0014`, and a forward-migration gate cannot prove that older
-binaries correctly handle state touched by rc.13; `not_exercised_github_hosted_smoke`
+A direct application-only rollback from v0.1.0-rc.14 to public v0.1.0-rc.13 is
+unauthorized without a separate recovery test. Rc.14 uses Alembic head
+`20260817_0015`, and a forward-migration gate cannot prove that older
+binaries correctly handle state touched by rc.14; `not_exercised_github_hosted_smoke`
 is not rollback evidence. The immutable server rc.2 and rc.4 tags have no
 GitHub Releases and are not predecessors.
 

@@ -15,7 +15,9 @@ from backend.app.models import (
     RawReading,
     UtilityBillRateUpload,
 )
+from backend.app.schemas.billing import RatePlanDraft
 from httpx import AsyncClient
+from pydantic import ValidationError
 from pypdf import PdfReader, PdfWriter
 from reportlab.pdfgen.canvas import Canvas  # type: ignore[import-untyped]
 from sqlalchemy import func, select
@@ -28,15 +30,15 @@ RATE_ONLY_CHARGES_PAGE = (
     "Delivery charges- Cost to deliver your electricity",
     "Base services charge 30 days x $0.76900",
     "Energy-Summer",
-    "Tier 1 (within baseline) 100 kWh x $0.17862",
-    "Tier 2 (over baseline) 40 kWh x $0.27961",
-    "Wildfire fund charge 140 kWh x $0.00591",
+    "Tier 1 (within baseline) 579 kWh x $0.17862",
+    "Tier 2 (over baseline) 372 kWh x $0.27961",
+    "Wildfire fund charge 951 kWh x $0.00591",
     "Generation charges- Cost to generate your electricity",
     "Energy-Summer",
-    "Tier 1 (within baseline) 100 kWh x $0.11761",
-    "Tier 2 (over baseline) 40 kWh x $0.11761",
+    "Tier 1 (within baseline) 579 kWh x $0.11761",
+    "Tier 2 (over baseline) 372 kWh x $0.11761",
     "Other charges or credits",
-    "Fixed recovery charge 140 kWh x $0.00619",
+    "Fixed recovery charge 951 kWh x $0.00619",
     "Subtotal of your new charges $52.90",
     "State tax 140 kWh x $0.00030",
     "Your Delivery charges include:",
@@ -44,6 +46,7 @@ RATE_ONLY_CHARGES_PAGE = (
     "Your Generation charges include: values already included above",
     "Your summer baseline allowance:",
     "579.0 kWh",
+    "Your Total Usage: 951 kWh",
     "Page 3 of 6",
 )
 
@@ -70,7 +73,13 @@ def test_isolated_domestic_charges_page_extracts_only_reusable_rate_evidence() -
     assert draft.billing_period_start == date(2026, 6, 22)
     assert draft.billing_period_end == date(2026, 7, 21)
     assert draft.billing_period_days == 30
-    assert draft.candidate_complete is False
+    assert draft.candidate_complete is True
+    assert draft.verified_seasons == ("summer",)
+    assert draft.tier_threshold_rule is not None
+    assert draft.tier_threshold_rule.source_allowance_kwh == Decimal("579.0")
+    assert draft.tier_threshold_rule.source_billing_days == 30
+    assert draft.tier_threshold_rule.kwh_per_day == Decimal("19.3")
+    assert draft.tier_threshold_rule.tier1_boundary_inclusive is True
     assert [period.price_per_kwh for period in draft.periods] == [
         Decimal("0.30863000"),
         Decimal("0.40962000"),
@@ -92,13 +101,24 @@ def test_isolated_domestic_charges_page_extracts_only_reusable_rate_evidence() -
     # The source digest is opaque hexadecimal evidence and can legitimately
     # contain decimal-looking substrings such as the bill's allowance value.
     serialized = draft.model_dump_json(exclude={"source_artifact_sha256"}).lower()
-    assert all(period.tier_end_kwh is None for period in draft.periods)
-    assert all(period.tier_start_kwh == 0 for period in draft.periods)
-    assert "579" not in serialized
+    assert draft.periods[0].tier_start_kwh == 0
+    assert draft.periods[0].tier_end_kwh == Decimal("579.0")
+    assert draft.periods[1].tier_start_kwh == Decimal("579.0")
+    assert draft.periods[1].tier_end_kwh is None
+    assert "579" in serialized
     assert "9.99" not in serialized
     assert "8.88" not in serialized
     assert "amount due" not in serialized
     assert categories == ()
+
+
+def test_tier_threshold_cannot_claim_an_unverified_season() -> None:
+    draft, _categories = extract_rate_plan_from_pdf(_pdf([RATE_ONLY_CHARGES_PAGE]))
+    payload = draft.model_dump()
+    payload["tier_threshold_rule"]["season"] = "winter"
+
+    with pytest.raises(ValidationError, match="threshold season"):
+        RatePlanDraft.model_validate(payload)
 
 
 def test_complete_statement_selects_the_charges_page_and_preserves_page_lineage() -> None:
@@ -116,7 +136,7 @@ def test_complete_statement_selects_the_charges_page_and_preserves_page_lineage(
 
 
 @pytest.mark.asyncio
-async def test_bill_dates_are_metadata_and_incomplete_summer_rates_remain_review_only(
+async def test_bill_dates_are_metadata_and_complete_summer_threshold_is_publishable(
     owner_client: AsyncClient,
 ) -> None:
     uploaded = await owner_client.post(
@@ -125,13 +145,21 @@ async def test_bill_dates_are_metadata_and_incomplete_summer_rates_remain_review
     )
     assert uploaded.status_code == 201, uploaded.text
     extraction = uploaded.json()["extraction"]
-    assert extraction["publication_scope"] == "review_only"
+    assert extraction["publication_scope"] == "complete_schedule"
     assert extraction["publishable_effective_start"] is None
     assert extraction["publishable_effective_end"] is None
     assert extraction["billing_period_start"] == "2026-06-22"
-    assert "retain the existing configured threshold" in extraction["tier_threshold_basis"]
+    assert extraction["tier_threshold_basis"] == "bill_baseline_allowance"
+    assert extraction["tier_threshold_rule"] == {
+        "rule_type": "daily_allowance",
+        "season": "summer",
+        "kwh_per_day": "19.3",
+        "source_allowance_kwh": "579.0",
+        "source_billing_days": 30,
+        "tier1_boundary_inclusive": True,
+    }
 
-    rejected = await owner_client.post(
+    published = await owner_client.post(
         f"/api/v1/bill-rate-imports/{extraction['id']}/publish",
         json={
             "effective_start": "2026-06-22T07:00:00Z",
@@ -140,8 +168,13 @@ async def test_bill_dates_are_metadata_and_incomplete_summer_rates_remain_review
             "assign_to_utility_account_id": None,
         },
     )
-    assert rejected.status_code == 422, rejected.text
-    assert rejected.json()["code"] == "RATE_CANDIDATE_INCOMPLETE"
+    assert published.status_code == 201, published.text
+    async with session_factory() as session:
+        version = await session.get(RatePlanVersion, published.json()["rate_plan_version"]["id"])
+        assert version is not None
+        assert version.tier_threshold_kwh_per_day == Decimal("19.30000000")
+        assert version.tier_threshold_source_kwh == Decimal("579.00000000")
+        assert version.tier_threshold_source_days == 30
 
 
 @pytest.mark.parametrize(
@@ -167,7 +200,60 @@ def test_billing_dates_never_determine_extraction_success(replacement: str | Non
     if replacement is None or "not a usable" in replacement:
         assert draft.billing_period_start is None
         assert draft.billing_period_end is None
-        assert draft.billing_period_days is None
+        assert draft.billing_period_days == 30
+        assert draft.candidate_complete is True
+
+
+@pytest.mark.parametrize("allowance_text", ["579 kWh", "579.0 kWh", "579.00 KWH"])
+def test_baseline_allowance_decimal_spelling_normalizes_exactly(allowance_text: str) -> None:
+    page = tuple(allowance_text if line == "579.0 kWh" else line for line in RATE_ONLY_CHARGES_PAGE)
+    draft, _categories = extract_rate_plan_from_pdf(_pdf([page]))
+    assert draft.tier_threshold_rule is not None
+    assert draft.tier_threshold_rule.source_allowance_kwh == Decimal("579")
+    assert draft.tier_threshold_rule.kwh_per_day == Decimal("19.3")
+
+
+def test_threshold_requires_total_usage_to_reconcile_with_both_tiers() -> None:
+    page = tuple(
+        "Your Total Usage: 950 kWh" if line == "Your Total Usage: 951 kWh" else line
+        for line in RATE_ONLY_CHARGES_PAGE
+    )
+    draft, _categories = extract_rate_plan_from_pdf(_pdf([page]))
+    assert draft.tier_threshold_rule is None
+    assert draft.candidate_complete is False
+
+
+@pytest.mark.asyncio
+async def test_missing_day_count_preserves_allowance_until_review_correction(
+    owner_client: AsyncClient,
+) -> None:
+    page = tuple(
+        "Base services charge $0.76900 per day" if line.startswith("Base services charge") else line
+        for line in RATE_ONLY_CHARGES_PAGE
+        if not line.startswith("Billing period:")
+    )
+    uploaded = await owner_client.post(
+        "/api/v1/bill-rate-imports",
+        files={"document": ("summer-no-days.pdf", _pdf([page]), "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    extraction = uploaded.json()["extraction"]
+    assert extraction["candidate_complete"] is False
+    assert extraction["publication_scope"] == "review_only"
+    assert extraction["tier_threshold_rule"]["source_allowance_kwh"] == "579.0"
+    assert extraction["tier_threshold_rule"]["source_billing_days"] is None
+    assert extraction["tier_threshold_rule"]["kwh_per_day"] is None
+
+    corrected = await owner_client.patch(
+        f"/api/v1/bill-rate-imports/{extraction['id']}",
+        json={"field": "billing_period_days", "corrected_value": "30"},
+    )
+    assert corrected.status_code == 200, corrected.text
+    fixed = corrected.json()["extraction"]
+    assert fixed["candidate_complete"] is True
+    assert fixed["publication_scope"] == "complete_schedule"
+    assert fixed["tier_threshold_rule"]["kwh_per_day"] == "19.3"
+    assert fixed["tier_threshold_rule"]["source_billing_days"] == 30
 
 
 def test_page_number_and_customer_period_baseline_are_not_required() -> None:
@@ -178,7 +264,8 @@ def test_page_number_and_customer_period_baseline_are_not_required() -> None:
     )
     draft, _categories = extract_rate_plan_from_pdf(_pdf([page]))
     assert draft.rate_plan_name == "DOMESTIC"
-    assert draft.tier_threshold_basis is not None
+    assert draft.tier_threshold_basis == "review_required"
+    assert draft.candidate_complete is False
     assert "579" not in draft.model_dump_json(exclude={"source_artifact_sha256"})
 
 
@@ -200,7 +287,7 @@ def test_exact_decimal_components_reconcile_but_bad_printed_total_fails() -> Non
     page[delivery_start + 5] = "Wildfire fund charge 951 kWh x $0.00591 = $5.62"
     page[generation_start + 2] = "Tier 1 (within baseline) 579 kWh x $0.11761 = $68.10"
     page[generation_start + 3] = "Tier 2 (over baseline) 372 kWh x $0.11761 = $43.75"
-    page[page.index("Fixed recovery charge 140 kWh x $0.00619")] = (
+    page[page.index("Fixed recovery charge 951 kWh x $0.00619")] = (
         "Fixed recovery charge 951 kWh x $0.00619 = $5.89"
     )
     printed_total = page.index("Subtotal of your new charges $52.90") + 1

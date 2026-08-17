@@ -85,14 +85,14 @@ main-stack hotfix and remains an immutable installation authority.
 Public firmware rc.12 carries the supported FAT capacity/full-state fix,
 refreshes capacity while mounted so stale full state can recover, retries
 trusted-time synchronization without changing measurement cadence, and binds
-the public server rc.12 contract. Candidate firmware rc.13 changes only
-immutable identity and contract binding. It must name server `v0.1.0-rc.13`,
+the public server rc.13 contract. Candidate firmware rc.14 changes only
+immutable identity and contract binding. It must name server `v0.1.0-rc.14`,
 retain `pm-protocol/1.0.0`, and declare generated
 OpenAPI SHA-256
-`253494a6fbbf7cdb06467ea3bb670c748f5cb95a547770dce39a53b6e6624518`.
+`26dbc5cf443cb63a29ca1f22bc069b566afa4eb026ed5c86023a81ffd299d1fe`.
 It must be signed, published, and independently verified before the server
-rc.13 tag is created. No earlier tag or release may be moved, rewritten, or
-substituted for rc.13.
+rc.14 tag is created. No earlier tag or release may be moved, rewritten, or
+substituted for rc.14.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

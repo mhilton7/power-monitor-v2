@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path as LocalPath
 from typing import Any
 
+import structlog
 from anyio import Path
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from sqlalchemy import func, select
@@ -19,16 +20,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import Settings, get_settings
 from ..constants import MAX_FIRMWARE_BYTES, PROTOCOL_ID
 from ..db import get_session
-from ..errors import IntegrityConflict, InvalidRequest, NotFound
+from ..errors import IntegrityConflict, InvalidRequest, NotFound, OTAWorkflowError
 from ..models import (
     AuditEvent,
     Device,
+    DeviceCommand,
     DeviceCredential,
     FirmwareDeployment,
+    FirmwareDeploymentBatch,
     FirmwareRelease,
     user_home_scopes,
 )
-from ..schemas.api import FirmwareDeploymentRequest
+from ..schemas.api import FirmwareDeploymentRequest, FirmwareDeploymentRetryRequest
 from ..security.auth import CurrentUser, require_permission
 from ..security.crypto import decrypt_secret
 from ..security.device_auth import authenticate_device_request
@@ -41,11 +44,12 @@ from ..security.protocol import (
 from ..services.commands import create_command
 from ..services.firmware_deployments import (
     ACTIVE_FIRMWARE_DEPLOYMENT_STATES,
-    advance_next_staged_firmware_deployment,
-    queue_staged_firmware_deployment,
+    recalculate_firmware_batch,
+    reconcile_stale_firmware_deployments,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["firmware"])
+logger = structlog.get_logger()
 SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 OTA_VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-rc\.([1-9]\d*))?$")
 
@@ -212,22 +216,112 @@ async def _artifact_available(release: FirmwareRelease) -> bool:
     return bool(release.image_path) and await Path(release.image_path).is_file()
 
 
+def _deployment_view(
+    deployment: FirmwareDeployment, release: FirmwareRelease, device: Device
+) -> dict[str, object]:
+    return {
+        "id": deployment.id,
+        "device_id": deployment.device_id,
+        "device_name": device.friendly_name,
+        "previous_version": deployment.evidence.get("previous_firmware_version"),
+        "current_version": device.firmware_version,
+        "target_version": release.semantic_version,
+        "target_build": int(release.build_number),
+        "state": deployment.state,
+        "progress_percent": deployment.progress_percent,
+        "attempt": deployment.attempt,
+        "error_code": deployment.error_code,
+        "error_message": deployment.error_message,
+        "created_at": deployment.created_at,
+        "updated_at": deployment.updated_at,
+        "completed_at": deployment.completed_at,
+        "confirmation_heartbeat_at": deployment.evidence.get("post_reboot_confirmed_at"),
+        "reported_firmware_after_reboot": deployment.evidence.get("post_reboot_firmware_version"),
+        "retry_eligible": deployment.state in {"failed", "rolled_back", "timed_out", "cancelled"}
+        and _firmware_upgrade_available(device.firmware_version, release.semantic_version),
+        "cancel_eligible": deployment.state in {"staged", "queued"},
+    }
+
+
+def _batch_view(
+    batch: FirmwareDeploymentBatch,
+    release: FirmwareRelease,
+    rows: list[tuple[FirmwareDeployment, Device]],
+) -> dict[str, object]:
+    succeeded = sum(deployment.state == "succeeded" for deployment, _device in rows)
+    failed = sum(
+        deployment.state in {"failed", "rolled_back", "timed_out", "cancelled"}
+        for deployment, _device in rows
+    )
+    pending = len(rows) - succeeded - failed
+    return {
+        "id": batch.id,
+        "release_id": batch.firmware_release_id,
+        "target_version": release.semantic_version,
+        "rollout": batch.rollout,
+        "state": batch.state,
+        "targeted": len(rows),
+        "succeeded": succeeded,
+        "failed": failed,
+        "pending": pending,
+        "created_at": batch.created_at,
+        "updated_at": batch.updated_at,
+        "completed_at": batch.completed_at,
+        "jobs": [_deployment_view(deployment, release, device) for deployment, device in rows],
+    }
+
+
 @router.get("/firmware/releases")
 async def list_firmware_releases(
-    _user: CurrentUser = Depends(require_permission("firmware.view")),
+    user: CurrentUser = Depends(require_permission("firmware.view")),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, object]:
+    expired = await reconcile_stale_firmware_deployments(session)
+    if expired:
+        await session.commit()
+    homes = await _home_ids(session, user.id)
     rows = (
         await session.scalars(select(FirmwareRelease).order_by(FirmwareRelease.created_at.desc()))
     ).all()
     releases: list[dict[str, object]] = []
     for row in rows:
+        batches = list(
+            (
+                await session.scalars(
+                    select(FirmwareDeploymentBatch)
+                    .where(FirmwareDeploymentBatch.firmware_release_id == row.id)
+                    .order_by(FirmwareDeploymentBatch.created_at.desc())
+                )
+            ).all()
+        )
+        batch_views: list[dict[str, object]] = []
+        for batch in batches:
+            deployment_rows = list(
+                (
+                    await session.execute(
+                        select(FirmwareDeployment, Device)
+                        .join(Device, Device.id == FirmwareDeployment.device_id)
+                        .where(
+                            FirmwareDeployment.batch_id == batch.id,
+                            Device.home_id.in_(homes),
+                        )
+                        .order_by(FirmwareDeployment.created_at, FirmwareDeployment.id)
+                    )
+                )
+                .tuples()
+                .all()
+            )
+            if deployment_rows:
+                batch_views.append(_batch_view(batch, row, deployment_rows))
         releases.append(
             {
                 **_release_manifest(row),
                 "release_notes": row.release_notes,
                 "physical_certification": "pending" if row.candidate else "required",
                 "artifact_available": await _artifact_available(row),
+                "upload_status": "uploaded" if row.image_path else "archived",
+                "validation_status": "ready" if row.image_path else "archived",
+                "deployment_batches": batch_views,
             }
         )
     return {"releases": releases}
@@ -303,6 +397,14 @@ async def upload_firmware_release(
         )
     )
     await session.commit()
+    logger.info(
+        "firmware_upload_completed",
+        release_id=release.id,
+        semantic_version=release.semantic_version,
+        build_number=release.build_number,
+        sha256=release.sha256,
+        image_size=release.image_size,
+    )
     data = b""
     return {
         "release": {
@@ -337,11 +439,13 @@ async def deploy_firmware_release(
     homes = await _home_ids(session, user.id)
     devices = (
         await session.scalars(
-            select(Device).where(
+            select(Device)
+            .where(
                 Device.id.in_(payload.device_ids),
                 Device.home_id.in_(homes),
                 Device.revoked_at.is_(None),
             )
+            .with_for_update()
         )
     ).all()
     if {row.id for row in devices} != set(payload.device_ids):
@@ -355,43 +459,63 @@ async def deploy_firmware_release(
         )
     devices_by_id = {device.id: device for device in devices}
     ordered_devices = [devices_by_id[device_id] for device_id in payload.device_ids]
+    conflicting_device = await session.scalar(
+        select(FirmwareDeployment.device_id)
+        .where(
+            FirmwareDeployment.device_id.in_(payload.device_ids),
+            FirmwareDeployment.state.in_(ACTIVE_FIRMWARE_DEPLOYMENT_STATES),
+        )
+        .limit(1)
+    )
+    if conflicting_device is not None:
+        raise OTAWorkflowError(
+            "a target sensor already has an active OTA job; wait, cancel it if safe, "
+            "or retry after it becomes terminal"
+        )
     release_has_active_deployment = (
         await session.scalar(
             select(FirmwareDeployment.id)
             .where(
                 FirmwareDeployment.firmware_release_id == release.id,
-                FirmwareDeployment.state.in_(("queued", "downloading", "validating")),
+                FirmwareDeployment.state.in_(tuple(ACTIVE_FIRMWARE_DEPLOYMENT_STATES - {"staged"})),
             )
             .limit(1)
         )
         is not None
     )
+    batch = FirmwareDeploymentBatch(
+        firmware_release_id=release.id,
+        rollout=payload.rollout,
+        state="in_progress",
+        created_by_user_id=user.id,
+    )
+    session.add(batch)
+    await session.flush()
     deployments: list[FirmwareDeployment] = []
     for index, device in enumerate(ordered_devices):
         should_queue = payload.rollout == "immediate" or (
             index == 0 and not release_has_active_deployment
         )
-        existing = await session.scalar(
-            select(FirmwareDeployment).where(
-                FirmwareDeployment.firmware_release_id == release.id,
-                FirmwareDeployment.device_id == device.id,
-                FirmwareDeployment.state.not_in(("failed", "rolled_back", "cancelled")),
+        prior_attempt = int(
+            await session.scalar(
+                select(func.max(FirmwareDeployment.attempt)).where(
+                    FirmwareDeployment.firmware_release_id == release.id,
+                    FirmwareDeployment.device_id == device.id,
+                )
             )
+            or 0
         )
-        if existing is not None:
-            if existing.state == "staged" and should_queue:
-                if payload.rollout == "immediate":
-                    await queue_staged_firmware_deployment(session, existing)
-                else:
-                    await advance_next_staged_firmware_deployment(session, release.id)
-            deployments.append(existing)
-            continue
         deployment = FirmwareDeployment(
+            batch_id=batch.id,
             firmware_release_id=release.id,
             device_id=device.id,
             state="queued" if should_queue else "staged",
             progress_percent=0,
-            evidence={"issued_by_user_id": user.id},
+            attempt=prior_attempt + 1,
+            evidence={
+                "issued_by_user_id": user.id,
+                "previous_firmware_version": device.firmware_version,
+            },
         )
         session.add(deployment)
         await session.flush()
@@ -405,6 +529,7 @@ async def deploy_firmware_release(
         deployment.evidence = {
             "manifest": manifest,
             "issued_by_user_id": user.id,
+            "previous_firmware_version": device.firmware_version,
         }
         if deployment.state == "queued":
             await create_command(
@@ -427,11 +552,196 @@ async def deploy_firmware_release(
         )
     )
     await session.commit()
+    for deployment in deployments:
+        logger.info(
+            "ota_sensor_job_created",
+            release_id=release.id,
+            batch_id=batch.id,
+            deployment_id=deployment.id,
+            device_id=deployment.device_id,
+            expected_version=release.semantic_version,
+            state=deployment.state,
+        )
     return {
+        "batch_id": batch.id,
+        "batch_state": batch.state,
         "deployments": [
             {"id": row.id, "device_id": row.device_id, "state": row.state} for row in deployments
-        ]
+        ],
     }
+
+
+@router.post("/firmware/deployment-batches/{batch_id}/retry", status_code=202)
+async def retry_firmware_deployment_batch(
+    batch_id: str,
+    payload: FirmwareDeploymentRetryRequest,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("firmware.manage")),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    batch = await session.get(FirmwareDeploymentBatch, batch_id)
+    if batch is None:
+        raise NotFound("firmware deployment batch does not exist")
+    homes = await _home_ids(session, user.id)
+    rows = list(
+        (
+            await session.execute(
+                select(FirmwareDeployment, Device)
+                .join(Device, Device.id == FirmwareDeployment.device_id)
+                .where(
+                    FirmwareDeployment.batch_id == batch.id,
+                    FirmwareDeployment.device_id.in_(payload.device_ids),
+                    Device.home_id.in_(homes),
+                )
+            )
+        ).all()
+    )
+    if {deployment.device_id for deployment, _device in rows} != set(payload.device_ids):
+        raise NotFound("one or more retry targets do not belong to this deployment")
+    release = await session.get(FirmwareRelease, batch.firmware_release_id)
+    if release is None:
+        raise NotFound("firmware release does not exist")
+    for deployment, device in rows:
+        if deployment.state not in {"failed", "rolled_back", "timed_out", "cancelled"}:
+            raise OTAWorkflowError("only terminal failed or outdated sensor jobs can be retried")
+        if not _firmware_upgrade_available(device.firmware_version, release.semantic_version):
+            raise OTAWorkflowError("a selected sensor already reports the target version or newer")
+    response = await deploy_firmware_release(
+        release.id,
+        FirmwareDeploymentRequest(device_ids=payload.device_ids, rollout="immediate"),
+        request,
+        user,
+        session,
+        settings,
+    )
+    retry_batch = await session.get(FirmwareDeploymentBatch, str(response["batch_id"]))
+    if retry_batch is None:
+        raise RuntimeError("retry batch was not persisted")
+    retry_batch.rollout = "retry"
+    session.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            event_code="FIRMWARE_DEPLOYMENT_RETRIED",
+            target_type="firmware_deployment_batch",
+            target_id=retry_batch.id,
+            correlation_id=request.state.correlation_id,
+            details={"prior_batch_id": batch.id, "device_count": len(payload.device_ids)},
+        )
+    )
+    await session.commit()
+    logger.info(
+        "ota_deployment_retried",
+        prior_batch_id=batch.id,
+        batch_id=retry_batch.id,
+        device_ids=payload.device_ids,
+        expected_version=release.semantic_version,
+    )
+    response["batch_state"] = retry_batch.state
+    return response
+
+
+@router.post("/firmware/deployment-batches/{batch_id}/cancel")
+async def cancel_firmware_deployment_batch(
+    batch_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("firmware.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    batch = await session.scalar(
+        select(FirmwareDeploymentBatch)
+        .where(FirmwareDeploymentBatch.id == batch_id)
+        .with_for_update()
+    )
+    if batch is None:
+        raise NotFound("firmware deployment batch does not exist")
+    homes = await _home_ids(session, user.id)
+    rows = list(
+        (
+            await session.execute(
+                select(FirmwareDeployment, Device)
+                .join(Device, Device.id == FirmwareDeployment.device_id)
+                .where(FirmwareDeployment.batch_id == batch.id, Device.home_id.in_(homes))
+                .with_for_update()
+            )
+        ).all()
+    )
+    if not rows:
+        raise NotFound("firmware deployment batch does not exist")
+    if not any(deployment.state in {"staged", "queued"} for deployment, _device in rows):
+        raise OTAWorkflowError("this deployment has no waiting jobs that can be cancelled")
+    unsafe = [
+        deployment
+        for deployment, _device in rows
+        if deployment.state in {"downloading", "rebooting", "validating"}
+    ]
+    queued_commands: dict[str, DeviceCommand] = {}
+    for deployment, _device in rows:
+        if deployment.state != "queued":
+            continue
+        commands = list(
+            (
+                await session.scalars(
+                    select(DeviceCommand).where(
+                        DeviceCommand.device_id == deployment.device_id,
+                        DeviceCommand.command_type == "ota_install",
+                        DeviceCommand.state.in_(("queued", "delivered")),
+                    )
+                )
+            ).all()
+        )
+        command = next(
+            (
+                candidate
+                for candidate in commands
+                if candidate.payload.get("deployment_id") == deployment.id
+            ),
+            None,
+        )
+        if command is None or command.state != "queued":
+            unsafe.append(deployment)
+        else:
+            queued_commands[deployment.id] = command
+    if unsafe:
+        raise OTAWorkflowError(
+            "cancellation cannot reverse an OTA already delivered, downloading, or "
+            "confirming; wait for its terminal result"
+        )
+    cancelled_at = datetime.now(UTC)
+    for deployment, _device in rows:
+        if deployment.state not in {"staged", "queued"}:
+            continue
+        deployment.state = "cancelled"
+        deployment.completed_at = cancelled_at
+        deployment.updated_at = cancelled_at
+        deployment.error_code = "OTA_CANCELLED_BY_ADMINISTRATOR"
+        deployment.error_message = "The update was cancelled before delivery"
+        command = queued_commands.get(deployment.id)
+        if command is not None:
+            command.state = "cancelled"
+            command.last_result = {
+                "result_code": "OTA_CANCELLED_BY_ADMINISTRATOR",
+                "evidence": {},
+            }
+    await recalculate_firmware_batch(session, batch.id, now=cancelled_at)
+    session.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            event_code="FIRMWARE_DEPLOYMENT_CANCELLED",
+            target_type="firmware_deployment_batch",
+            target_id=batch.id,
+            correlation_id=request.state.correlation_id,
+            details={"cancelled_before_delivery": True},
+        )
+    )
+    await session.commit()
+    logger.info(
+        "ota_deployment_cancelled",
+        batch_id=batch.id,
+        device_ids=[deployment.device_id for deployment, _device in rows],
+        error_code="OTA_CANCELLED_BY_ADMINISTRATOR",
+    )
+    return {"batch_id": batch.id, "state": batch.state}
 
 
 @router.delete("/firmware/releases/{release_id}", status_code=204)
@@ -529,6 +839,7 @@ async def download_firmware(
     )
     deployment.state = "downloading"
     deployment.progress_percent = max(deployment.progress_percent, 1)
+    deployment.updated_at = datetime.now(UTC)
     await session.commit()
     return Response(
         content=content,

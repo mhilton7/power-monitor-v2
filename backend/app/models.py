@@ -402,15 +402,44 @@ class FirmwareRelease(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class FirmwareDeploymentBatch(Base):
+    __tablename__ = "firmware_deployment_batches"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    firmware_release_id: Mapped[str] = mapped_column(
+        ForeignKey("firmware_releases.id", ondelete="RESTRICT"), index=True
+    )
+    rollout: Mapped[str] = mapped_column(String(20), nullable=False)
+    state: Mapped[str] = mapped_column(String(24), default="queued", nullable=False)
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class FirmwareDeployment(Base):
     __tablename__ = "firmware_deployments"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    batch_id: Mapped[str] = mapped_column(
+        ForeignKey("firmware_deployment_batches.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=False,
+    )
     firmware_release_id: Mapped[str] = mapped_column(ForeignKey("firmware_releases.id"))
     device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), index=True)
     state: Mapped[str] = mapped_column(String(32), default="queued")
     progress_percent: Mapped[int] = mapped_column(Integer, default=0)
     evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    attempt: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -715,6 +744,11 @@ class RatePlanVersion(Base):
     daily_fixed_charge: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal("0"))
     monthly_fixed_charge: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal("0"))
     baseline_credit_per_kwh: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal("0"))
+    tier_threshold_kwh_per_day: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    tier_threshold_season: Mapped[str | None] = mapped_column(String(20))
+    tier_threshold_source_kwh: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    tier_threshold_source_days: Mapped[int | None] = mapped_column(Integer)
+    tier1_boundary_inclusive: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     cca_adjustment_per_kwh: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal("0"))
     surcharge_percent: Mapped[Decimal] = mapped_column(Numeric(9, 6), default=Decimal("0"))
     source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -832,6 +866,7 @@ class UtilityBillRateExtraction(Base):
     day_type_definitions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     tou_period_definitions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     tier_threshold_definitions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    tier_threshold_rule: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     reusable_price_components: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     billing_period_start: Mapped[date | None] = mapped_column(Date)
     billing_period_end: Mapped[date | None] = mapped_column(Date)

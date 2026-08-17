@@ -163,6 +163,14 @@ export const rateDraftSchema = z.object({
   day_type_definitions: z.array(z.unknown()),
   tou_period_definitions: z.array(z.unknown()),
   tier_threshold_definitions: z.array(z.unknown()),
+  tier_threshold_rule: z.object({
+    rule_type: z.literal('daily_allowance'),
+    season: z.enum(['summer', 'winter']),
+    kwh_per_day: nullableDecimal,
+    source_allowance_kwh: decimal,
+    source_billing_days: z.number().int().min(1).max(62).nullable(),
+    tier1_boundary_inclusive: z.literal(true),
+  }).strict().nullable().default(null),
   reusable_price_components: z.array(z.unknown()),
   billing_period_start: localDate.nullable(),
   billing_period_end: localDate.nullable(),
@@ -574,6 +582,44 @@ export const homeUtilitySchema = z.object({
   usage_source: z.string(),
 }).passthrough();
 
+export const firmwareDeploymentJobSchema = z.object({
+  id: z.string(),
+  device_id: z.string(),
+  device_name: z.string(),
+  previous_version: z.string().nullable(),
+  current_version: z.string().nullable(),
+  target_version: z.string(),
+  target_build: z.number().int().positive(),
+  state: z.enum(['staged', 'queued', 'downloading', 'rebooting', 'validating', 'succeeded', 'failed', 'rolled_back', 'timed_out', 'cancelled']),
+  progress_percent: z.number().int().min(0).max(100),
+  attempt: z.number().int().positive(),
+  error_code: z.string().nullable(),
+  error_message: z.string().nullable(),
+  created_at: isoDate,
+  updated_at: isoDate,
+  completed_at: isoDate.nullable(),
+  confirmation_heartbeat_at: isoDate.nullable(),
+  reported_firmware_after_reboot: z.string().nullable(),
+  retry_eligible: z.boolean(),
+  cancel_eligible: z.boolean(),
+}).strict();
+
+export const firmwareDeploymentBatchSchema = z.object({
+  id: z.string(),
+  release_id: z.string(),
+  target_version: z.string(),
+  rollout: z.enum(['immediate', 'staged', 'retry', 'legacy']),
+  state: z.enum(['queued', 'in_progress', 'partial', 'succeeded', 'failed', 'cancelled', 'expired']),
+  targeted: z.number().int().positive(),
+  succeeded: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  created_at: isoDate,
+  updated_at: isoDate,
+  completed_at: isoDate.nullable(),
+  jobs: z.array(firmwareDeploymentJobSchema),
+}).strict();
+
 export const firmwareReleaseSchema = z.object({
   schema: z.literal('pm-ota-manifest/1.0.0'),
   release_id: z.string(),
@@ -591,6 +637,9 @@ export const firmwareReleaseSchema = z.object({
   artifact_available: z.boolean(),
   release_notes: z.string().optional(),
   physical_certification: z.string().optional(),
+  upload_status: z.enum(['uploaded', 'archived']).optional(),
+  validation_status: z.enum(['ready', 'archived']).optional(),
+  deployment_batches: z.array(firmwareDeploymentBatchSchema).optional().default([]),
 }).passthrough();
 
 export const circuitSchema = z.object({
@@ -639,4 +688,6 @@ export type SystemHealth = z.infer<typeof systemHealthSchema>;
 export type BackupStatus = z.infer<typeof backupStatusSchema>;
 export type HomeUtility = z.infer<typeof homeUtilitySchema>;
 export type FirmwareRelease = z.infer<typeof firmwareReleaseSchema>;
+export type FirmwareDeploymentBatch = z.infer<typeof firmwareDeploymentBatchSchema>;
+export type FirmwareDeploymentJob = z.infer<typeof firmwareDeploymentJobSchema>;
 export type Circuit = z.infer<typeof circuitSchema>;

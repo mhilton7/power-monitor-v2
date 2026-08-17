@@ -305,6 +305,7 @@ class RateCorrectionRequest(BaseModel):
         "cca_or_direct_access_indicator",
         "baseline_allocation_rule",
         "baseline_credit_rate",
+        "billing_period_days",
     ]
     corrected_value: str = Field(min_length=1, max_length=500)
 
@@ -314,13 +315,18 @@ class RateCorrectionRequest(BaseModel):
             "TOU-D-4-9PM",
             "TOU-D-5-8PM",
             "TOU-D-PRIME",
+            "DOMESTIC",
         }:
             raise ValueError("bill-derived plan name is outside the supported SCE allowlist")
-        if self.field == "rate_class" and self.corrected_value != "residential_time_of_use":
+        if self.field == "rate_class" and self.corrected_value not in {
+            "residential_time_of_use",
+            "residential_tiered",
+        }:
             raise ValueError("bill-derived rate class is outside the supported allowlist")
-        if self.field == "baseline_allocation_rule" and self.corrected_value != (
-            "credit capped by administrator-configured baseline allocation"
-        ):
+        if self.field == "baseline_allocation_rule" and self.corrected_value not in {
+            "credit capped by administrator-configured baseline allocation",
+            "daily_allowance",
+        }:
             raise ValueError("baseline rule must use the reviewed structured rule")
         if self.field == "baseline_credit_rate":
             try:
@@ -329,6 +335,13 @@ class RateCorrectionRequest(BaseModel):
                 raise ValueError("baseline credit must be a decimal unit rate") from exc
             if not value.is_finite() or not Decimal("0") <= value <= Decimal("10"):
                 raise ValueError("baseline credit is outside the allowed range")
+        if self.field == "billing_period_days":
+            try:
+                days = int(self.corrected_value)
+            except ValueError as exc:
+                raise ValueError("billing days must be a whole number") from exc
+            if str(days) != self.corrected_value.strip() or not 1 <= days <= 62:
+                raise ValueError("billing days must be between 1 and 62")
         return self
 
 
@@ -636,6 +649,17 @@ class FirmwareDeploymentRequest(BaseModel):
     def unique_devices(self) -> FirmwareDeploymentRequest:
         if len(self.device_ids) != len(set(self.device_ids)):
             raise ValueError("firmware deployment device IDs must be unique")
+        return self
+
+
+class FirmwareDeploymentRetryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    device_ids: list[str] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def unique_devices(self) -> FirmwareDeploymentRetryRequest:
+        if len(self.device_ids) != len(set(self.device_ids)):
+            raise ValueError("firmware retry device IDs must be unique")
         return self
 
 
