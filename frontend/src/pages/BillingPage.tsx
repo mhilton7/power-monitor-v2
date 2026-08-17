@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, CalendarClock, FileCheck2, FileLock2, Upload } from 'lucide-react';
+import { ArrowRight, CalendarClock, FileCheck2, FileLock2, Trash2, Upload } from 'lucide-react';
 import { useRef, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import type { RateDraft } from '../api/schemas';
@@ -56,6 +56,7 @@ export function BillingPage() {
   const [review, setReview] = useState<RateDraft | null>(null);
   const [publishAt, setPublishAt] = useState('');
   const [publishOpen, setPublishOpen] = useState(false);
+  const [deleteDraftOpen, setDeleteDraftOpen] = useState(false);
   const homeScope = useHomeScope();
   const { selectedHomeId } = homeScope;
   const billing = useQuery({ queryKey: ['billing', selectedHomeId], queryFn: () => api.billing(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: 60_000 });
@@ -79,6 +80,17 @@ export function BillingPage() {
       return api.publishRateDraft(review.id, effectiveStart, null, billing.data?.accounts[0]?.utility_account_id);
     },
     onSuccess: () => { setPublishOpen(false); setReview(null); setImportOpen(false); void queryClient.invalidateQueries({ queryKey: ['billing'] }); },
+  });
+  const removeDraft = useMutation({
+    mutationFn: () => {
+      if (!review) throw new Error('Choose a PDF rate draft.');
+      return api.deleteRateDraft(review.id);
+    },
+    onSuccess: () => {
+      setDeleteDraftOpen(false);
+      closeImport();
+      void queryClient.invalidateQueries({ queryKey: ['billing'] });
+    },
   });
 
   function closeImport() { formRef.current?.reset(); setReview(null); setPublishAt(''); setImportOpen(false); }
@@ -134,10 +146,11 @@ export function BillingPage() {
         {review.publication_scope === 'review_only' && <Notice kind="warning"><strong>Exact rates extracted; reusable threshold still required.</strong> Billing dates are optional metadata and never become tariff effective dates. The customer-period allowance was not imported. The existing configured threshold remains unchanged while a complete reusable tariff is supplied through the manual or official-source workflow.</Notice>}
         <div className="rate-field-list">{correctionFields.map((field) => <div className="rate-field" key={field.key}><div className="field"><label htmlFor={`rate-${field.key}`}>{field.label}</label><input id={`rate-${field.key}`} name={field.key} defaultValue={draftValue(review, field.key)} /></div><div className="field-evidence"><span>Allowlisted field</span><span>{review.source_evidence.length} source evidence item{review.source_evidence.length === 1 ? '' : 's'}</span></div></div>)}</div>
         {correct.isError && <p className="form-error" role="alert">{correct.error instanceof Error ? correct.error.message : 'Corrections could not be saved.'}</p>}
-        <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={closeImport}>Close review</button><button type="submit" className="button button-secondary" disabled={correct.isPending}>{correct.isPending ? 'Saving…' : 'Save corrections'}</button><PermissionGate permission="rates.manage"><button type="button" className="button button-primary" disabled={review.publication_scope === 'review_only'} title={review.publication_scope === 'review_only' ? 'Safely bounded or complete tariff evidence is required before publication' : undefined} onClick={() => setPublishOpen(true)}>Publish version</button></PermissionGate></div>
+        <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={closeImport}>Close review</button><PermissionGate permission="rates.manage"><button type="button" className="button button-danger" onClick={() => setDeleteDraftOpen(true)}><Trash2 aria-hidden="true" /> Delete draft</button></PermissionGate><button type="submit" className="button button-secondary" disabled={correct.isPending}>{correct.isPending ? 'Saving…' : 'Save corrections'}</button><PermissionGate permission="rates.manage"><button type="button" className="button button-primary" disabled={review.publication_scope === 'review_only'} title={review.publication_scope === 'review_only' ? 'Safely bounded or complete tariff evidence is required before publication' : undefined} onClick={() => setPublishOpen(true)}>Publish version</button></PermissionGate></div>
       </form>}
     </Dialog>
     <ConfirmDialog open={publishOpen} title="Publish and assign an immutable rate version?" description={<div><p>Publishing is separate from extraction. This version can affect estimates only within an administrator-confirmed effective range and only when assigned to sensor-derived intervals.</p><div className="field"><label htmlFor="rate-effective-at">Effective date and time</label><input id="rate-effective-at" type="datetime-local" value={publishAt} onChange={(event) => setPublishAt(event.target.value)} required /></div></div>} confirmLabel="Publish rate version" busy={publish.isPending} confirmDisabled={!publishAt} onCancel={() => setPublishOpen(false)} onConfirm={() => { if (publishAt) publish.mutate(); }} tone="warning" />
+    <ConfirmDialog open={deleteDraftOpen} title="Delete this PDF rate draft?" description="The extracted working draft and its correction records will be permanently removed. Original PDF bytes were already discarded. Any separately published immutable rate version remains available for assigned cost calculations." confirmLabel="Delete rate draft" busy={removeDraft.isPending} onCancel={() => setDeleteDraftOpen(false)} onConfirm={() => removeDraft.mutate()} tone="danger" />
   </div>;
 }
 

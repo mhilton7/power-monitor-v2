@@ -1,6 +1,6 @@
 # Roll back PowerMeter V2 on TrueNAS
 
-> This UI-oriented source document is prepared for v0.1.0-rc.12. Public rc.11, rc.10, rc.9, rc.8, rc.6, rc.5,
+> This UI-oriented source document is prepared for v0.1.0-rc.13. Public rc.12, rc.11, rc.10, rc.9, rc.8, rc.6, rc.5,
 > and immutable older releases retain their own attached instructions. Never
 > combine asset sets.
 
@@ -21,18 +21,18 @@ read a database touched by the new release.
 
 ## Restored rollback only
 
-A direct application-only rollback from v0.1.0-rc.12 to public v0.1.0-rc.11 is
-unauthorized without a separate recovery test. Rc.12 retains Alembic head
-`20260816_0013`, and a forward-migration gate cannot prove that older
-binaries correctly handle state touched by rc.12; `not_exercised_github_hosted_smoke`
+A direct application-only rollback from v0.1.0-rc.13 to public v0.1.0-rc.12 is
+unauthorized without a separate recovery test. Rc.13 uses Alembic head
+`20260817_0014`, and a forward-migration gate cannot prove that older
+binaries correctly handle state touched by rc.13; `not_exercised_github_hosted_smoke`
 is not rollback evidence. The immutable server rc.2 and rc.4 tags have no
 GitHub Releases and are not predecessors.
 
 Historical rc.3 evidence proved only forward rc.1-to-rc.3 upgrade; it does not
-authorize rc.3-to-rc.1, rc.5-to-rc.3, rc.6-to-rc.5, rc.8-to-rc.6, rc.9-to-rc.8, rc.10-to-rc.9, rc.11-to-rc.10, or rc.12-to-rc.11 rollback.
+authorize rc.3-to-rc.1, rc.5-to-rc.3, rc.6-to-rc.5, rc.8-to-rc.6, rc.9-to-rc.8, rc.10-to-rc.9, rc.11-to-rc.10, rc.12-to-rc.11, or rc.13-to-rc.12 rollback.
 
 Public rc.3 has a seven-service YAML and no `initialize` service. Its attached
-instructions use the rc.3 host-preparation contract. The rc.5/rc.6/rc.8/rc.9/rc.10/rc.11/rc.12 Windows/SMB
+instructions use the rc.3 host-preparation contract. The rc.5/rc.6/rc.8/rc.9/rc.10/rc.11/rc.12/rc.13 Windows/SMB
 initializer procedure cannot be combined with rc.3 assets and does not make an
 rc.5-to-rc.3 rollback shell-free. Server rc.4 never became an installation
 authority: its release assembly was skipped after deployment smoke failed.

@@ -1290,3 +1290,69 @@ async def test_viewer_cannot_create_or_advance_rate_candidates(
             params={"home_id": owner_home_id},
         )
         assert forbidden_reject.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_disposable_rate_candidates_can_be_deleted_but_reviewed_provenance_cannot(
+    owner_client: AsyncClient,
+) -> None:
+    payload = _manual_payload()
+    created = await owner_client.post("/api/v1/rate-sources/manual-candidates", json=payload)
+    assert created.status_code == 201, created.text
+    home_id = created.json()["home_id"]
+    candidate_id = created.json()["candidate_id"]
+
+    removed = await owner_client.delete(
+        f"/api/v1/rate-sources/candidates/{candidate_id}", params={"home_id": home_id}
+    )
+    assert removed.status_code == 204, removed.text
+    async with session_factory() as session:
+        assert await session.get(RateCandidate, candidate_id) is None
+        audit = await session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.event_code == "RATE_CANDIDATE_DELETED",
+                AuditEvent.target_id == candidate_id,
+            )
+        )
+        assert audit is not None
+        assert audit.details["published_rate_provenance_deleted"] is False
+
+    reviewed_payload = {**_manual_payload(), "source_title": "Disposable review fixture"}
+    reviewed = await owner_client.post(
+        "/api/v1/rate-sources/manual-candidates", json=reviewed_payload
+    )
+    assert reviewed.status_code == 201, reviewed.text
+    reviewed_id = reviewed.json()["candidate_id"]
+    review = await owner_client.post(
+        f"/api/v1/rate-sources/candidates/{reviewed_id}/review",
+        params={"home_id": home_id},
+        json={
+            "selected_plan_name": reviewed_payload["rate_plan_name"],
+            "effective_start": "2026-08-17T07:00:00Z",
+            "administrator_confirmed_effective_date": True,
+            "administrator_confirmed_provenance": True,
+        },
+    )
+    assert review.status_code == 200, review.text
+    protected = await owner_client.delete(
+        f"/api/v1/rate-sources/candidates/{reviewed_id}", params={"home_id": home_id}
+    )
+    assert protected.status_code == 409, protected.text
+
+    rejected = await owner_client.post(
+        f"/api/v1/rate-sources/candidates/{reviewed_id}/reject",
+        params={"home_id": home_id},
+    )
+    assert rejected.status_code == 200, rejected.text
+    deleted_rejected = await owner_client.delete(
+        f"/api/v1/rate-sources/candidates/{reviewed_id}", params={"home_id": home_id}
+    )
+    assert deleted_rejected.status_code == 204, deleted_rejected.text
+    async with session_factory() as session:
+        assert await session.get(RateCandidate, reviewed_id) is None
+        assert (
+            await session.scalar(
+                select(RateCandidateReview).where(RateCandidateReview.candidate_id == reviewed_id)
+            )
+            is None
+        )

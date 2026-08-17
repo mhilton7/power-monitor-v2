@@ -1,7 +1,7 @@
 # Upgrade PowerMeter V2 on TrueNAS
 
-> This UI-only flow is prepared for the complete signed v0.1.0-rc.12 release
-> asset set. Public rc.11, rc.10, rc.9, rc.8, rc.6, rc.5, and immutable rc.3 assets retain their attached
+> This UI-only flow is prepared for the complete signed v0.1.0-rc.13 release
+> asset set. Public rc.12, rc.11, rc.10, rc.9, rc.8, rc.6, rc.5, and immutable rc.3 assets retain their attached
 > procedures. Never mix release asset sets.
 
 Upgrade by replacing the complete verified YAML in the TrueNAS app editor.
@@ -23,8 +23,9 @@ Never edit one image tag/digest, accept a generic image-update suggestion, use
    `Apps/PowerMeterV2` named with the old version and UTC time. A snapshot
    supplements rather than replaces the verified logical backup.
 
-The coordinated rc.12 release retains public rc.11 Alembic head
-`20260816_0013`; it changes no database schema. Upgrades from rc.5 or
+The coordinated rc.13 release extends public rc.12 to Alembic head
+`20260817_0014`; revision 0014 changes only PostgreSQL lifecycle guards and adds
+no table or column. Upgrades from rc.5 or
 earlier still traverse the additive fail-closed revisions. The 0008 preflight can
 stop when existing immutable ingestion evidence conflicts, including a raw
 reading whose sequence was also recorded as permanent loss or overlapping
@@ -33,7 +34,7 @@ that evidence automatically. It also stops if a legacy database row references
 a retained original bill document; the new runtime forbids all persistent
 original-bill storage, including encrypted storage, and does not silently
 delete an operator's legacy file. Complete and verify the backup and snapshot
-above before applying rc.12. If either preflight stops, leave the prior datasets
+above before applying rc.13. If either preflight stops, leave the prior datasets
 intact and preserve the exact failure for reviewed recovery; do not edit
 evidence or delete a referenced file merely to make the migration pass.
 
@@ -44,13 +45,18 @@ those preflights and holds them through guard installation. Do not merge plans,
 rewrite review provenance, or trim assignment ranges merely to continue; keep
 the prior release intact and use a reviewed recovery decision.
 
+Revision 0014 preserves immutable source revisions and published-rate
+provenance while allowing an explicit administrator deletion of only an
+unreviewed or rejected candidate working record. A protected review or shared
+home reference stops deletion; never bypass the guard to perform cleanup.
+
 Unchanged secrets are not restaged and the secrets dataset is not reshared.
 Never rotate a database/application/TLS value merely to upgrade. If a future
 release explicitly requires coordinated new inputs, its release-specific guide
 must provide a reviewed UI/SMB procedure and compatibility evidence.
 
 An rc.3 installation can also have a legacy `bill-rate-source-artifacts`
-dataset. Rc.5, rc.6, rc.8, rc.9, rc.10, rc.11, and rc.12 do not mount or write it, and the upgrade never deletes it.
+dataset. Rc.5, rc.6, rc.8, rc.9, rc.10, rc.11, rc.12, and rc.13 do not mount or write it, and the upgrade never deletes it.
 Leave it unmounted and unshared; do not export or decrypt its contents. Its
 separate retention or deletion requires an explicit operator decision outside
 this upgrade rather than an automated migration.

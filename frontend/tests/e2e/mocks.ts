@@ -107,6 +107,15 @@ export async function mockApi(page: Page, options: MockOptions = {}) {
       await json(route, { home_id: homeId, created: true, candidate_id: candidateId, revision_id: manual.source.revision_id, source_id: manual.source.id, run_id: 'rate-run-manual', state: 'review_required', canonical_input_sha256: manual.source.artifact_sha256, network_fetch_performed: false }, 201);
       return;
     }
+    if (path.includes('/rate-sources/candidates/') && method === 'DELETE') {
+      const candidateId = path.split('/').at(-1) ?? '';
+      const candidates = candidatesFor(homeId);
+      const index = candidates.findIndex((entry) => entry.id === candidateId);
+      if (index < 0) { await problem(route, 404, 'rate candidate does not exist'); return; }
+      candidates.splice(index, 1);
+      await route.fulfill({ status: 204 });
+      return;
+    }
     if (path.includes('/rate-sources/candidates/') && path.endsWith('/reject') && method === 'POST') {
       rejectAttempts += 1;
       if (options.rateRejectDelayMs) await new Promise((resolve) => setTimeout(resolve, options.rateRejectDelayMs));
@@ -151,6 +160,7 @@ export async function mockApi(page: Page, options: MockOptions = {}) {
     if (path.endsWith('/system/health')) { await json(route, systemHealth); return; }
     if (path.endsWith('/backups/status')) { await json(route, backupStatus); return; }
     if (path.endsWith('/firmware/releases') && method === 'POST') { await json(route, { release: firmwareReleases.releases[0], manifest_signature: 'fixture-signature', physical_certification: 'pending' }, 201); return; }
+    if (path.includes('/firmware/releases/') && method === 'DELETE') { await route.fulfill({ status: 204 }); return; }
     if (path.endsWith('/firmware/releases')) { await json(route, firmwareReleases); return; }
     if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) { await json(route, { deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] }, 202); return; }
     if (path.endsWith('/commands')) {

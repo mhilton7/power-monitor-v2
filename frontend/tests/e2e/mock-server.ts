@@ -41,6 +41,7 @@ const server = createServer((request, response) => {
   if (path.endsWith('/system/health')) return json(response, 200, systemHealth);
   if (path.endsWith('/backups/status')) return json(response, 200, backupStatus);
   if (path.endsWith('/firmware/releases') && request.method === 'POST') return json(response, 201, { release: firmwareReleases.releases[0], manifest_signature: 'fixture-signature', physical_certification: 'pending' });
+  if (path.includes('/firmware/releases/') && request.method === 'DELETE') { response.writeHead(204); response.end(); return; }
   if (path.endsWith('/firmware/releases')) return json(response, 200, firmwareReleases);
   if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) return json(response, 202, { deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] });
   if (path.endsWith('/commands')) return collectJson(request, (body) => {

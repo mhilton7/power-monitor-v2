@@ -613,8 +613,9 @@ async def publish_bill_rate_import(
 
 
 @router.delete("/bill-rate-imports/{extraction_id}", status_code=204)
-async def reject_bill_rate_import(
+async def delete_bill_rate_import(
     extraction_id: str,
+    request: Request,
     user: CurrentUser = Depends(require_permission("rates.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> None:
@@ -624,9 +625,24 @@ async def reject_bill_rate_import(
         extraction_id=extraction_id,
         for_update=True,
     )
-    extraction.state = "rejected"
-    extraction.reviewer_user_id = user.id
-    extraction.reviewed_at = datetime.now(UTC)
+    session.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            event_code="BILL_RATE_IMPORT_DELETED",
+            target_type="utility_bill_rate_extraction",
+            target_id=extraction.id,
+            correlation_id=request.state.correlation_id,
+            details={
+                "artifact_sha256": upload.artifact_sha256,
+                "prior_state": extraction.state,
+                "published_rate_version_retained": extraction.resulting_rate_version_id,
+                "original_pdf_bytes_retained": False,
+            },
+        )
+    )
+    await session.delete(extraction)
+    await session.flush()
+    await session.delete(upload)
     await session.commit()
 
 
@@ -1126,6 +1142,66 @@ async def reject_official_rate_candidate(
         "candidate_id": candidate.id,
         "workflow": safe_review(review),
     }
+
+
+@router.delete("/rate-sources/candidates/{candidate_id}", status_code=204)
+async def delete_rate_source_candidate(
+    candidate_id: str,
+    request: Request,
+    home_id: str | None = None,
+    user: CurrentUser = Depends(require_permission("rates.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    scoped_home_id = await _resolve_user_home(session, user.id, home_id)
+    candidate, revision, _source = await exact_home_candidate(
+        session,
+        candidate_id=candidate_id,
+        home_id=scoped_home_id,
+        for_update=True,
+    )
+    reviews = (
+        await session.scalars(
+            select(RateCandidateReview)
+            .where(RateCandidateReview.candidate_id == candidate.id)
+            .with_for_update()
+        )
+    ).all()
+    if any(review.state != "rejected" for review in reviews):
+        raise RateWorkflowConflict(
+            "reviewed, published, or activated candidates must be retained as rate provenance"
+        )
+    if any(review.home_id != scoped_home_id for review in reviews):
+        raise RateWorkflowConflict("candidate is shared with another home and cannot be deleted")
+    other_home_reference = await session.scalar(
+        select(RateSyncRun.id)
+        .where(
+            RateSyncRun.revision_id == revision.id,
+            RateSyncRun.home_id.is_not(None),
+            RateSyncRun.home_id != scoped_home_id,
+        )
+        .limit(1)
+    )
+    if other_home_reference is not None:
+        raise RateWorkflowConflict("candidate is shared with another home and cannot be deleted")
+    for review in reviews:
+        await session.delete(review)
+    await session.flush()
+    await session.delete(candidate)
+    session.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            event_code="RATE_CANDIDATE_DELETED",
+            target_type="rate_candidate",
+            target_id=candidate.id,
+            correlation_id=request.state.correlation_id,
+            details={
+                "home_id": scoped_home_id,
+                "source_artifact_sha256": revision.artifact_sha256,
+                "published_rate_provenance_deleted": False,
+            },
+        )
+    )
+    await session.commit()
 
 
 @router.post("/rate-sources/candidates/{candidate_id}/publish", status_code=201)

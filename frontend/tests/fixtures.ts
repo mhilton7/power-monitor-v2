@@ -56,7 +56,7 @@ export const firmwareReleases = {
   releases: [{
     schema: 'pm-ota-manifest/1.0.0', release_id: '00000000-0000-0000-0000-000000000030', semantic_version: '1.2.4', build_number: 851,
     project_name: 'power-monitor-sensor-headless', target_chip: 'esp32s3', board_profile: 'esp32-s3-devkitc-n16r8-reference/1', minimum_boot_version: 1, minimum_protocol: 'pm-protocol/1.0.0', minimum_config_version: 1,
-    image_size: 1_048_576, sha256: 'b'.repeat(64), candidate: true, release_notes: 'Candidate release for staged validation.', physical_certification: 'pending',
+    image_size: 1_048_576, sha256: 'b'.repeat(64), candidate: true, artifact_available: true, release_notes: 'Candidate release for staged validation.', physical_certification: 'pending',
   }],
 };
 
@@ -136,7 +136,7 @@ export const rateSourceStatus = {
 };
 
 export const systemHealth = {
-  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.12', protocol: 'pm-protocol/1.0.0', database: 'reachable',
+  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.13', protocol: 'pm-protocol/1.0.0', database: 'reachable',
   sensors: [{ device_id: 'device-main', state: 'online', heartbeat_age_seconds: 5, pzem_status: 'ok', storage_status: 'healthy', backlog: 3 }],
   open_alert_count: 1, last_rate_sync: { id: 'rate-run-old', state: 'review_required', event_code: 'RATE_SOURCE_SNAPSHOT_CAPTURED', completed_at: '2026-08-13T16:00:00Z' },
   backup: {}, restore_test: {}, physical_hardware_certification: 'pending',
@@ -190,6 +190,8 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (pathname.endsWith('/rate-sources/manual-candidates') && method === 'POST') return { status: 201, body: { home_id: homeScopes[0]!.id, created: true, candidate_id: rateCandidate.id, revision_id: rateCandidate.source.revision_id, source_id: rateCandidate.source.id, run_id: 'rate-run-manual', state: 'review_required', canonical_input_sha256: rateCandidate.source.artifact_sha256, network_fetch_performed: false } };
   if (pathname.endsWith('/review') && pathname.includes('/rate-sources/candidates/') && method === 'POST') return { status: 200, body: { home_id: homeScopes[0]!.id, candidate_id: rateCandidate.id, workflow: { id: 'review-1', state: 'reviewed', selected_plan_name: 'TOU-D-4-9PM', effective_start: '2026-08-01T07:00:00Z', effective_end: null, reviewed_at: '2026-08-13T17:00:00Z', published_at: null, activated_at: null, rate_plan_version_id: null, utility_account_id: null } } };
   if (pathname.endsWith('/reject') && pathname.includes('/rate-sources/candidates/') && method === 'POST') return { status: 200, body: { home_id: homeScopes[0]!.id, candidate_id: rateCandidate.id, workflow: { id: 'review-1', state: 'rejected', selected_plan_name: null, effective_start: null, effective_end: null, reviewed_at: '2026-08-13T17:00:00Z', published_at: null, activated_at: null, rate_plan_version_id: null, utility_account_id: null } } };
+  if (pathname.includes('/rate-sources/candidates/') && method === 'DELETE') return { status: 204 };
+  if (pathname.includes('/bill-rate-imports/') && method === 'DELETE') return { status: 204 };
   if (pathname.endsWith('/publish') && pathname.includes('/rate-sources/candidates/') && method === 'POST') return { status: 201, body: { home_id: homeScopes[0]!.id, candidate_id: rateCandidate.id, workflow: { id: 'review-1', state: 'published', selected_plan_name: 'TOU-D-4-9PM', effective_start: '2026-08-01T07:00:00Z', effective_end: null, reviewed_at: '2026-08-13T17:00:00Z', published_at: '2026-08-13T17:01:00Z', activated_at: null, rate_plan_version_id: 'rate-version-new', utility_account_id: null }, rate_plan_version: { id: 'rate-version-new', plan_id: 'rate-plan-1', plan_name: 'TOU-D-4-9PM', version: 2, effective_start: '2026-08-01T07:00:00Z', effective_end: null, source_artifact_sha256: rateCandidate.source.artifact_sha256, state: 'published' } } };
   if (pathname.endsWith('/activate') && pathname.includes('/rate-sources/candidates/') && method === 'POST') return { status: 201, body: { home_id: homeScopes[0]!.id, candidate_id: rateCandidate.id, workflow: { id: 'review-1', state: 'activated', selected_plan_name: 'TOU-D-4-9PM', effective_start: '2026-08-01T07:00:00Z', effective_end: null, reviewed_at: '2026-08-13T17:00:00Z', published_at: '2026-08-13T17:01:00Z', activated_at: '2026-08-13T17:02:00Z', rate_plan_version_id: 'rate-version-new', utility_account_id: billing.accounts[0]!.utility_account_id }, assignment: { id: 'assignment-new', utility_account_id: billing.accounts[0]!.utility_account_id, rate_plan_version_id: 'rate-version-new', effective_start: '2026-08-01T07:00:00Z', effective_end: null } } };
   if (pathname.endsWith('/rate-sources/check-now')) return { status: 202, body: { run_id: 'rate-run-1', state: 'review_required', event_code: 'RATE_SOURCE_CHANGED', revision_id: rateCandidate.source.revision_id, candidate_id: rateCandidate.id, error_code: null } };
@@ -205,6 +207,7 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (path.includes('/users/') && path.endsWith('/restore')) return { status: 200, body: { id: session.user.id, enabled: true } };
   if (path.includes('/users/') && method === 'DELETE') return { status: 204 };
   if (path.endsWith('/firmware/releases') && method === 'POST') return { status: 201, body: { release: firmwareReleases.releases[0], manifest_signature: 'fixture-signature', physical_certification: 'pending' } };
+  if (path.includes('/firmware/releases/') && method === 'DELETE') return { status: 204 };
   if (path.endsWith('/firmware/releases')) return { status: 200, body: firmwareReleases };
   if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) return { status: 202, body: { deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] } };
   if (path.endsWith('/system/health')) return { status: 200, body: systemHealth };

@@ -1115,9 +1115,18 @@ def _rate_candidate_evidence_immutable(
 
 @event.listens_for(RateCandidate, "before_delete")
 def _rate_candidate_not_deletable(
-    _mapper: object, _connection: object, _target: RateCandidate
+    _mapper: object, connection: Connection, target: RateCandidate
 ) -> None:
-    raise ValueError("rate-candidate provenance cannot be deleted")
+    protected_review = connection.scalar(
+        select(RateCandidateReview.id)
+        .where(
+            RateCandidateReview.candidate_id == target.id,
+            RateCandidateReview.state != "rejected",
+        )
+        .limit(1)
+    )
+    if protected_review is not None:
+        raise ValueError("published or reviewed rate-candidate provenance cannot be deleted")
 
 
 @event.listens_for(RateCandidateReview, "before_update")
@@ -1176,9 +1185,10 @@ def _published_rate_candidate_review_immutable(
 
 @event.listens_for(RateCandidateReview, "before_delete")
 def _rate_candidate_review_not_deletable(
-    _mapper: object, _connection: object, _target: RateCandidateReview
+    _mapper: object, _connection: object, target: RateCandidateReview
 ) -> None:
-    raise ValueError("rate-candidate review provenance cannot be deleted")
+    if target.state != "rejected":
+        raise ValueError("published or reviewed rate-candidate provenance cannot be deleted")
 
 
 @event.listens_for(RatePlanVersion, "before_update")

@@ -151,6 +151,7 @@ export const api = {
     const response = await apiRequest(`/bill-rate-imports/${encodeURIComponent(id)}`, z.object({ extraction: rateDraftSchema }), { method: 'PATCH', body: jsonBody({ field, corrected_value: correctedValue }) });
     return response.extraction;
   },
+  deleteRateDraft: (id: string) => apiRequest(`/bill-rate-imports/${encodeURIComponent(id)}`, z.undefined(), { method: 'DELETE' }),
   publishRateDraft: async (id: string, effectiveAt: string, effectiveEnd: string | null, utilityAccountId?: string) => apiRequest(`/bill-rate-imports/${encodeURIComponent(id)}/publish`, z.object({ rate_plan_version: z.object({ id: z.string() }).passthrough() }), {
     method: 'POST', body: jsonBody({ effective_start: effectiveAt, effective_end: effectiveEnd, administrator_confirmed_effective_date: true, assign_to_utility_account_id: utilityAccountId ?? null }),
   }),
@@ -160,6 +161,7 @@ export const api = {
   createManualRateCandidate: async (homeId: string, payload: ManualRateCandidateInput) => exactHome(homeId, await apiRequest(homePath('/rate-sources/manual-candidates', homeId), manualRateCandidateResponseSchema, { method: 'POST', body: jsonBody(payload) })),
   reviewRateCandidate: async (homeId: string, candidateId: string, payload: RateCandidateReviewInput) => exactHome(homeId, await apiRequest(homePath(`/rate-sources/candidates/${encodeURIComponent(candidateId)}/review`, homeId), rateWorkflowResponseSchema, { method: 'POST', body: jsonBody(payload) })),
   rejectRateCandidate: async (homeId: string, candidateId: string) => exactHome(homeId, await apiRequest(homePath(`/rate-sources/candidates/${encodeURIComponent(candidateId)}/reject`, homeId), rateWorkflowResponseSchema, { method: 'POST' })),
+  deleteRateCandidate: (homeId: string, candidateId: string) => apiRequest(homePath(`/rate-sources/candidates/${encodeURIComponent(candidateId)}`, homeId), z.undefined(), { method: 'DELETE' }),
   publishRateCandidate: async (homeId: string, candidateId: string) => exactHome(homeId, await apiRequest(homePath(`/rate-sources/candidates/${encodeURIComponent(candidateId)}/publish`, homeId), ratePublishResponseSchema, { method: 'POST' })),
   activateRateCandidate: async (homeId: string, candidateId: string, utilityAccountId: string) => exactHome(homeId, await apiRequest(homePath(`/rate-sources/candidates/${encodeURIComponent(candidateId)}/activate`, homeId), rateActivationResponseSchema, { method: 'POST', body: jsonBody({ utility_account_id: utilityAccountId }) })),
   checkRates: (homeId: string) => apiRequest(homePath('/rate-sources/check-now', homeId), rateCheckResultSchema, { method: 'POST', body: '{}' }),
@@ -188,6 +190,7 @@ export const api = {
     return apiRequest('/firmware/releases', z.object({ release: firmwareReleaseSchema, manifest_signature: z.string(), physical_certification: z.string() }), { method: 'POST', body });
   },
   deployFirmware: (releaseId: string, deviceIds: string[], rollout: 'immediate' | 'staged') => apiRequest(`/firmware/releases/${encodeURIComponent(releaseId)}/deploy`, z.object({ deployments: z.array(z.object({ id: z.string(), device_id: z.string(), state: z.string() })) }), { method: 'POST', body: jsonBody({ device_ids: deviceIds, rollout }) }),
+  deleteFirmwareArtifact: (releaseId: string) => apiRequest(`/firmware/releases/${encodeURIComponent(releaseId)}`, z.undefined(), { method: 'DELETE' }),
   exportDiagnostics: async () => {
     const response = await fetch('/api/v1/diagnostics/bundle', { credentials: 'same-origin', headers: { Accept: 'application/zip' } });
     if (!response.ok) throw new Error('Unable to download the redacted diagnostics bundle.');

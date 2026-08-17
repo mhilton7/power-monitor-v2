@@ -185,4 +185,22 @@ describe('Settings', () => {
     expect(screen.getByText('reachable')).toBeInTheDocument();
     expect(screen.getByText(/PZEM ok; storage healthy; backlog 3/)).toBeInTheDocument();
   });
+
+  it('removes firmware bytes only after an explicit destructive confirmation', async () => {
+    let deletedRelease = '';
+    installFetchMock((path, method) => {
+      if (path.includes('/firmware/releases/') && method === 'DELETE') {
+        deletedRelease = path;
+        return { status: 204 };
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<SettingsPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Firmware' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove artifact' }));
+    expect(screen.getByRole('dialog', { name: /Remove firmware .* bytes\?/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Remove firmware artifact' }));
+    await waitFor(() => expect(deletedRelease).toContain('/firmware/releases/'));
+  });
 });

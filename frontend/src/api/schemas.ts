@@ -588,6 +588,7 @@ export const firmwareReleaseSchema = z.object({
   image_size: z.number().int().positive(),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   candidate: z.boolean(),
+  artifact_available: z.boolean(),
   release_notes: z.string().optional(),
   physical_certification: z.string().optional(),
 }).passthrough();

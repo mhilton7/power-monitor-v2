@@ -5,12 +5,13 @@ import hashlib
 import secrets
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import orjson
 import pytest
 from backend.app.constants import MAX_COMMAND_DELIVERY_ATTEMPT, MAX_DEVICE_RESPONSE_BYTES
 from backend.app.main import session_factory
-from backend.app.models import DeviceCommand, FirmwareDeployment, Home
+from backend.app.models import DeviceCommand, FirmwareDeployment, FirmwareRelease, Home
 from backend.app.routes.firmware import OTA_MANIFEST_FIELDS, ota_manifest_canonical
 from backend.app.schemas.device import CommandEnvelope, DeviceResponse
 from backend.app.security.protocol import (
@@ -43,12 +44,14 @@ def _device_headers(
     }
 
 
-def _heartbeat_body() -> bytes:
+def _heartbeat_body(
+    *, firmware_version: str = "0.1.0-rc.7", command_results: list[dict[str, object]] | None = None
+) -> bytes:
     return orjson.dumps(
         {
             "protocol_id": "pm-protocol/1.0.0",
             "boot_id": "123e4567-e89b-12d3-a456-426614174000",
-            "firmware_version": "0.1.0-rc.7",
+            "firmware_version": firmware_version,
             "measurement": {
                 "measured_at": None,
                 "monotonic_us": 1,
@@ -74,14 +77,21 @@ def _heartbeat_body() -> bytes:
             "task_stack_watermarks": {},
             "reboot_reason": None,
             "health_flags": [],
-            "command_results": [],
+            "command_results": command_results or [],
         }
     )
 
 
-async def _heartbeat(client: AsyncClient, *, device_id: str, secret: bytes) -> Response:
+async def _heartbeat(
+    client: AsyncClient,
+    *,
+    device_id: str,
+    secret: bytes,
+    firmware_version: str = "0.1.0-rc.7",
+    command_results: list[dict[str, object]] | None = None,
+) -> Response:
     path = "/api/v1/device/heartbeat"
-    body = _heartbeat_body()
+    body = _heartbeat_body(firmware_version=firmware_version, command_results=command_results)
     return await client.post(
         path,
         content=body,
@@ -216,6 +226,8 @@ async def test_ota_command_and_download_use_one_locked_per_device_contract(
     release = uploaded.json()["release"]
     assert release["build_number"] == 101
     assert release["minimum_boot_version"] == 1
+    assert release["artifact_available"] is True
+    assert release["release_notes"] == "Exact OTA command contract fixture."
 
     deployed = await owner_client.post(
         f"/api/v1/firmware/releases/{release['release_id']}/deploy",
@@ -521,3 +533,137 @@ async def test_heartbeat_defers_ota_commands_to_fit_firmware_response_buffer(
         assert all(
             command.attempt == (1 if command.state == "delivered" else 0) for command in commands
         )
+
+
+@pytest.mark.asyncio
+async def test_firmware_artifact_can_be_removed_only_when_no_deployment_is_active(
+    owner_client: AsyncClient,
+) -> None:
+    device_id, _secret, _home_id = await _enroll_ota_target(
+        owner_client, name="Artifact retention target"
+    )
+    image = b"PowerMeter disposable OTA fixture\0" * 64
+    digest = hashlib.sha256(image).hexdigest()
+    uploaded = await owner_client.post(
+        "/api/v1/firmware/releases",
+        files={"image": ("firmware.bin", image, "application/octet-stream")},
+        data={
+            "semantic_version": "0.1.0-rc.8",
+            "build_number": "8",
+            "board_profile": "esp32-s3-devkitc-n16r8-reference/1",
+            "minimum_boot_version": "1",
+            "minimum_config_version": "1",
+            "expected_sha256": digest,
+            "release_notes": "Disposable artifact fixture.",
+        },
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    release_id = uploaded.json()["release"]["release_id"]
+    async with session_factory() as session:
+        release = await session.get(FirmwareRelease, release_id)
+        assert release is not None
+        stored_path = Path(release.image_path)
+    assert stored_path.is_file()
+
+    deployed = await owner_client.post(
+        f"/api/v1/firmware/releases/{release_id}/deploy",
+        json={"device_ids": [device_id], "rollout": "immediate"},
+    )
+    assert deployed.status_code == 202, deployed.text
+    blocked = await owner_client.delete(f"/api/v1/firmware/releases/{release_id}")
+    assert blocked.status_code == 409, blocked.text
+
+    async with session_factory() as session:
+        deployment = await session.get(FirmwareDeployment, deployed.json()["deployments"][0]["id"])
+        assert deployment is not None
+        deployment.state = "failed"
+        deployment.completed_at = datetime.now(UTC)
+        await session.commit()
+
+    removed = await owner_client.delete(f"/api/v1/firmware/releases/{release_id}")
+    assert removed.status_code == 204, removed.text
+    assert not stored_path.exists()
+    listed = await owner_client.get("/api/v1/firmware/releases")
+    row = next(item for item in listed.json()["releases"] if item["release_id"] == release_id)
+    assert row["artifact_available"] is False
+    redeploy = await owner_client.post(
+        f"/api/v1/firmware/releases/{release_id}/deploy",
+        json={"device_ids": [device_id], "rollout": "immediate"},
+    )
+    assert redeploy.status_code == 409, redeploy.text
+
+
+@pytest.mark.asyncio
+async def test_post_reboot_version_evidence_completes_and_advances_staged_ota(
+    owner_client: AsyncClient,
+) -> None:
+    first_id, first_secret, _home_id = await _enroll_ota_target(
+        owner_client, name="Indoor staged target"
+    )
+    second_id, _second_secret, _home_id = await _enroll_ota_target(
+        owner_client, name="Outdoor staged target"
+    )
+    image = b"PowerMeter staged OTA fixture\0" * 64
+    digest = hashlib.sha256(image).hexdigest()
+    uploaded = await owner_client.post(
+        "/api/v1/firmware/releases",
+        files={"image": ("firmware.bin", image, "application/octet-stream")},
+        data={
+            "semantic_version": "0.1.0-rc.8",
+            "build_number": "8",
+            "board_profile": "esp32-s3-devkitc-n16r8-reference/1",
+            "minimum_boot_version": "1",
+            "minimum_config_version": "1",
+            "expected_sha256": digest,
+            "release_notes": "Staged OTA advancement fixture.",
+        },
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    release_id = uploaded.json()["release"]["release_id"]
+    deployed = await owner_client.post(
+        f"/api/v1/firmware/releases/{release_id}/deploy",
+        json={"device_ids": [first_id, second_id], "rollout": "staged"},
+    )
+    assert deployed.status_code == 202, deployed.text
+    deployments = deployed.json()["deployments"]
+    assert [row["device_id"] for row in deployments] == [first_id, second_id]
+    assert [row["state"] for row in deployments] == ["queued", "staged"]
+
+    async with session_factory() as session:
+        first = await session.get(FirmwareDeployment, deployments[0]["id"])
+        first_command = await session.scalar(
+            select(DeviceCommand).where(
+                DeviceCommand.device_id == first_id,
+                DeviceCommand.command_type == "ota_install",
+            )
+        )
+        assert first is not None and first_command is not None
+        first.state = "validating"
+        first.progress_percent = 90
+        first_command.state = "succeeded"
+        first_command.progress_percent = 100
+        await session.commit()
+
+    heartbeat = await _heartbeat(
+        owner_client,
+        device_id=first_id,
+        secret=first_secret,
+        firmware_version="0.1.0-rc.8",
+    )
+    assert heartbeat.status_code == 200, heartbeat.text
+
+    async with session_factory() as session:
+        first = await session.get(FirmwareDeployment, deployments[0]["id"])
+        second = await session.get(FirmwareDeployment, deployments[1]["id"])
+        second_command = await session.scalar(
+            select(DeviceCommand).where(
+                DeviceCommand.device_id == second_id,
+                DeviceCommand.command_type == "ota_install",
+            )
+        )
+        assert first is not None and second is not None and second_command is not None
+        assert first.state == "succeeded"
+        assert first.progress_percent == 100
+        assert first.completed_at is not None
+        assert second.state == "queued"
+        assert second_command.state in {"queued", "delivered"}

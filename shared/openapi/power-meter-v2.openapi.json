@@ -1568,7 +1568,7 @@
   },
   "info": {
     "title": "PowerMeter V2 API",
-    "version": "0.1.0-rc.12"
+    "version": "0.1.0-rc.13"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3105,7 +3105,7 @@
     },
     "/api/v1/bill-rate-imports/{extraction_id}": {
       "delete": {
-        "operationId": "reject_bill_rate_import_api_v1_bill_rate_imports__extraction_id__delete",
+        "operationId": "delete_bill_rate_import_api_v1_bill_rate_imports__extraction_id__delete",
         "parameters": [
           {
             "in": "path",
@@ -3164,7 +3164,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Reject Bill Rate Import",
+        "summary": "Delete Bill Rate Import",
         "tags": [
           "billing"
         ]
@@ -4655,6 +4655,73 @@
         ]
       }
     },
+    "/api/v1/firmware/releases/{release_id}": {
+      "delete": {
+        "operationId": "delete_firmware_artifact_api_v1_firmware_releases__release_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "title": "Release Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Firmware Artifact",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
     "/api/v1/firmware/releases/{release_id}/deploy": {
       "post": {
         "operationId": "deploy_firmware_release_api_v1_firmware_releases__release_id__deploy_post",
@@ -5268,6 +5335,89 @@
           }
         },
         "summary": "List Rate Source Candidates",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/api/v1/rate-sources/candidates/{candidate_id}": {
+      "delete": {
+        "operationId": "delete_rate_source_candidate_api_v1_rate_sources_candidates__candidate_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Rate Source Candidate",
         "tags": [
           "billing"
         ]
