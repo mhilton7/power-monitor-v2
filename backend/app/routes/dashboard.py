@@ -380,6 +380,7 @@ async def home_dashboard(
     visible_devices = [device for device in devices if device.show_on_dashboard]
     now = datetime.now(UTC)
     output_devices: list[dict[str, object]] = []
+    device_items: dict[str, dict[str, object]] = {}
     for device in devices:
         heartbeat = await session.scalar(
             select(DeviceHeartbeat)
@@ -420,32 +421,60 @@ async def home_dashboard(
                 "measured_at": heartbeat.measured_at,
                 "pzem_status": heartbeat.pzem_status,
             }
+        device_item: dict[str, object] = {
+            "id": device.id,
+            "home_id": device.home_id,
+            "circuit_id": device.circuit_id,
+            "friendly_name": device.friendly_name,
+            "location": device.location,
+            "state": state,
+            "measurement_scope": device.measurement_scope,
+            "measurement": measurement,
+            "heartbeat_at": heartbeat.received_at if heartbeat else None,
+            "last_committed_at": last_committed,
+            "backlog": heartbeat.backlog if heartbeat else None,
+            "storage_status": heartbeat.storage_status if heartbeat else "unavailable",
+            "firmware_version": device.firmware_version,
+        }
+        device_items[device.id] = device_item
         if device.show_on_dashboard:
-            output_devices.append(
-                {
-                    "id": device.id,
-                    "home_id": device.home_id,
-                    "circuit_id": device.circuit_id,
-                    "friendly_name": device.friendly_name,
-                    "location": device.location,
-                    "state": state,
-                    "measurement_scope": device.measurement_scope,
-                    "measurement": measurement,
-                    "heartbeat_at": heartbeat.received_at if heartbeat else None,
-                    "last_committed_at": last_committed,
-                    "backlog": heartbeat.backlog if heartbeat else None,
-                    "storage_status": heartbeat.storage_status if heartbeat else "unavailable",
-                    "firmware_version": device.firmware_version,
-                }
-            )
-    # A default card represents one selected sensor. A multi-device sum requires
-    # an explicitly configured verified_sum circuit and is never inferred.
+            output_devices.append(device_item)
+    # Never infer a sum from unrelated sensors. When the operator has configured
+    # exactly one verified, non-overlapping aggregate for this home, however, it
+    # is the unambiguous default Home scope. Explicit sensor/aggregate query
+    # parameters always take precedence.
     summary_kind = "selected_sensor"
     summary_home_id = scoped_home_id
-    if aggregate_circuit_id:
+    selected_aggregate_circuit_id = aggregate_circuit_id
+    if device_id is None and selected_aggregate_circuit_id is None:
+        candidate_members: dict[str, tuple[str, ...]] = {}
+        for candidate_id in {
+            device.circuit_id
+            for device in devices
+            if device.circuit_id is not None and device.include_in_aggregate
+        }:
+            candidate = await session.scalar(
+                select(Circuit).where(
+                    Circuit.id == candidate_id,
+                    Circuit.home_id == scoped_home_id,
+                    Circuit.aggregate_mode == "verified_sum",
+                )
+            )
+            if candidate is None:
+                continue
+            members = tuple(
+                device.id
+                for device in devices
+                if device.circuit_id == candidate.id and device.include_in_aggregate
+            )
+            if len(members) >= 2:
+                candidate_members[candidate.id] = members
+        if len(candidate_members) == 1:
+            selected_aggregate_circuit_id = next(iter(candidate_members))
+    if selected_aggregate_circuit_id:
         circuit = await session.scalar(
             select(Circuit).where(
-                Circuit.id == aggregate_circuit_id,
+                Circuit.id == selected_aggregate_circuit_id,
                 Circuit.home_id == scoped_home_id,
                 Circuit.aggregate_mode == "verified_sum",
             )
@@ -469,16 +498,16 @@ async def home_dashboard(
         # Preserve the one-sensor default scope, but do not pin the dashboard to
         # a failed first sensor when another visible sensor has a fresh,
         # authenticated meter reading. Multi-device totals still require an
-        # explicitly configured verified_sum circuit.
+        # an operator-configured verified_sum circuit.
         default_item: dict[str, object] | None = None
-        for item in output_devices:
-            item_measurement = item.get("measurement")
+        for output_item in output_devices:
+            item_measurement = output_item.get("measurement")
             if (
-                item["state"] == "live"
+                output_item["state"] == "live"
                 and isinstance(item_measurement, dict)
                 and item_measurement.get("active_power_w") is not None
             ):
-                default_item = item
+                default_item = output_item
                 break
         if default_item is None and output_devices:
             default_item = output_devices[0]
@@ -505,8 +534,8 @@ async def home_dashboard(
         for home_id in homes_by_id
     }
     devices_by_id = {device.id: device for device in visible_devices}
-    for item in output_devices:
-        device = devices_by_id[str(item["id"])]
+    for output_item in output_devices:
+        device = devices_by_id[str(output_item["id"])]
         card_account = accounts_by_home_id[device.home_id]
         card_home = homes_by_id[device.home_id]
         card_timezone = (
@@ -525,11 +554,11 @@ async def home_dashboard(
         if card_rate is None or card_rate.get("price_per_kwh") is None:
             continue
         price = Decimal(str(card_rate["price_per_kwh"]))
-        item_measurement = item.get("measurement")
+        item_measurement = output_item.get("measurement")
         power = (
             item_measurement.get("active_power_w") if isinstance(item_measurement, dict) else None
         )
-        item["estimated_cost_per_hour"] = (
+        output_item["estimated_cost_per_hour"] = (
             Decimal(current_cost_per_hour_microdollars(Decimal(str(power)), price))
             / Decimal(1_000_000)
             if power is not None
@@ -537,18 +566,18 @@ async def home_dashboard(
         )
     aggregate_measurement: dict[str, object] | None = None
     if summary_kind == "verified_aggregate":
-        members = [item for item in output_devices if item["id"] in ids]
+        aggregate_members = [device_items[member_id] for member_id in ids]
         powers: list[Decimal] = []
-        for item in members:
-            item_measurement = item.get("measurement")
-            if item["state"] != "live" or not isinstance(item_measurement, dict):
+        for aggregate_item in aggregate_members:
+            item_measurement = aggregate_item.get("measurement")
+            if aggregate_item["state"] != "live" or not isinstance(item_measurement, dict):
                 continue
             power = item_measurement.get("active_power_w")
             if power is not None:
                 powers.append(Decimal(str(power)))
         aggregate_measurement = {
-            "state": "live" if len(powers) == len(members) else "unavailable",
-            "active_power_w": sum(powers) if len(powers) == len(members) else None,
+            "state": "live" if len(powers) == len(aggregate_members) else "unavailable",
+            "active_power_w": sum(powers) if len(powers) == len(aggregate_members) else None,
             "member_device_ids": ids,
             "voltage_v": None,
             "frequency_hz": None,
@@ -563,7 +592,7 @@ async def home_dashboard(
         "billing_cycle": await _summary(session, ids, *billing_bounds),
     }
     estimate_scope_kind = "energy_only"
-    estimate_scope_id = ids[0] if len(ids) == 1 else aggregate_circuit_id
+    estimate_scope_id = ids[0] if len(ids) == 1 else selected_aggregate_circuit_id
     if account is not None and account.cost_scope != "energy_only":
         configured = {
             device.id
@@ -609,7 +638,7 @@ async def home_dashboard(
             "device_id": ids[0] if len(ids) == 1 else None,
             "device_ids": ids,
             "aggregate": summary_kind == "verified_aggregate",
-            "circuit_id": aggregate_circuit_id,
+            "circuit_id": selected_aggregate_circuit_id,
         },
         "disclosure": {
             "usage_source": "authenticated PZEM-004T sensor intervals only",
@@ -682,7 +711,9 @@ async def history(
                 await session.scalars(
                     select(Device).where(
                         Device.circuit_id == circuit.id,
+                        Device.home_id == scoped_home_id,
                         Device.revoked_at.is_(None),
+                        Device.include_in_aggregate.is_(True),
                     )
                 )
             ).all()

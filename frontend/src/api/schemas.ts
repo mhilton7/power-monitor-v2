@@ -106,6 +106,14 @@ export const homeSchema = z.object({
     baseline_credit_included: z.boolean(),
     cca_or_direct_access: z.string().nullable(),
   }).passthrough().nullable(),
+  aggregate_measurement: z.object({
+    state: z.enum(['live', 'unavailable']),
+    active_power_w: nullableTelemetryNumber,
+    member_device_ids: z.array(z.string()),
+    voltage_v: nullableTelemetryNumber,
+    frequency_hz: nullableTelemetryNumber,
+    power_factor: nullableTelemetryNumber,
+  }).nullable().optional(),
   summary_scope: z.object({ kind: z.string(), device_id: z.string().nullable(), device_ids: z.array(z.string()).optional(), aggregate: z.boolean(), circuit_id: z.string().nullable().optional() }).optional(),
   disclosure: z.object({ usage_source: z.string(), estimated_not_utility_bill: z.boolean() }).optional(),
 }).passthrough();

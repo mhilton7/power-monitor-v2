@@ -178,6 +178,84 @@ async def test_dashboard_default_scope_prefers_a_fresh_authenticated_meter_readi
     }
 
 
+@pytest.mark.asyncio
+async def test_dashboard_defaults_to_the_one_verified_home_aggregate(
+    owner_client: AsyncClient,
+) -> None:
+    _owner_id, home_id = await _owner_scope()
+    now = datetime.now(UTC)
+    async with session_factory() as session:
+        circuit = Circuit(home_id=home_id, name="Home", aggregate_mode="verified_sum")
+        session.add(circuit)
+        await session.flush()
+        indoor = Device(
+            home_id=home_id,
+            circuit_id=circuit.id,
+            friendly_name="Indoor-AC",
+            display_order=0,
+            pzem_variant="pzem004t-v4-classic-candidate",
+            ct_rating_a=Decimal("32"),
+        )
+        outdoor = Device(
+            home_id=home_id,
+            circuit_id=circuit.id,
+            friendly_name="Outdoor-AC",
+            display_order=1,
+            pzem_variant="pzem004t-v4-classic-candidate",
+            ct_rating_a=Decimal("100"),
+        )
+        session.add_all((indoor, outdoor))
+        await session.flush()
+        session.add_all(
+            (
+                DeviceHeartbeat(
+                    device_id=indoor.id,
+                    boot_id="00000000-0000-0000-0000-000000000001",
+                    received_at=now,
+                    measured_at=now,
+                    active_power_w=Decimal("355.500"),
+                    pzem_status="ok",
+                    storage_status="healthy",
+                    time_status="trusted",
+                ),
+                DeviceHeartbeat(
+                    device_id=outdoor.id,
+                    boot_id="00000000-0000-0000-0000-000000000002",
+                    received_at=now,
+                    measured_at=now,
+                    active_power_w=Decimal("1990.000"),
+                    pzem_status="ok",
+                    storage_status="healthy",
+                    time_status="trusted",
+                ),
+            )
+        )
+        await session.commit()
+        circuit_id = circuit.id
+        indoor_id = indoor.id
+        outdoor_id = outdoor.id
+
+    response = await owner_client.get("/api/v1/home", params={"home_id": home_id})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["summary_scope"] == {
+        "kind": "verified_aggregate",
+        "device_id": None,
+        "device_ids": [indoor_id, outdoor_id],
+        "aggregate": True,
+        "circuit_id": circuit_id,
+    }
+    assert body["aggregate_measurement"]["state"] == "live"
+    assert Decimal(str(body["aggregate_measurement"]["active_power_w"])) == Decimal("2345.500")
+
+    explicit = await owner_client.get(
+        "/api/v1/home", params={"home_id": home_id, "device_id": indoor_id}
+    )
+    assert explicit.status_code == 200, explicit.text
+    assert explicit.json()["summary_scope"]["device_id"] == indoor_id
+    assert explicit.json()["summary_scope"]["aggregate"] is False
+
+
 def _feature_params(path: str, home_id: str | None = None) -> dict[str, str]:
     params = {"home_id": home_id} if home_id is not None else {}
     if path.startswith("/api/v1/history"):

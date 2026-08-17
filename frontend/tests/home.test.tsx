@@ -81,6 +81,7 @@ describe('Home', () => {
   });
 
   it('sums only a verified non-overlapping live scope and changes individual sensors to kW at 1000 W', async () => {
+    const historyRequests: string[] = [];
     const indoor = {
       ...home.devices[0]!,
       measurement: { ...home.devices[0]!.measurement, active_power_w: '600.000' },
@@ -104,10 +105,22 @@ describe('Home', () => {
             aggregate: true,
             circuit_id: 'circuit-aggregate',
           },
+          aggregate_measurement: {
+            state: 'live',
+            active_power_w: '2000.000',
+            member_device_ids: ['device-main', 'device-outdoor'],
+            voltage_v: null,
+            frequency_hz: null,
+            power_factor: null,
+          },
         },
       };
       if (path.includes('/devices?')) return { status: 200, body: { devices: [device, { ...device, id: 'device-outdoor', friendly_name: 'Outdoor AC' }] } };
-      return path.includes('/history') ? { status: 200, body: { points: [], energy_kwh: 0, cost: '0', completeness: 1, missing_ranges: [], resolution_seconds: 300, timezone: 'UTC', usage_source: 'authenticated PZEM-004T sensor intervals only' } } : { status: 200, body: { alerts: [] } };
+      if (path.includes('/history')) {
+        historyRequests.push(path);
+        return { status: 200, body: { points: [], energy_kwh: 0, cost: '0', completeness: 1, missing_ranges: [], resolution_seconds: 300, timezone: 'UTC', usage_source: 'authenticated PZEM-004T sensor intervals only' } };
+      }
+      return { status: 200, body: { alerts: [] } };
     });
 
     renderWithProviders(<HomePage />);
@@ -121,6 +134,24 @@ describe('Home', () => {
     expect(outdoorRow).not.toBeNull();
     expect(within(indoorRow!).getByText('600 W')).toBeInTheDocument();
     expect(within(outdoorRow!).getByText('1.4 kW')).toBeInTheDocument();
+    await waitFor(() => expect(historyRequests.length).toBeGreaterThan(0));
+    expect(historyRequests.every((path) => path.includes('aggregate_circuit_id=circuit-aggregate') && !path.includes('device_id='))).toBe(true);
+  });
+
+  it('keeps a verified aggregate unavailable when any member reading is missing', async () => {
+    const indoor = { ...home.devices[0]!, measurement: { ...home.devices[0]!.measurement, active_power_w: '600.000' } };
+    const outdoor = { ...home.devices[0]!, id: 'device-outdoor', friendly_name: 'Outdoor AC', state: 'needs_attention' as const, measurement: { ...home.devices[0]!.measurement, active_power_w: null, pzem_status: 'timeout' } };
+    installFetchMock((path) => {
+      if (path.includes('/home')) return { status: 200, body: { ...home, devices: [indoor, outdoor], summary_scope: { kind: 'verified_aggregate', device_id: null, device_ids: ['device-main', 'device-outdoor'], aggregate: true, circuit_id: 'circuit-aggregate' }, aggregate_measurement: { state: 'unavailable', active_power_w: null, member_device_ids: ['device-main', 'device-outdoor'], voltage_v: null, frequency_hz: null, power_factor: null } } };
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [device, { ...device, id: 'device-outdoor', friendly_name: 'Outdoor AC', pzem_status: 'timeout' }] } };
+      return path.includes('/history') ? { status: 200, body: { points: [], energy_kwh: null, cost: null, completeness: 0, missing_ranges: [], resolution_seconds: 300, timezone: 'UTC', usage_source: 'authenticated PZEM-004T sensor intervals only' } } : { status: 200, body: { alerts: [] } };
+    });
+
+    renderWithProviders(<HomePage />);
+
+    expect(await screen.findByLabelText('Power gauge unavailable')).toBeInTheDocument();
+    expect(screen.queryByLabelText('600 watts')).not.toBeInTheDocument();
+    expect(screen.getByText('1 verified aggregate member unavailable; partial power is not shown or treated as zero.')).toBeInTheDocument();
   });
 
   it('does not double-count multiple sensors without a verified aggregate scope', async () => {

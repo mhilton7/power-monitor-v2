@@ -1,4 +1,4 @@
-# PowerMeter V2 v0.1.0-rc.11
+# PowerMeter V2 v0.1.0-rc.12
 
 PowerMeter V2 is a central, authenticated PZEM-004T monitoring system paired
 with the independent
@@ -8,32 +8,33 @@ Authenticated sensor evidence remains the only source of live measurements,
 History, energy, completeness, forecasts, and usage-based cost. Utility-bill
 PDFs remain rate-source documents only.
 
-This source file is the release-body input for candidate `v0.1.0-rc.11`. This
+This source file is the release-body input for candidate `v0.1.0-rc.12`. This
 source copy alone is not publication evidence. Installation is authorized only after the
 signed tagged workflow publishes the complete checksummed and attested asset
 set, digest-pinned YAML, public multi-architecture images, deployment evidence,
 and coordinated firmware release.
 
-## Why rc.11 follows public server rc.10
+## Why rc.12 follows public server rc.11
 
-Server [`v0.1.0-rc.10`](https://github.com/mhilton7/power-monitor-v2/releases/tag/v0.1.0-rc.10)
+Server [`v0.1.0-rc.11`](https://github.com/mhilton7/power-monitor-v2/releases/tag/v0.1.0-rc.11)
 completed its tagged workflow and remains a public, immutable, installable
-prerelease with its complete attached asset set. Rc.11 carries forward rc.10's
-dashboard telemetry recovery, upload-safe OTA metadata, exact microSD capacity
-evidence, SCE rate workflow, and privacy boundaries.
+prerelease with its complete attached asset set. Rc.12 carries forward rc.11's
+date-independent bill-rate extraction, dashboard telemetry recovery, upload-safe
+OTA metadata, exact microSD capacity evidence, SCE rate workflow, and privacy
+boundaries.
 
-Rc.11 replaces the date-dependent SCE DOMESTIC bill parser with newly written,
-label-scoped extraction of the exact daily, tier, generation, surcharge, and tax
-rates required by the current cost model. Statement dates are optional metadata,
-customer usage is excluded, a customer-period baseline never becomes a reusable
-threshold, and semantically unchanged rates reuse the existing candidate. The
-browser now advances visible heartbeat ages once per second through one shared
-absolute-time ticker without increasing API polling or backend activity.
-Firmware rc.11 changes only immutable identity and the coordinated server
-contract binding; runtime behavior remains public firmware rc.10.
+Rc.12 makes the Home dashboard's one operator-configured `verified_sum` circuit
+the unambiguous default live and History scope. It combines authenticated live
+power only when every included non-overlapping member is fresh, never converts
+a missing member to zero, and preserves explicit single-device overrides. Home
+and History now query the same aggregate circuit. When durable interval values
+are absent but authenticated records remain queued, both views explain that
+server acknowledgement is pending instead of rendering an unexplained empty
+chart. Firmware rc.12 changes only immutable identity and the coordinated
+server contract binding; runtime behavior remains public firmware rc.11.
 The shared protocol remains `pm-protocol/1.0.0`; Alembic head remains
 `20260816_0013`. The generated OpenAPI SHA-256 is
-`9bfae34ae18fac2f9c2e6937f20c4c65c56a721c44d92ab10c079aaf2dd3a620`.
+`68c5f5a34e3ef1f8d71607896a70d7fa09c3a001cc1fc1e077a043e801b599fc`.
 
 ### Historical rc.4 recovery carried by rc.5
 
@@ -170,7 +171,7 @@ protocol, or migration revision changed for this repair.
   are not part of the normal path.
 - Operators create exactly nine Generic/POSIX child ZFS datasets below
   `/mnt/Apps/PowerMeterV2`. The former `bill-rate-source-artifacts` dataset is
-  not mounted by rc.5, rc.6, rc.8, rc.9, rc.10, or rc.11; an existing rc.3 dataset is left untouched and should
+  not mounted by rc.5, rc.6, rc.8, rc.9, rc.10, rc.11, or rc.12; an existing rc.3 dataset is left untouched and should
   remain unshared until an operator chooses a separately reviewed cleanup.
 - TLS verification remains strict for `power-monitor.home.arpa`, including
   hostname, key match, current validity, and at least seven days of remaining
@@ -191,7 +192,7 @@ protocol, or migration revision changed for this repair.
 ## Upgrade and rollback boundary
 
 Back up and verify the database, perform an isolated restore check, and take a
-recursive ZFS snapshot before installing rc.11. Keep all existing application
+recursive ZFS snapshot before installing rc.12. Keep all existing application
 secrets, database credentials, the backup encryption key, TLS material, and
 datasets. Do not recreate storage or rotate secrets during this upgrade.
 
@@ -205,8 +206,8 @@ write locks until its guards are installed. Do not bypass a guard, edit an
 applied migration, or delete evidence merely to continue.
 
 The release migration report proves only the forward upgrade from the latest
-lower same-major public release. It does not prove that rc.10 binaries can use
-state touched by rc.11. Application-only rollback is not authorized. A
+lower same-major public release. It does not prove that rc.11 binaries can use
+state touched by rc.12. Application-only rollback is not authorized. A
 rollback requires a separately validated restore or clone of the matching
 pre-upgrade snapshot or verified backup, paired with the exact older release
 assets. GitHub-hosted smoke records rollback as
@@ -214,26 +215,26 @@ assets. GitHub-hosted smoke records rollback as
 
 ## Release contents and firmware pairing
 
-A successfully published rc.11 candidate includes:
+A successfully published rc.12 candidate includes:
 
 - four immutable multi-architecture GHCR images referenced by registry digest;
-- `power-monitor-v2-v0.1.0-rc.11.yaml` and `release-manifest.json`;
+- `power-monitor-v2-v0.1.0-rc.12.yaml` and `release-manifest.json`;
 - the Windows SMB staging helper and auditable initializer source;
 - checksums, strict attestations, SBOMs, vulnerability results, dependency and
   test reports, migration evidence, and deployment-smoke evidence;
 - installation, secrets/TLS, dataset/ACL, backup/restore, upgrade, and rollback
   instructions; and
-- an exact coordinated public firmware `v0.1.0-rc.11` release whose server
+- an exact coordinated public firmware `v0.1.0-rc.12` release whose server
   contract declares OpenAPI SHA-256
-  `9bfae34ae18fac2f9c2e6937f20c4c65c56a721c44d92ab10c079aaf2dd3a620`.
+  `68c5f5a34e3ef1f8d71607896a70d7fa09c3a001cc1fc1e077a043e801b599fc`.
 
 The signed server rc.2 tag and failed release run `31866197054` remain
 immutable prepublication evidence. There is no server rc.2 GitHub Release.
-Public server rc.10 remains installable with its own attached eight-service
-assets and instructions and is the migration predecessor for rc.11. Firmware
-rc.11 must be published and verified with the exact server rc.11 contract before
-a server rc.11 tag is created. No historical tag or release is modified or
-relabeled by rc.11; rc.7 remains an unpublished local firmware candidate.
+Public server rc.11 remains installable with its own attached eight-service
+assets and instructions and is the migration predecessor for rc.12. Firmware
+rc.12 must be published and verified with the exact server rc.12 contract before
+a server rc.12 tag is created. No historical tag or release is modified or
+relabeled by rc.12; rc.7 remains an unpublished local firmware candidate.
 
 This remains a prerelease candidate. Hardware status is honestly `pending`.
 Marked-unit electrical identity, physical TLS/HMAC behavior, OTA installation

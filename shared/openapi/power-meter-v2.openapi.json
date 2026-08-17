@@ -1568,7 +1568,7 @@
   },
   "info": {
     "title": "PowerMeter V2 API",
-    "version": "0.1.0-rc.11"
+    "version": "0.1.0-rc.12"
   },
   "openapi": "3.1.0",
   "paths": {
