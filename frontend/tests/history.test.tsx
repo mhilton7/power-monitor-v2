@@ -46,4 +46,19 @@ describe('History', () => {
     await userEvent.click(screen.getByRole('button', { name: '7 days' }));
     expect(screen.getByRole('button', { name: '7 days' })).toHaveAttribute('aria-pressed', 'true');
   });
+
+  it('explains that live values are absent from History while durable intervals remain queued', async () => {
+    installFetchMock((path) => {
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [{ ...device, backlog: 199 }] } };
+      if (path.includes('/circuits?')) return { status: 200, body: { circuits: [] } };
+      if (path.includes('/history')) return { status: 200, body: { ...history, points: history.points.map((point) => ({ ...point, value: null, cost: null })), energy_kwh: null, cost: null, completeness: 0 } };
+      return { status: 404, body: {} };
+    });
+
+    renderWithProviders(<HistoryPage />);
+
+    expect((await screen.findAllByText(/199 authenticated intervals remain queued/)).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('No committed active power')).toBeInTheDocument();
+    expect(screen.queryByTestId('history-chart')).not.toBeInTheDocument();
+  });
 });

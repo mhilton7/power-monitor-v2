@@ -14,8 +14,10 @@ import './HomePage.css';
 
 type SensorSummary = HomeData['devices'][number];
 
-function historyParams(homeId: string, deviceId: string, from: Date, to: Date, metric: string, resolutionSeconds?: number) {
-  const query = new URLSearchParams({ home_id: homeId, from: from.toISOString(), to: to.toISOString(), metric, device_id: deviceId });
+function historyParams(homeId: string, scope: { deviceId?: string; aggregateCircuitId?: string }, from: Date, to: Date, metric: string, resolutionSeconds?: number) {
+  const query = new URLSearchParams({ home_id: homeId, from: from.toISOString(), to: to.toISOString(), metric });
+  if (scope.aggregateCircuitId) query.set('aggregate_circuit_id', scope.aggregateCircuitId);
+  else if (scope.deviceId) query.set('device_id', scope.deviceId);
   if (resolutionSeconds) query.set('resolution_seconds', String(resolutionSeconds));
   return query;
 }
@@ -93,7 +95,9 @@ function livePowerScope(data: HomeData, primary: SensorSummary) {
       .sort((left, right) => new Date(left).getTime() - new Date(right).getTime())[0] ?? null;
     return {
       aggregate: true,
-      watts: liveSensors.length > 0 ? liveSensors.reduce((sum, sensor) => sum + (sensor.measurement?.active_power_w ?? 0), 0) : null,
+      watts: liveSensors.length === deviceIds.length && data.aggregate_measurement?.state === 'live'
+        ? data.aggregate_measurement.active_power_w
+        : null,
       liveCount: liveSensors.length,
       scopedCount: deviceIds.length,
       measuredAt,
@@ -197,19 +201,22 @@ export function HomePage() {
   const home = useQuery({ queryKey: ['home', selectedHomeId], queryFn: () => api.home(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: refreshInterval });
   const devices = useQuery({ queryKey: ['devices', selectedHomeId], queryFn: () => api.devices(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: refreshInterval });
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: api.alerts, refetchInterval: refreshInterval });
-  const deviceId = home.data?.summary_scope?.device_id ?? home.data?.devices[0]?.id ?? '';
+  const commandDeviceId = home.data?.summary_scope?.device_id ?? home.data?.devices[0]?.id ?? '';
+  const aggregateCircuitId = home.data?.summary_scope?.aggregate ? home.data.summary_scope.circuit_id ?? '' : '';
+  const historyDeviceId = aggregateCircuitId ? '' : commandDeviceId;
+  const historyScopeKey = aggregateCircuitId ? `aggregate:${aggregateCircuitId}` : `device:${historyDeviceId}`;
   const history24 = useQuery({
-    queryKey: ['history', selectedHomeId, 'home-dashboard', dashboardDays, deviceId],
-    queryFn: () => api.history(historyParams(selectedHomeId, deviceId, new Date(now.getTime() - dashboardDays * 24 * 60 * 60 * 1000), now, 'power', dashboardDays === 1 ? 300 : 3600)),
-    enabled: Boolean(selectedHomeId && deviceId),
+    queryKey: ['history', selectedHomeId, 'home-dashboard', dashboardDays, historyScopeKey],
+    queryFn: () => api.history(historyParams(selectedHomeId, { deviceId: historyDeviceId, aggregateCircuitId }, new Date(now.getTime() - dashboardDays * 24 * 60 * 60 * 1000), now, 'power', dashboardDays === 1 ? 300 : 3600)),
+    enabled: Boolean(selectedHomeId && (historyDeviceId || aggregateCircuitId)),
   });
   const daily = useQuery({
-    queryKey: ['history', selectedHomeId, 'home-daily', dashboardDays, deviceId],
-    queryFn: () => api.history(historyParams(selectedHomeId, deviceId, new Date(now.getTime() - dashboardDays * 24 * 60 * 60 * 1000), now, 'energy', 86400)),
-    enabled: Boolean(selectedHomeId && deviceId),
+    queryKey: ['history', selectedHomeId, 'home-daily', dashboardDays, historyScopeKey],
+    queryFn: () => api.history(historyParams(selectedHomeId, { deviceId: historyDeviceId, aggregateCircuitId }, new Date(now.getTime() - dashboardDays * 24 * 60 * 60 * 1000), now, 'energy', 86400)),
+    enabled: Boolean(selectedHomeId && (historyDeviceId || aggregateCircuitId)),
   });
   const command = useMutation({
-    mutationFn: ({ type, payload, prepare, typedConfirmation }: { type: string; payload?: Record<string, unknown>; prepare?: { commandId: string; confirmationToken: string }; typedConfirmation?: string }) => api.command(deviceId, type, payload, prepare ? { ...prepare, typedConfirmation: typedConfirmation ?? '' } : undefined),
+    mutationFn: ({ type, payload, prepare, typedConfirmation }: { type: string; payload?: Record<string, unknown>; prepare?: { commandId: string; confirmationToken: string }; typedConfirmation?: string }) => api.command(commandDeviceId, type, payload, prepare ? { ...prepare, typedConfirmation: typedConfirmation ?? '' } : undefined),
     onSuccess: (result, variables) => {
       if (variables.type === 'format_storage_prepare' && result.confirmation_token) {
         setFormatEvidence({ token: result.confirmation_token, prepareCommandId: result.command.id });
@@ -222,14 +229,15 @@ export function HomePage() {
     },
   });
 
-  const primary = home.data?.devices.find((sensor) => sensor.id === deviceId) ?? home.data?.devices[0];
-  const primaryDetail = devices.data?.devices.find((device) => device.id === deviceId);
+  const primary = home.data?.devices.find((sensor) => sensor.id === commandDeviceId) ?? home.data?.devices[0];
+  const primaryDetail = devices.data?.devices.find((device) => device.id === commandDeviceId);
   const selectedDeviceCurrent = selectedDevice
     ? devices.data?.devices.find((device) => device.id === selectedDevice.id) ?? selectedDevice
     : undefined;
   const measurement = primary?.measurement;
   const chartData = useMemo(() => history24.data?.points.map((point) => ({ ...point, epoch: new Date(point.timestamp).getTime(), valueKw: point.value === null ? null : Number(point.value) })) ?? [], [history24.data]);
   const dailyData = useMemo(() => daily.data?.points.map((point) => ({ ...point, epoch: new Date(point.timestamp).getTime(), value: point.value === null ? null : Number(point.value) })) ?? [], [daily.data]);
+  const hasCommittedPower = chartData.some((point) => point.valueKw !== null);
 
   const formatCommitReady = Boolean(
     formatEvidence
@@ -248,6 +256,11 @@ export function HomePage() {
   if (!data) return <div className="page"><h1 className="sr-only">Home</h1><ErrorState error={new Error('The Home response was empty.')} retry={() => void home.refetch()} /></div>;
   if (!primary) return <div className="page"><h1 className="sr-only">Home</h1><EmptyState title="No enrolled sensor" detail="Ask an administrator to create an enrollment token, then provision a headless sensor over USB." /></div>;
   const livePower = livePowerScope(data, primary);
+  const scopedBacklog = data.devices
+    .filter((sensor) => data.summary_scope?.aggregate
+      ? data.summary_scope.device_ids?.includes(sensor.id)
+      : sensor.id === commandDeviceId)
+    .reduce((total, sensor) => total + (sensor.backlog ?? 0), 0);
   const livePowerDisplay = powerDisplay(livePower.watts);
   const livePowerState = livePower.aggregate
     ? livePower.liveCount === livePower.scopedCount && livePower.scopedCount > 0 ? 'live' : livePower.liveCount > 0 ? 'needs_attention' : 'offline'
@@ -267,7 +280,7 @@ export function HomePage() {
       ? 'No authenticated live readings are available from the verified aggregate; missing readings remain missing.'
       : livePower.liveCount === livePower.scopedCount
         ? `Combined authenticated power from ${livePower.liveCount} verified non-overlapping live sensors.`
-        : `Combined ${livePower.liveCount} currently live sensor${livePower.liveCount === 1 ? '' : 's'} from a verified ${livePower.scopedCount}-sensor aggregate; unavailable members are excluded.`
+        : `${livePower.scopedCount - livePower.liveCount} verified aggregate member${livePower.scopedCount - livePower.liveCount === 1 ? '' : 's'} unavailable; partial power is not shown or treated as zero.`
     : measurement?.active_power_w === null || measurement?.active_power_w === undefined
       ? 'Live meter power is unavailable; missing readings remain missing.'
       : primary.state === 'live'
@@ -304,7 +317,7 @@ export function HomePage() {
 
     <section className="dashboard-content" aria-label="Committed usage, commands, and alerts">
       {(visibleCards.has('live_power') || visibleCards.has('completeness')) && <Card title={`Power History – ${dashboardRangeLabel}`} eyebrow="Committed sensor intervals" action={<span className="select-chip">kW</span>} className="dashboard-chart-card dashboard-power-history">
-        {history24.isLoading ? <Loading label="Loading committed intervals" /> : history24.isError ? <ErrorState error={history24.error} /> : history24.data && chartData.length > 0 ? <div className="chart-wrap" data-testid="usage-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart title={`Committed power over ${dashboardRangeLabel.toLowerCase()}`} desc="Authenticated sensor power intervals. Missing readings render as gaps." data={chartData} margin={{ top: 16, right: 12, bottom: 8, left: -12 }}><defs><linearGradient id="powerFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#65e692" stopOpacity={0.48} /><stop offset="100%" stopColor="#65e692" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" minTickGap={70} interval="preserveStartEnd" tickFormatter={(value: number) => chartTick(value, dashboardDays * 24, history24.data?.timezone ?? 'America/Los_Angeles')} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} width={42} unit=" kW" /><Tooltip content={<UsageTooltip timezone={history24.data.timezone} />} /><Area type="monotone" dataKey="valueKw" stroke="#65e692" strokeWidth={2} fill="url(#powerFill)" connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom committed power History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#151d1a" tickFormatter={() => ''} /></AreaChart></ResponsiveContainer></div> : <EmptyState title="No committed power yet" detail="Authenticated interval data will appear here without filling missing gaps." />}
+        {history24.isLoading ? <Loading label="Loading committed intervals" /> : history24.isError ? <ErrorState error={history24.error} /> : history24.data && chartData.length > 0 && hasCommittedPower ? <div className="chart-wrap" data-testid="usage-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart title={`Committed power over ${dashboardRangeLabel.toLowerCase()}`} desc="Authenticated sensor power intervals. Missing readings render as gaps." data={chartData} margin={{ top: 16, right: 12, bottom: 8, left: -12 }}><defs><linearGradient id="powerFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#65e692" stopOpacity={0.48} /><stop offset="100%" stopColor="#65e692" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" minTickGap={70} interval="preserveStartEnd" tickFormatter={(value: number) => chartTick(value, dashboardDays * 24, history24.data?.timezone ?? 'America/Los_Angeles')} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} width={42} unit=" kW" /><Tooltip content={<UsageTooltip timezone={history24.data.timezone} />} /><Area type="monotone" dataKey="valueKw" stroke="#65e692" strokeWidth={2} fill="url(#powerFill)" connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom committed power History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#151d1a" tickFormatter={() => ''} /></AreaChart></ResponsiveContainer></div> : <EmptyState title="No committed power yet" detail={scopedBacklog > 0 ? `${scopedBacklog.toLocaleString()} authenticated intervals remain queued on the selected scope; History will appear after server acknowledgement.` : 'Authenticated interval data will appear here without filling missing gaps.'} />}
         <div className="chart-footer"><Clock3 aria-hidden="true" /><span>{dateTime(new Date(now.getTime() - dashboardDays * 86_400_000).toISOString(), history24.data?.timezone)} – {dateTime(now.toISOString(), history24.data?.timezone)}</span>{history24.data && <span>{percent(history24.data.completeness === null ? null : Number(history24.data.completeness))} complete · {history24.data.missing_ranges.length} gap{history24.data.missing_ranges.length === 1 ? '' : 's'}</span>}</div>
       </Card>}
       {visibleCards.has('energy') && <Card title="Daily Energy (kWh)" eyebrow="Committed, non-overlapping totals" action={<span className="select-chip">{dashboardRangeLabel}</span>} className="dashboard-chart-card dashboard-daily-energy">

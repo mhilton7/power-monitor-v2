@@ -47,6 +47,7 @@ test('Home totals a verified live aggregate and uses adaptive power units per se
       ...home,
       devices: [indoor, outdoor],
       summary_scope: { kind: 'verified_aggregate', device_id: null, device_ids: ['device-main', 'device-outdoor'], aggregate: true, circuit_id: 'circuit-aggregate' },
+      aggregate_measurement: { state: 'live', active_power_w: 2000, member_device_ids: ['device-main', 'device-outdoor'], voltage_v: null, frequency_hz: null, power_factor: null },
     },
     devicesOverride: [device, { ...device, id: 'device-outdoor', friendly_name: 'Outdoor AC' }],
   });
