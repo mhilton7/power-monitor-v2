@@ -10,6 +10,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20260817_0015"
@@ -26,7 +27,12 @@ def upgrade() -> None:
     op.add_column("rate_plan_versions", sa.Column("tier_threshold_source_days", sa.Integer()))
     op.add_column(
         "rate_plan_versions",
-        sa.Column("tier1_boundary_inclusive", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column(
+            "tier1_boundary_inclusive",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.true(),
+        ),
     )
 
     op.create_table(
@@ -54,7 +60,8 @@ def upgrade() -> None:
             name="ck_firmware_batch_rollout",
         ),
         sa.CheckConstraint(
-            "state IN ('queued','in_progress','partial','succeeded','failed','cancelled','expired')",
+            "state IN "
+            "('queued','in_progress','partial','succeeded','failed','cancelled','expired')",
             name="ck_firmware_batch_state",
         ),
     )
