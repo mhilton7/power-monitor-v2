@@ -76,7 +76,7 @@ describe('Home', () => {
     expect(sensor).not.toBeNull();
     expect(within(sensor!).getByText('0 W')).toBeInTheDocument();
     expect(within(sensor!).getByText('Not available')).toBeInTheDocument();
-    expect(screen.getByText(/Live heartbeat measurement · not yet committed History/)).toBeInTheDocument();
+    expect(screen.getByText(/Live readings can appear before saved History because stored readings must be accepted by the server first/)).toBeInTheDocument();
     expect(screen.getByText('$0.17 / kWh')).toBeInTheDocument();
   });
 
@@ -126,8 +126,14 @@ describe('Home', () => {
     renderWithProviders(<HomePage />);
 
     expect(await screen.findByLabelText('2 kilowatts')).toBeInTheDocument();
-    expect(screen.getByText('Combined authenticated power from 2 verified non-overlapping live sensors.')).toBeInTheDocument();
+    expect(screen.getByText('Main service combines live power from 2 non-overlapping sensors.')).toBeInTheDocument();
     expect(screen.getByText('2 Live')).toBeInTheDocument();
+    const liveCard = screen.getByRole('heading', { name: 'Live Power Usage' }).closest('.card');
+    expect(liveCard).not.toBeNull();
+    expect(within(liveCard as HTMLElement).queryByText('Voltage')).not.toBeInTheDocument();
+    expect(within(liveCard as HTMLElement).queryByText('Current')).not.toBeInTheDocument();
+    expect(within(liveCard as HTMLElement).queryByText('Frequency')).not.toBeInTheDocument();
+    expect(within(liveCard as HTMLElement).queryByText('PF')).not.toBeInTheDocument();
     const indoorRow = screen.getByRole('rowheader', { name: /Main Panel Sensor/ }).closest<HTMLElement>('[role="row"]');
     const outdoorRow = screen.getByRole('rowheader', { name: /Outdoor AC/ }).closest<HTMLElement>('[role="row"]');
     expect(indoorRow).not.toBeNull();
@@ -151,7 +157,7 @@ describe('Home', () => {
 
     expect(await screen.findByLabelText('Power gauge unavailable')).toBeInTheDocument();
     expect(screen.queryByLabelText('600 watts')).not.toBeInTheDocument();
-    expect(screen.getByText('1 verified aggregate member unavailable; partial power is not shown or treated as zero.')).toBeInTheDocument();
+    expect(screen.getByText('1 Main service sensor is unavailable; partial power is not shown or treated as zero.')).toBeInTheDocument();
   });
 
   it('does not double-count multiple sensors without a verified aggregate scope', async () => {
@@ -167,7 +173,7 @@ describe('Home', () => {
 
     expect(await screen.findByLabelText('10 watts')).toBeInTheDocument();
     expect(screen.queryByLabelText('30 watts')).not.toBeInTheDocument();
-    expect(screen.getByText('Live heartbeat measurement · not yet committed History')).toBeInTheDocument();
+    expect(screen.getByText(/Live readings can appear before saved History because stored readings must be accepted by the server first/)).toBeInTheDocument();
   });
 
   it('uses the server-selected healthy sensor when the first sensor has no meter reading', async () => {
@@ -194,7 +200,7 @@ describe('Home', () => {
     renderWithProviders(<HomePage />);
 
     expect(await screen.findByLabelText('12.8 watts')).toBeInTheDocument();
-    expect(screen.getByText(/Authenticated Outdoor-AC reading updated/)).toBeInTheDocument();
+    expect(screen.getByText(/Outdoor-AC live reading updated/)).toBeInTheDocument();
     await waitFor(() => expect(historyRequests.every((path) => path.includes('device_id=device-outdoor'))).toBe(true));
   });
 

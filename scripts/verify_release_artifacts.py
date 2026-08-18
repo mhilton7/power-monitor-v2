@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 
 try:
@@ -56,6 +57,46 @@ def verify_release_artifacts(manifest_path: Path) -> None:
     version = manifest.get("version")
     if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
         raise ValueError("release manifest version is invalid")
+    database = manifest.get("database")
+    if (
+        not isinstance(database, dict)
+        or not isinstance(database.get("expected_migration"), str)
+        or not database["expected_migration"].replace("_", "").isdigit()
+    ):
+        raise ValueError("release manifest lacks the expected database migration")
+    frontend = manifest.get("frontend")
+    if (
+        not isinstance(frontend, dict)
+        or not isinstance(frontend.get("version"), str)
+        or not VERSION_RE.fullmatch(frontend["version"])
+        or not isinstance(frontend.get("revision"), str)
+        or not re.fullmatch(r"[0-9a-f]{40,64}", frontend["revision"])
+        or not isinstance(frontend.get("static_asset_build_id"), str)
+        or not frontend["static_asset_build_id"]
+        or not isinstance(frontend.get("build_time"), str)
+        or not frontend["build_time"]
+    ):
+        raise ValueError("release manifest lacks frontend build identity")
+    firmware = manifest.get("firmware")
+    if not isinstance(firmware, dict):
+        raise ValueError("release manifest lacks firmware identity metadata")
+    expected_firmware_repository = "https://github.com/mhilton7/power-monitor-sensor-headless"
+    if firmware.get("repository") != expected_firmware_repository:
+        raise ValueError("release manifest firmware repository is invalid")
+    if not isinstance(firmware.get("build_id"), int) or firmware["build_id"] < 1:
+        raise ValueError("release manifest firmware build identifier is invalid")
+    if firmware.get("protocol") != manifest["protocol"]:
+        raise ValueError("release manifest firmware protocol is incompatible")
+    if not isinstance(firmware.get("revision"), str) or len(firmware["revision"]) < 40:
+        raise ValueError("release manifest firmware revision is invalid")
+    image_sha256 = firmware.get("image_sha256")
+    if not isinstance(image_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", image_sha256):
+        raise ValueError("release manifest firmware digest is invalid")
+    firmware_release_url = manifest.get("firmware_release_url")
+    if firmware_release_url != (
+        f"{expected_firmware_repository}/releases/tag/{firmware.get('tag')}"
+    ):
+        raise ValueError("release manifest firmware URL and tag do not match")
     component_services = {
         "api": ("initialize", "migrate", "api", "worker"),
         "frontend": ("frontend",),
@@ -71,6 +112,23 @@ def verify_release_artifacts(manifest_path: Path) -> None:
                 raise ValueError(
                     f"Compose service {service_name} does not match manifest {component} image"
                 )
+    runtime_environment = services["api"].get("environment")
+    if not isinstance(runtime_environment, dict):
+        raise ValueError("API runtime identity environment is missing")
+    expected_runtime_identity = {
+        "PM_RELEASE_VERSION": version,
+        "PM_RELEASE_REVISION": manifest.get("revision"),
+        "PM_API_IMAGE_DIGEST": images["api"]["digest"],
+        "PM_FRONTEND_VERSION": frontend["version"],
+        "PM_FRONTEND_REVISION": frontend["revision"],
+        "PM_FRONTEND_BUILD_TIME": frontend["build_time"],
+        "PM_FRONTEND_IMAGE_DIGEST": images["frontend"]["digest"],
+        "PM_FRONTEND_STATIC_ASSET_ID": frontend["static_asset_build_id"],
+        "PM_EXPECTED_DATABASE_REVISION": database["expected_migration"],
+    }
+    for key, expected in expected_runtime_identity.items():
+        if runtime_environment.get(key) != expected:
+            raise ValueError(f"API runtime identity {key} does not match the release manifest")
     if release_status == "stable_physical_certification_passed":
         certification = manifest.get("hardware_certification")
         if not isinstance(certification, dict) or certification.get("status") != "passed":
@@ -87,9 +145,6 @@ def verify_release_artifacts(manifest_path: Path) -> None:
             raise ValueError("hardware certification schema mismatch")
         if parsed_evidence.get("result") != "pass":
             raise ValueError("hardware certification did not pass")
-        firmware = manifest.get("firmware")
-        if not isinstance(firmware, dict):
-            raise ValueError("stable release lacks firmware identity metadata")
         evidence_firmware = parsed_evidence.get("firmware")
         if not isinstance(evidence_firmware, dict):
             raise ValueError("hardware certification lacks firmware identity")

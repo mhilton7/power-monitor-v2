@@ -10,19 +10,29 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 
-async def _aggregate(*, include_second: bool) -> tuple[str, tuple[str, str], datetime, datetime]:
+async def _aggregate(
+    *, include_second: bool, first_power_mw: int = 100_000
+) -> tuple[str, tuple[str, str], datetime, datetime]:
     start = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=5)
     end = start + timedelta(minutes=1)
     async with session_factory() as session:
         home_id = await session.scalar(select(Home.id))
         assert home_id is not None
-        circuit = Circuit(home_id=home_id, name="Verified sum", aggregate_mode="verified_sum")
+        circuit = Circuit(
+            home_id=home_id,
+            name="Main service",
+            purpose="whole_home_total",
+            is_home_total=True,
+            aggregate_mode="verified_sum",
+            non_overlapping_confirmed=True,
+        )
         session.add(circuit)
         await session.flush()
         first = Device(
             home_id=home_id,
             circuit_id=circuit.id,
             friendly_name="Branch A",
+            display_order=1,
             pzem_variant="pzem004t-v4-classic-candidate",
             ct_rating_a=100,
         )
@@ -30,13 +40,14 @@ async def _aggregate(*, include_second: bool) -> tuple[str, tuple[str, str], dat
             home_id=home_id,
             circuit_id=circuit.id,
             friendly_name="Branch B",
+            display_order=2,
             pzem_variant="pzem004t-v4-classic-candidate",
             ct_rating_a=100,
         )
         session.add_all((first, second))
         await session.flush()
         for index, (device, power_mw, energy_mwh) in enumerate(
-            ((first, 100_000, 1_667), (second, 200_000, 3_333)), start=1
+            ((first, first_power_mw, 1_667), (second, 200_000, 3_333)), start=1
         ):
             if index == 2 and not include_second:
                 continue
@@ -131,3 +142,60 @@ async def test_verified_aggregate_never_bridges_a_missing_member(
     assert response.json()["energy_kwh"] is None
     assert Decimal(response.json()["completeness"]) == Decimal("0.5")
     assert any(item.get("device_id") == devices[1] for item in response.json()["missing_ranges"])
+
+
+@pytest.mark.asyncio
+async def test_history_defaults_to_main_service_and_never_sums_non_additive_measurements(
+    owner_client: AsyncClient,
+) -> None:
+    circuit_id, devices, start, end = await _aggregate(include_second=True)
+    default_response = await owner_client.get(
+        "/api/v1/history",
+        params={
+            "from": start.isoformat(),
+            "to": end.isoformat(),
+            "metric": "power",
+            "resolution_seconds": 60,
+        },
+    )
+    assert default_response.status_code == 200, default_response.text
+    assert default_response.json()["scope"] == {
+        "device_ids": list(devices),
+        "aggregate": True,
+        "circuit_id": circuit_id,
+    }
+    assert default_response.json()["points"][0]["value"] == "0.3"
+
+    for metric in ("voltage", "current", "frequency", "power_factor"):
+        response = await owner_client.get(
+            "/api/v1/history",
+            params={
+                "from": start.isoformat(),
+                "to": end.isoformat(),
+                "metric": metric,
+                "aggregate_circuit_id": circuit_id,
+                "resolution_seconds": 60,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["points"][0]["value"] is None
+
+
+@pytest.mark.asyncio
+async def test_partial_individual_history_and_measured_zero_remain_visible(
+    owner_client: AsyncClient,
+) -> None:
+    _circuit_id, devices, start, _end = await _aggregate(include_second=True, first_power_mw=0)
+    response = await owner_client.get(
+        "/api/v1/history",
+        params={
+            "from": start.isoformat(),
+            "to": (start + timedelta(minutes=5)).isoformat(),
+            "metric": "power",
+            "device_id": devices[0],
+            "resolution_seconds": 300,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["points"][0]["value"] == "0"
+    assert Decimal(response.json()["completeness"]) == Decimal("0.2")

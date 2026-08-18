@@ -24,7 +24,7 @@ class EventSourceMock extends EventTarget {
 }
 
 Object.defineProperty(globalThis, 'ResizeObserver', { value: ResizeObserverMock, writable: true });
-Object.defineProperty(globalThis, 'EventSource', { value: EventSourceMock, writable: true });
+Object.defineProperty(globalThis, 'EventSource', { value: EventSourceMock, writable: true, configurable: true });
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: (query: string) => ({

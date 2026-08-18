@@ -9,7 +9,7 @@ from urllib.parse import quote_plus
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .constants import DEFAULT_TIMEZONE
+from .constants import DEFAULT_TIMEZONE, VERSION
 
 RATE_SOURCE_OPERATION_TIMEOUT_MAX_SECONDS = 25.0
 DEFAULT_SCE_RATE_SOURCE_URL = (
@@ -43,6 +43,17 @@ class Settings(BaseSettings):
     log_dir: Path | None = None
     log_retention_days: int = Field(default=90, ge=1, le=3650)
     backup_status_dir: Path = Path("/data/backup-status")
+    release_version: str = VERSION
+    release_revision: str = "unknown"
+    build_revision: str = "unknown"
+    build_time: str = "unknown"
+    api_image_digest: str = "unknown"
+    frontend_version: str = "unknown"
+    frontend_revision: str = "unknown"
+    frontend_build_time: str = "unknown"
+    frontend_image_digest: str = "unknown"
+    frontend_static_asset_id: str = "unknown"
+    expected_database_revision: str = "20260817_0016"
     bill_import_timeout_seconds: int = Field(default=30, ge=5, le=60)
     rate_artifact_dir: Path = Path("/data/rate-source-artifacts")
     firmware_dir: Path = Path("/data/firmware")

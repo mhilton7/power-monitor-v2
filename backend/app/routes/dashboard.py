@@ -318,6 +318,12 @@ async def _current_rate(
             )
         )
     ).all()
+    tier_requires_usage = version.pricing_model in ("tiered", "seasonal_tiered") or any(
+        period.tier_start_kwh > 0 or period.tier_end_kwh is not None for period in candidates
+    )
+    cycle_summary = await _summary(session, device_ids, cycle_start, now)
+    reading_coverage = Decimal(str(cycle_summary["completeness"]))
+    tier_confirmed = not tier_requires_usage or reading_coverage >= Decimal("1")
     candidates = [
         period
         for period in candidates
@@ -353,7 +359,7 @@ async def _current_rate(
     period = candidates[0] if len(candidates) == 1 else None
     effective_price = None
     next_change_at = None
-    if period is not None:
+    if period is not None and tier_confirmed:
         effective_price = period.price_per_kwh + version.cca_adjustment_per_kwh
         effective_price += effective_price * version.surcharge_percent / Decimal(100)
         baseline_applies = (
@@ -373,7 +379,20 @@ async def _current_rate(
         "plan_name": plan.name,
         "version_id": version.id,
         "effective_start": version.effective_start,
-        "period": period.period_name if period else None,
+        "period": period.period_name if period and tier_confirmed else None,
+        "tier_state": (
+            period.period_name
+            if period and tier_confirmed
+            else "not_confirmed"
+            if tier_requires_usage
+            else None
+        ),
+        "tier_confirmed": tier_confirmed,
+        "tier_confirmation_rule": (
+            "requires_100_percent_reading_coverage" if tier_requires_usage else "not_applicable"
+        ),
+        "reading_coverage": reading_coverage,
+        "tier_1_allowance_kwh": effective_tier_threshold,
         "price_per_kwh": effective_price,
         "base_price_per_kwh": period.price_per_kwh if period else None,
         "cca_adjustment_per_kwh": version.cca_adjustment_per_kwh,
@@ -478,6 +497,17 @@ async def home_dashboard(
     summary_home_id = scoped_home_id
     selected_aggregate_circuit_id = aggregate_circuit_id
     if device_id is None and selected_aggregate_circuit_id is None:
+        designated = await session.scalar(
+            select(Circuit).where(
+                Circuit.home_id == scoped_home_id,
+                Circuit.is_home_total.is_(True),
+                Circuit.aggregate_mode == "verified_sum",
+                Circuit.non_overlapping_confirmed.is_(True),
+            )
+        )
+        if designated is not None:
+            selected_aggregate_circuit_id = designated.id
+    if device_id is None and selected_aggregate_circuit_id is None:
         candidate_members: dict[str, tuple[str, ...]] = {}
         for candidate_id in {
             device.circuit_id
@@ -513,12 +543,19 @@ async def home_dashboard(
         if circuit is None:
             raise NotFound("verified aggregate does not exist")
         ids = tuple(
-            device.id
-            for device in devices
-            if device.circuit_id == circuit.id and device.include_in_aggregate
+            (
+                await session.scalars(
+                    select(Device.id)
+                    .where(
+                        Device.circuit_id == circuit.id,
+                        Device.include_in_aggregate.is_(True),
+                    )
+                    .order_by(Device.display_order, Device.id)
+                )
+            ).all()
         )
         if not ids:
-            raise NotFound("verified aggregate has no active sensors")
+            raise NotFound("verified aggregate has no sensors")
         summary_kind = "verified_aggregate"
     elif device_id:
         selected_device = next((device for device in devices if device.id == device_id), None)
@@ -597,9 +634,11 @@ async def home_dashboard(
         )
     aggregate_measurement: dict[str, object] | None = None
     if summary_kind == "verified_aggregate":
-        aggregate_members = [device_items[member_id] for member_id in ids]
+        aggregate_members = [device_items.get(member_id) for member_id in ids]
         powers: list[Decimal] = []
         for aggregate_item in aggregate_members:
+            if aggregate_item is None:
+                continue
             item_measurement = aggregate_item.get("measurement")
             if aggregate_item["state"] != "live" or not isinstance(item_measurement, dict):
                 continue
@@ -726,38 +765,65 @@ async def history(
         ).all()
     )
     aggregate = False
+    selected_circuit: Circuit | None = None
     if aggregate_circuit_id:
-        circuit = await session.scalar(
+        selected_circuit = await session.scalar(
             select(Circuit).where(
                 Circuit.id == aggregate_circuit_id,
                 Circuit.home_id == scoped_home_id,
                 Circuit.aggregate_mode == "verified_sum",
             )
         )
-        if circuit is None:
+        if selected_circuit is None:
             raise NotFound("verified aggregate does not exist")
         device_ids = tuple(
             device.id
             for device in (
                 await session.scalars(
                     select(Device).where(
-                        Device.circuit_id == circuit.id,
+                        Device.circuit_id == selected_circuit.id,
                         Device.home_id == scoped_home_id,
-                        Device.revoked_at.is_(None),
                         Device.include_in_aggregate.is_(True),
                     )
                 )
             ).all()
         )
         if not device_ids:
-            raise NotFound("verified aggregate has no active sensors")
+            raise NotFound("verified aggregate has no sensors")
         aggregate = True
     elif device_id:
         if device_id not in device_ids:
             raise NotFound("device does not exist")
         device_ids = (device_id,)
-    elif len(device_ids) > 1:
-        device_ids = (device_ids[0],)
+    else:
+        selected_circuit = await session.scalar(
+            select(Circuit).where(
+                Circuit.home_id == scoped_home_id,
+                Circuit.is_home_total.is_(True),
+                Circuit.aggregate_mode == "verified_sum",
+                Circuit.non_overlapping_confirmed.is_(True),
+            )
+        )
+        if selected_circuit is not None:
+            aggregate_circuit_id = selected_circuit.id
+            device_ids = tuple(
+                (
+                    await session.scalars(
+                        select(Device.id)
+                        .where(
+                            Device.circuit_id == selected_circuit.id,
+                            Device.home_id == scoped_home_id,
+                            Device.include_in_aggregate.is_(True),
+                        )
+                        .order_by(Device.display_order, Device.id)
+                    )
+                ).all()
+            )
+            if not device_ids:
+                raise NotFound("home-total service branch has no sensors")
+            aggregate = True
+        elif len(device_ids) > 1:
+            device_ids = (device_ids[0],)
     bucket = _bucket_seconds(start, end, resolution_seconds)
     rows = (
         await session.execute(
@@ -861,7 +927,7 @@ async def history(
         values = [item for intervals in by_device.values() for item in intervals]
         energy_mwh = sum(interval.energy_mwh for interval, _raw in values)
         costs_complete = (
-            membership_complete
+            (membership_complete or not aggregate)
             and bool(values)
             and all(interval.id in cost_by_interval for interval, _raw in values)
         )
@@ -869,7 +935,7 @@ async def history(
             sum(cost_by_interval[interval.id] for interval, _raw in values) if costs_complete else 0
         )
         value: Decimal | None = None
-        if membership_complete and values:
+        if values and (membership_complete or not aggregate):
             if metric == "power":
                 device_means: list[Decimal] = []
                 for selected_device_id in device_ids:
@@ -899,7 +965,7 @@ async def history(
                 value = Decimal(energy_mwh) / Decimal(1_000_000)
             elif metric == "cost":
                 value = Decimal(cost_micro) / Decimal(1_000_000) if costs_complete else None
-            else:
+            elif not aggregate:
                 assert field_name is not None
                 device_means = []
                 for selected_device_id in device_ids:
@@ -924,11 +990,7 @@ async def history(
                         break
                     device_means.append(weighted / duration)
                 if len(device_means) == len(device_ids):
-                    combined = (
-                        sum(device_means, Decimal(0))
-                        if metric == "current"
-                        else sum(device_means, Decimal(0)) / Decimal(len(device_means))
-                    )
+                    combined = sum(device_means, Decimal(0)) / Decimal(len(device_means))
                     value = combined / Decimal(divisors[metric])
         quality = (
             sum(device_quality.values(), Decimal(0)) / (expected_seconds * Decimal(len(device_ids)))
@@ -1074,12 +1136,16 @@ async def list_devices(
     ).all()
     result: list[dict[str, object]] = []
     for device in devices:
-        heartbeat = await session.scalar(
-            select(DeviceHeartbeat)
-            .where(DeviceHeartbeat.device_id == device.id)
-            .order_by(DeviceHeartbeat.received_at.desc())
-            .limit(1)
-        )
+        heartbeats = (
+            await session.scalars(
+                select(DeviceHeartbeat)
+                .where(DeviceHeartbeat.device_id == device.id)
+                .order_by(DeviceHeartbeat.received_at.desc())
+                .limit(2)
+            )
+        ).all()
+        heartbeat = heartbeats[0] if heartbeats else None
+        prior_heartbeat = heartbeats[1] if len(heartbeats) > 1 else None
         last_command = await session.scalar(
             select(DeviceCommand)
             .where(DeviceCommand.device_id == device.id)
@@ -1103,6 +1169,29 @@ async def list_devices(
                 DeviceCredential.revoked_at.is_(None),
             )
             .order_by(DeviceCredential.key_version.desc())
+        )
+        queue_drain_rate = None
+        if heartbeat is not None and prior_heartbeat is not None:
+            elapsed_minutes = (
+                aware_utc(heartbeat.received_at) - aware_utc(prior_heartbeat.received_at)
+            ).total_seconds() / 60
+            if elapsed_minutes > 0:
+                queue_drain_rate = Decimal(prior_heartbeat.backlog - heartbeat.backlog) / Decimal(
+                    str(elapsed_minutes)
+                )
+        missing_prefix_status = "unavailable"
+        if heartbeat is not None and heartbeat.oldest_sequence is not None:
+            missing_prefix_status = (
+                "detected" if device.contiguous_ack + 1 < heartbeat.oldest_sequence else "none"
+            )
+        synchronization_errors = (
+            [
+                flag
+                for flag in heartbeat.health_flags
+                if flag.startswith(("BACKLOG_", "MISSING_PREFIX_", "SYNC_"))
+            ]
+            if heartbeat is not None
+            else []
         )
         result.append(
             {
@@ -1156,6 +1245,33 @@ async def list_devices(
                 "newest_sequence": heartbeat.newest_sequence if heartbeat else None,
                 "acknowledgement": device.contiguous_ack,
                 "backlog": heartbeat.backlog if heartbeat else None,
+                "synchronization": {
+                    "server_contiguous_acknowledgement": device.contiguous_ack,
+                    "earliest_sd_sequence": heartbeat.oldest_sequence if heartbeat else None,
+                    "latest_sd_sequence": heartbeat.newest_sequence if heartbeat else None,
+                    "queued_records": heartbeat.backlog if heartbeat else None,
+                    "last_attempted_batch_start": None,
+                    "last_attempted_batch_end": None,
+                    "last_batch_start": None,
+                    "last_batch_end": None,
+                    "selected_record_count": None,
+                    "measured_serialized_bytes": None,
+                    "serialized_bytes": None,
+                    "http_result": None,
+                    "last_accepted_sequence": device.contiguous_ack,
+                    "missing_prefix_status": missing_prefix_status,
+                    "last_synchronization_error": synchronization_errors[0]
+                    if synchronization_errors
+                    else None,
+                    "last_error": synchronization_errors[0] if synchronization_errors else None,
+                    "queue_drain_rate_per_minute": queue_drain_rate,
+                    "queue_drain_rate": queue_drain_rate,
+                    "unavailable_fields_reason": (
+                        "not reported by pm-protocol/1.0.0"
+                        if heartbeat is not None
+                        else "no authenticated heartbeat"
+                    ),
+                },
                 "free_internal_heap": heartbeat.free_internal_heap if heartbeat else None,
                 "largest_internal_block": heartbeat.largest_internal_block if heartbeat else None,
                 "last_reboot_reason": heartbeat.reboot_reason if heartbeat else None,

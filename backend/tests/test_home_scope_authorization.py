@@ -440,6 +440,27 @@ async def test_health_and_diagnostics_expose_only_actor_home_evidence(
     assert [sensor["device_id"] for sensor in body["sensors"]] == [owner_device_id]
     assert body["open_alert_count"] == 1
     assert body["last_rate_sync"]["event_code"] == "OWNER_SYNC"
+    synchronization = body["sensors"][0]["synchronization"]
+    assert {
+        "last_batch_start",
+        "selected_record_count",
+        "serialized_bytes",
+        "http_result",
+        "last_error",
+        "queue_drain_rate",
+    }.issubset(synchronization)
+
+    device_response = await owner_client.get("/api/v1/devices", params={"home_id": owner_home_id})
+    assert device_response.status_code == 200, device_response.text
+    device_synchronization = device_response.json()["devices"][0]["synchronization"]
+    assert {
+        "last_batch_start",
+        "selected_record_count",
+        "serialized_bytes",
+        "http_result",
+        "last_error",
+        "queue_drain_rate",
+    }.issubset(device_synchronization)
 
     bundle = await owner_client.get("/api/v1/diagnostics/bundle")
     assert bundle.status_code == 200, bundle.text

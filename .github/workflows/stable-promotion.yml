@@ -283,12 +283,17 @@ jobs:
             --frontend-digest "${{ steps.images.outputs.frontend_digest }}" \
             --gateway-digest "${{ steps.images.outputs.gateway_digest }}" \
             --backup-digest "${{ steps.images.outputs.backup_digest }}" \
+            --build-time "$(jq -er '.frontend.build_time' release/promotion/server-candidate/release-manifest.json)" \
+            --frontend-version "$(jq -er '.version' release/promotion/server-candidate/release-manifest.json)" \
+            --frontend-asset-id "$(jq -er '.frontend.static_asset_build_id' release/promotion/server-candidate/release-manifest.json)" \
+            --database-revision "$(jq -er '.database.expected_migration' release/promotion/server-candidate/release-manifest.json)" \
             --release-status stable_physical_certification_passed \
             --compatible-firmware "${FIRMWARE_REPOSITORY}@${FIRMWARE_REVISION} (${FIRMWARE_TAG})" \
             --firmware-release-url "$FIRMWARE_RELEASE_URL" \
             --firmware-tag "$FIRMWARE_TAG" \
             --firmware-revision "$FIRMWARE_REVISION" \
             --firmware-image-sha256 "$firmware_image_sha256" \
+            --firmware-build-id "$(jq -er '.firmware.build_id' release/promotion/server-candidate/release-manifest.json)" \
             --hardware-certification-sha256 "$CERTIFICATION_SHA256"
           docker compose -f "release/promotion/stable/power-monitor-v2-${STABLE_TAG}.yaml" config --quiet
           python scripts/verify_release_artifacts.py \

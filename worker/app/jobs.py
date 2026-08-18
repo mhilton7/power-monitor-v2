@@ -181,7 +181,53 @@ async def _rate_for_interval(
     )
     effective_scope = "energy_only"
     member_ids: tuple[str, ...] = (device.id,)
-    if account.cost_scope in ("allocated_account", "full_account") and (
+    if account.cost_scope == "full_account":
+        home_total = await session.scalar(
+            select(Circuit).where(
+                Circuit.home_id == account.home_id,
+                Circuit.is_home_total.is_(True),
+                Circuit.aggregate_mode == "verified_sum",
+                Circuit.non_overlapping_confirmed.is_(True),
+            )
+        )
+        if home_total is not None:
+            designated_members = tuple(
+                sorted(
+                    (
+                        await session.scalars(
+                            select(Device.id).where(
+                                Device.circuit_id == home_total.id,
+                                Device.include_in_aggregate.is_(True),
+                            )
+                        )
+                    ).all()
+                )
+            )
+            if device.id in designated_members:
+                effective_scope = "full_account"
+                member_ids = designated_members
+        elif device.measurement_scope == account.cost_scope:
+            # Compatibility for an unambiguous legacy verified aggregate while
+            # a populated installation is still crossing revision 0016.
+            scoped_devices = (
+                await session.scalars(
+                    select(Device).where(
+                        Device.home_id == account.home_id,
+                        Device.revoked_at.is_(None),
+                        Device.measurement_scope == account.cost_scope,
+                    )
+                )
+            ).all()
+            if len(scoped_devices) == 1:
+                effective_scope = account.cost_scope
+            else:
+                circuit_ids = {item.circuit_id for item in scoped_devices}
+                circuit_id = next(iter(circuit_ids)) if len(circuit_ids) == 1 else None
+                circuit = await session.get(Circuit, circuit_id) if circuit_id else None
+                if circuit is not None and circuit.aggregate_mode == "verified_sum":
+                    effective_scope = account.cost_scope
+                    member_ids = tuple(sorted(item.id for item in scoped_devices))
+    elif account.cost_scope == "allocated_account" and (
         device.measurement_scope == account.cost_scope
     ):
         scoped_devices = (
@@ -223,27 +269,61 @@ async def _billing_scope_groups(
     if account.cost_scope == "energy_only":
         return [("energy_only", device.id, (device.id,)) for device in devices]
 
+    if account.cost_scope == "full_account":
+        home_total = await session.scalar(
+            select(Circuit).where(
+                Circuit.home_id == account.home_id,
+                Circuit.is_home_total.is_(True),
+                Circuit.aggregate_mode == "verified_sum",
+                Circuit.non_overlapping_confirmed.is_(True),
+            )
+        )
+        member_ids = (
+            tuple(
+                sorted(
+                    (
+                        await session.scalars(
+                            select(Device.id).where(
+                                Device.circuit_id == home_total.id,
+                                Device.include_in_aggregate.is_(True),
+                            )
+                        )
+                    ).all()
+                )
+            )
+            if home_total is not None
+            else ()
+        )
+        if home_total is not None and member_ids:
+            groups: list[tuple[str, str, tuple[str, ...]]] = [
+                ("energy_only", device.id, (device.id,))
+                for device in devices
+                if device.id not in member_ids
+            ]
+            groups.append(("full_account", home_total.id, member_ids))
+            return groups
+
     matching = [device for device in devices if device.measurement_scope == account.cost_scope]
-    groups: list[tuple[str, str, tuple[str, ...]]] = [
+    allocated_groups: list[tuple[str, str, tuple[str, ...]]] = [
         ("energy_only", device.id, (device.id,))
         for device in devices
         if device.measurement_scope != account.cost_scope
     ]
     if len(matching) == 1:
-        groups.append((account.cost_scope, matching[0].id, (matching[0].id,)))
+        allocated_groups.append((account.cost_scope, matching[0].id, (matching[0].id,)))
     elif len(matching) > 1:
         circuit_ids = {device.circuit_id for device in matching}
         circuit_id = next(iter(circuit_ids)) if len(circuit_ids) == 1 else None
         circuit = await session.get(Circuit, circuit_id) if circuit_id else None
         if circuit is not None and circuit.aggregate_mode == "verified_sum":
-            groups.append(
+            allocated_groups.append(
                 (
                     account.cost_scope,
                     circuit.id,
                     tuple(sorted(device.id for device in matching)),
                 )
             )
-    return groups
+    return allocated_groups
 
 
 def _billing_cycle_start(interval_start: datetime, account: UtilityAccount) -> datetime:

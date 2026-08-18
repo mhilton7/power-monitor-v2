@@ -8,17 +8,20 @@ Repository visibility is **public**, matching the verified public reference repo
 
 Server tags use semantic `vMAJOR.MINOR.PATCH` (prerelease suffix allowed). Breaking device changes require a coordinated protocol bump in both repositories; otherwise the manifest remains `pm-protocol/1.0.0` and names compatible firmware.
 
-`v0.1.0-rc.13` is the current immutable public server installation authority and
-the migration predecessor for rc.14. The valid signed server `v0.1.0-rc.4` tag
+`v0.1.0-rc.13` remains an immutable public server installation authority. The
+valid signed server `v0.1.0-rc.4` tag
 is historical failed prepublication evidence, not a Release. Hardware execution
 confirmed that firmware rc.1 through rc.5 crash in the main stack before
 provisioning. Public `v0.1.0-rc.13` delivered protected disposal of working
 artifacts and ordered staged OTA advancement through `20260817_0014`.
-Candidate `v0.1.0-rc.14` retains `pm-protocol/1.0.0`, extends the Alembic head
-to `20260817_0015`, adds structured SCE daily tier thresholds, and introduces
-bounded per-sensor OTA batches, retries, cancellation, and exact post-reboot
-version confirmation. It may be tagged only after the exact firmware rc.14 release is public and
-verified, and it may be published only after every automated gate passes.
+Candidate `v0.1.0-rc.16` retains `pm-protocol/1.0.0` and extends the Alembic
+head to `20260817_0016`. It adds named service branches with one explicitly
+designated Main service/home total, coverage-aware History and billing,
+server-observable synchronization diagnostics, and coordinated build identity.
+Firmware rc.15 remains immutable historical evidence and must not be relabeled.
+The exact firmware rc.16 metadata binding and artifacts must be created,
+published, and independently verified before the server rc.16 tag is created;
+server publication still requires every automated gate to pass.
 Stable publication remains blocked until physical hardware, TLS,
 OTA-install/rollback, and soak certification from the actual marked unit
 passes.
@@ -79,17 +82,21 @@ assertion. Its generated OpenAPI SHA-256 is
 
 Public rc.13 defaults Home live power and History to the unique verified
 aggregate, rejects partial live sums, and explains unacknowledged durable
-interval backlogs. Candidate rc.14 makes the extracted SCE summer baseline an
-exact operational daily allowance and exposes independent, bounded OTA jobs
-for every immutable sensor target. Firmware rc.14 changes only immutable
-identity and the coordinated contract binding. The generated rc.14 OpenAPI
-SHA-256 is bound by the matching firmware release; the shared protocol remains
-`pm-protocol/1.0.0` and Alembic head is `20260817_0015`.
+interval backlogs. Candidate rc.16 generalizes that aggregate into named
+service branches, migrates the existing verified aggregate to Main service,
+and requires an explicitly confirmed, non-overlapping multi-sensor home total.
+It renders valid partial per-sensor History while keeping an incomplete branch
+total unavailable when any required member is absent. Billing preserves exact
+tier and fixed-charge semantics as late authenticated intervals arrive.
+The generated rc.16 OpenAPI SHA-256 is
+`8c6d3d73f7bfaa4bd34b4451c860b4199426e556cba1f6f9a48374ea22049c24`;
+the shared protocol remains `pm-protocol/1.0.0` and Alembic head is
+`20260817_0016`.
 The checked-in YAML retains `UNPUBLISHED_*` sentinels until its tagged workflow
-supplies exact registry digests. Rc.14 must pass clean
+supplies exact registry digests. Rc.16 must pass clean
 dependency/backend/PostgreSQL gates, security scans, public package
 verification, first-run plus idempotent initializer smoke, checksums, and
-attestations. Its explicit migration chain extends to `20260817_0015`; the
+attestations. Its explicit migration chain extends to `20260817_0016`; the
 0008 preflight refuses conflicting immutable ingestion evidence without
 deleting or rewriting it. Revision 0011 uses PostgreSQL write locks across its
 preflight and guard installation. It enforces database-backed exact-home manual
@@ -102,9 +109,11 @@ published non-draft same-major public Release other than the current tag, then
 requires that selected tag to be semantically older and to have verified
 signed-tag ancestry. It fails closed if publication-date ordering selects a
 same-major tag that is not older; it does not search past it for a
-`latest lower same-major non-draft public release`. For rc.14, the public metadata
-therefore selects public rc.13; failed rc.2 and non-released rc.4 are never
-predecessors.
+`latest lower same-major non-draft public release`. For rc.16, public metadata
+must select the most recent qualifying immutable public predecessor; failed
+rc.2 and non-released rc.4 are never predecessors. For the historical rc.14
+candidate, the same selector therefore selects public rc.13; that historical
+selector evidence remains unchanged.
 Historical rc.3 evidence proved only forward rc.1-to-rc.3 upgrade. Rollback
 remains separately unproven and its
 smoke record is `not_exercised_github_hosted_smoke`.

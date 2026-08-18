@@ -26,6 +26,7 @@ from sqlalchemy import (
     event,
     func,
     select,
+    text,
 )
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -182,12 +183,37 @@ class Circuit(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     home_id: Mapped[str] = mapped_column(ForeignKey("homes.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500))
+    purpose: Mapped[str] = mapped_column(String(40), default="electrical_section", nullable=False)
+    is_home_total: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    non_overlapping_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     parent_id: Mapped[str | None] = mapped_column(ForeignKey("circuits.id", ondelete="SET NULL"))
     aggregate_mode: Mapped[str] = mapped_column(String(32), default="individual", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
     __table_args__ = (
         CheckConstraint(
             "aggregate_mode IN ('individual','verified_sum','parent_only')",
             name="aggregate_mode",
+        ),
+        CheckConstraint(
+            "purpose IN ('electrical_section','whole_home_total')",
+            name="purpose",
+        ),
+        CheckConstraint(
+            "is_home_total = false OR "
+            "(purpose = 'whole_home_total' AND aggregate_mode = 'verified_sum' "
+            "AND non_overlapping_confirmed = true)",
+            name="home_total_verified",
+        ),
+        Index(
+            "uq_circuits_one_home_total",
+            "home_id",
+            unique=True,
+            postgresql_where=text("is_home_total = true"),
+            sqlite_where=text("is_home_total = 1"),
         ),
     )
 

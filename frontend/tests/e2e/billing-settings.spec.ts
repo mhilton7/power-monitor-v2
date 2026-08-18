@@ -25,7 +25,7 @@ test('rate-source Check now and backup/system health evidence work', async ({ pa
   await page.getByRole('button', { name: /Backups & restore/ }).click();
   await expect(page.getByText('Backup checksum')).toBeVisible();
   await expect(page.getByText('Last isolated restore test')).toBeVisible();
-  await page.getByRole('button', { name: /Advanced system health/ }).click();
+  await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
   await expect(page.getByText('reachable')).toBeVisible();
 });
 
@@ -55,7 +55,7 @@ test('sensor enrollment, configuration and signed firmware surfaces use concrete
   await expect(page.getByRole('button', { name: /Main Panel Sensor/ })).toBeVisible();
   await page.getByRole('button', { name: 'Enroll sensor' }).click();
   await expect(page.getByRole('heading', { name: 'Create one-time sensor enrollment' })).toBeVisible();
-  await expect(page.getByText(/New one-CT sensors start in energy-only scope/)).toBeVisible();
+  await expect(page.getByText(/New one-CT sensors start with energy charges only/)).toBeVisible();
   await page.getByRole('button', { name: 'Cancel' }).click();
 
   await page.getByRole('button', { name: /Main Panel Sensor/ }).click();

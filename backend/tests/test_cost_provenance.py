@@ -22,11 +22,38 @@ from backend.app.models import (
     User,
     UtilityAccount,
 )
+from backend.app.schemas.device import DurableReading, ReadingBatchRequest
+from backend.app.services.ingestion import ingest_batch
 from backend.app.services.rate_workflow import replace_rate_assignment
 from httpx import AsyncClient
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from worker.app.jobs import calculate_billing_estimates, calculate_pending_costs
+
+
+def _backlog_record(*, sequence: int, start: datetime, energy_mwh: int) -> DurableReading:
+    return DurableReading(
+        sequence=sequence,
+        reset_generation=0,
+        interval_start_utc=start,
+        interval_end_utc=start + timedelta(minutes=1),
+        monotonic_start_us=sequence * 60_000_000,
+        monotonic_end_us=(sequence + 1) * 60_000_000,
+        sample_count=60,
+        expected_sample_count=60,
+        voltage_mv=120_000,
+        current_ma=1_000,
+        active_power_mw=600_000,
+        frequency_mhz=60_000,
+        power_factor_milli=1_000,
+        pzem_energy_wh=sequence,
+        interval_energy_mwh=energy_mwh,
+        energy_selection="pzem_delta",
+        pzem_status="ok",
+        time_trusted=True,
+        flags=[],
+        record_crc32=sequence,
+    )
 
 
 async def _published_rate(
@@ -197,6 +224,142 @@ async def test_repricing_preserves_old_cost_and_selects_only_new_rate(
         assert selected is not None
         assert selected.rate_plan_version_id == second.id
         assert selected.energy_cost_microdollars == 300_000
+
+
+@pytest.mark.asyncio
+async def test_late_backlog_reprices_later_tier_usage_without_mutating_evidence(
+    owner_client: AsyncClient,
+) -> None:
+    async with session_factory() as session:
+        home = await session.scalar(select(Home))
+        account = await session.scalar(select(UtilityAccount))
+        user_id = await session.scalar(select(User.id))
+        assert home is not None and account is not None and user_id is not None
+        device = Device(
+            home_id=home.id,
+            friendly_name="Backlog meter",
+            pzem_variant="pzem004t-v4-classic-candidate",
+            ct_rating_a=Decimal("100"),
+        )
+        plan = RatePlan(name="Tiered", utility_name="SCE", rate_class="test")
+        session.add_all((device, plan))
+        await session.flush()
+        version = RatePlanVersion(
+            rate_plan_id=plan.id,
+            version=1,
+            effective_start=datetime(2026, 1, 1, tzinfo=UTC),
+            timezone="America/Los_Angeles",
+            pricing_model="tiered",
+            source_hash="a" * 64,
+            algorithm_version="cost-v1",
+            state="draft",
+        )
+        session.add(version)
+        await session.flush()
+        session.add_all(
+            (
+                RatePeriod(
+                    rate_plan_version_id=version.id,
+                    season="all",
+                    day_type="all",
+                    period_name="tier-one",
+                    start_minute=0,
+                    end_minute=1440,
+                    price_per_kwh=Decimal("0.10"),
+                    tier_start_kwh=Decimal("0"),
+                    tier_end_kwh=Decimal("1"),
+                ),
+                RatePeriod(
+                    rate_plan_version_id=version.id,
+                    season="all",
+                    day_type="all",
+                    period_name="tier-two",
+                    start_minute=0,
+                    end_minute=1440,
+                    price_per_kwh=Decimal("0.30"),
+                    tier_start_kwh=Decimal("1"),
+                ),
+            )
+        )
+        await session.flush()
+        version.state = "published"
+        await session.flush()
+        session.add(
+            RateAssignment(
+                utility_account_id=account.id,
+                rate_plan_version_id=version.id,
+                effective_start=version.effective_start,
+                assigned_by_user_id=user_id,
+            )
+        )
+        start = datetime(2026, 8, 13, 20, tzinfo=UTC)
+
+        # Sequence 2 arrives and is priced before the earlier backlog record.
+        await ingest_batch(
+            session,
+            device.id,
+            ReadingBatchRequest(
+                protocol_id="pm-protocol/1.0.0",
+                records=[
+                    _backlog_record(
+                        sequence=2,
+                        start=start + timedelta(minutes=1),
+                        energy_mwh=600_000,
+                    )
+                ],
+            ),
+        )
+        assert await calculate_pending_costs(session) == 1
+        first_selected = await session.scalar(
+            select(IntervalCost)
+            .join(
+                IntervalCostSelection,
+                IntervalCostSelection.interval_cost_id == IntervalCost.id,
+            )
+            .join(
+                NormalizedInterval,
+                NormalizedInterval.id == IntervalCost.normalized_interval_id,
+            )
+            .where(NormalizedInterval.device_id == device.id)
+        )
+        assert first_selected is not None
+        assert first_selected.energy_cost_microdollars == 60_000
+
+        # The missing earlier record invalidates only mutable selections. The
+        # worker rebuilds both selections in chronological tier order.
+        await ingest_batch(
+            session,
+            device.id,
+            ReadingBatchRequest(
+                protocol_id="pm-protocol/1.0.0",
+                records=[_backlog_record(sequence=1, start=start, energy_mwh=600_000)],
+            ),
+        )
+        assert await session.scalar(select(func.count(IntervalCostSelection.interval_cost_id))) == 0
+        assert await calculate_pending_costs(session) == 2
+        await session.commit()
+
+        selected_rows = (
+            await session.execute(
+                select(NormalizedInterval.start_utc, IntervalCost.energy_cost_microdollars)
+                .join(
+                    IntervalCostSelection,
+                    IntervalCostSelection.interval_cost_id == IntervalCost.id,
+                )
+                .join(
+                    NormalizedInterval,
+                    NormalizedInterval.id == IntervalCost.normalized_interval_id,
+                )
+                .order_by(NormalizedInterval.start_utc)
+            )
+        ).all()
+        assert [(timestamp.replace(tzinfo=UTC), cost) for timestamp, cost in selected_rows] == [
+            (start, 60_000),
+            (start + timedelta(minutes=1), 100_000),
+        ]
+        assert await session.scalar(select(func.count(IntervalCost.id))) == 3
+        assert await session.scalar(select(func.count(RawReading.id))) == 2
+        assert await session.scalar(select(func.count(RatePlanVersion.id))) == 1
 
 
 @pytest.mark.asyncio

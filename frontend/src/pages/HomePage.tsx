@@ -136,7 +136,7 @@ function SensorHealthPanel({ data, details, onSelect }: {
   return <Card className="dashboard-sensor-health">
     <header className="dashboard-section-heading">
       <div><h2>Sensor health</h2><p>{aggregate}</p></div>
-      <p className="dashboard-sensor-scope"><Info aria-hidden="true" /> Individual live sensor scopes; parent and child circuits are never summed unless explicitly verified as non-overlapping.</p>
+      <p className="dashboard-sensor-scope"><Info aria-hidden="true" /> Each row shows one sensor. Sensors are combined only inside a service branch whose members were confirmed not to overlap.</p>
     </header>
     <div className="dashboard-sensor-table" role="table" aria-label="Sensor health and live electrical measurements">
       <div className="dashboard-sensor-row dashboard-sensor-header" role="row">
@@ -182,7 +182,7 @@ function UsageTooltip({ active, payload, timezone, unit = 'kW' }: {
 }) {
   const point = payload?.[0]?.payload;
   if (!active || !point) return null;
-  return <div className="chart-tooltip"><strong>{dateTime(point.timestamp, timezone)}</strong><span>{numeric(point.value === null ? null : Number(point.value), unit, 2)}</span><span>Estimated cost: {money(point.cost)}</span><span>Completeness: {percent(point.quality === null ? null : Number(point.quality))}</span></div>;
+  return <div className="chart-tooltip"><strong>{dateTime(point.timestamp, timezone)}</strong><span>{numeric(point.value === null ? null : Number(point.value), unit, 2)}</span><span>Estimated cost: {money(point.cost)}</span><span>Reading coverage: {percent(point.quality === null ? null : Number(point.quality))}</span></div>;
 }
 
 export function HomePage() {
@@ -200,9 +200,12 @@ export function HomePage() {
   const visibleCards = useMemo(() => new Set(preferences.data?.dashboard_cards ?? ['live_power', 'energy', 'cost', 'completeness', 'alerts']), [preferences.data?.dashboard_cards]);
   const home = useQuery({ queryKey: ['home', selectedHomeId], queryFn: () => api.home(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: refreshInterval });
   const devices = useQuery({ queryKey: ['devices', selectedHomeId], queryFn: () => api.devices(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: refreshInterval });
+  const circuits = useQuery({ queryKey: ['circuits', selectedHomeId], queryFn: () => api.circuits(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: refreshInterval });
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: api.alerts, refetchInterval: refreshInterval });
   const commandDeviceId = home.data?.summary_scope?.device_id ?? home.data?.devices[0]?.id ?? '';
   const aggregateCircuitId = home.data?.summary_scope?.aggregate ? home.data.summary_scope.circuit_id ?? '' : '';
+  const homeTotalBranch = circuits.data?.circuits.find((branch) => branch.id === aggregateCircuitId) ?? circuits.data?.circuits.find((branch) => branch.is_home_total);
+  const liveScopeName = homeTotalBranch?.name ?? (aggregateCircuitId ? 'Main service' : home.data?.devices.find((sensor) => sensor.id === commandDeviceId)?.friendly_name ?? 'Selected sensor');
   const historyDeviceId = aggregateCircuitId ? '' : commandDeviceId;
   const historyScopeKey = aggregateCircuitId ? `aggregate:${aggregateCircuitId}` : `device:${historyDeviceId}`;
   const history24 = useQuery({
@@ -277,14 +280,14 @@ export function HomePage() {
   const showOverview = visibleCards.has('live_power') || showSummary;
   const liveSupportingText = livePower.aggregate
     ? livePower.liveCount === 0
-      ? 'No authenticated live readings are available from the verified aggregate; missing readings remain missing.'
+      ? `${liveScopeName} has no live power reading yet; missing readings remain missing.`
       : livePower.liveCount === livePower.scopedCount
-        ? `Combined authenticated power from ${livePower.liveCount} verified non-overlapping live sensors.`
-        : `${livePower.scopedCount - livePower.liveCount} verified aggregate member${livePower.scopedCount - livePower.liveCount === 1 ? '' : 's'} unavailable; partial power is not shown or treated as zero.`
+        ? `${liveScopeName} combines live power from ${livePower.liveCount} non-overlapping sensors.`
+        : `${livePower.scopedCount - livePower.liveCount} ${liveScopeName} sensor${livePower.scopedCount - livePower.liveCount === 1 ? ' is' : 's are'} unavailable; partial power is not shown or treated as zero.`
     : measurement?.active_power_w === null || measurement?.active_power_w === undefined
       ? 'Live meter power is unavailable; missing readings remain missing.'
       : primary.state === 'live'
-        ? `Authenticated ${primary.friendly_name} reading updated ${timeAgo(measurement.measured_at)}.`
+        ? `${primary.friendly_name} live reading updated ${timeAgo(measurement.measured_at)}.`
         : `The sensor is ${primary.state.replaceAll('_', ' ')}; showing its latest authenticated reading.`;
 
   return <div className="home-dashboard dashboard-page">
@@ -303,10 +306,10 @@ export function HomePage() {
           <PowerGauge watts={livePower.watts} />
         </div>
         <p><Waves aria-hidden="true" />{liveSupportingText}</p>
-        <small>{livePower.aggregate ? 'Verified non-overlapping live scope' : 'Live heartbeat measurement'} · not yet committed History</small>
+        <small>Live readings can appear before saved History because stored readings must be accepted by the server first.</small>
       </Card>}
       {showSummary && <Card className="dashboard-summary-card">
-        {visibleCards.has('energy') && <SummaryMetric icon={<Zap aria-hidden="true" />} label="Today Energy" value={numeric(data.summaries.today.energy_kwh === null ? null : Number(data.summaries.today.energy_kwh), 'kWh')} detail="Authenticated sensor intervals" unavailable={data.summaries.today.energy_kwh === null} />}
+        {visibleCards.has('energy') && <SummaryMetric icon={<Zap aria-hidden="true" />} label="Today Energy" value={numeric(data.summaries.today.energy_kwh === null ? null : Number(data.summaries.today.energy_kwh), 'kWh')} detail="Accepted sensor readings" unavailable={data.summaries.today.energy_kwh === null} />}
         {visibleCards.has('cost') && <SummaryMetric icon={<CircleDollarSign aria-hidden="true" />} label="Today Estimated Cost" value={money(data.summaries.today.cost)} detail="Selected published rate" unavailable={data.summaries.today.cost === null} />}
         {visibleCards.has('cost') && <SummaryMetric icon={<CalendarDays aria-hidden="true" />} label="This Week Cost" value={money(data.summaries.week.cost)} {...(data.summaries.week.energy_kwh === null ? {} : { detail: `${numeric(Number(data.summaries.week.energy_kwh), 'kWh')} monitored` })} unavailable={data.summaries.week.cost === null} />}
         {visibleCards.has('cost') && <SummaryMetric icon={<Clock3 aria-hidden="true" />} label="Current Rate" value={data.current_rate?.price_per_kwh === null || data.current_rate?.price_per_kwh === undefined ? '—' : `${money(data.current_rate.price_per_kwh)} / kWh`} detail={data.current_rate ? `${data.current_rate.period ?? 'Current period'} · ${data.current_rate.plan_name}` : 'No published rate'} unavailable={!data.current_rate || data.current_rate.price_per_kwh === null} />}
@@ -315,13 +318,13 @@ export function HomePage() {
 
     <SensorHealthPanel data={data} details={devices.data?.devices ?? []} onSelect={setSelectedDevice} />
 
-    <section className="dashboard-content" aria-label="Committed usage, commands, and alerts">
-      {(visibleCards.has('live_power') || visibleCards.has('completeness')) && <Card title={`Power History – ${dashboardRangeLabel}`} eyebrow="Committed sensor intervals" action={<span className="select-chip">kW</span>} className="dashboard-chart-card dashboard-power-history">
-        {history24.isLoading ? <Loading label="Loading committed intervals" /> : history24.isError ? <ErrorState error={history24.error} /> : history24.data && chartData.length > 0 && hasCommittedPower ? <div className="chart-wrap" data-testid="usage-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart title={`Committed power over ${dashboardRangeLabel.toLowerCase()}`} desc="Authenticated sensor power intervals. Missing readings render as gaps." data={chartData} margin={{ top: 16, right: 12, bottom: 8, left: -12 }}><defs><linearGradient id="powerFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#65e692" stopOpacity={0.48} /><stop offset="100%" stopColor="#65e692" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" minTickGap={70} interval="preserveStartEnd" tickFormatter={(value: number) => chartTick(value, dashboardDays * 24, history24.data?.timezone ?? 'America/Los_Angeles')} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} width={42} unit=" kW" /><Tooltip content={<UsageTooltip timezone={history24.data.timezone} />} /><Area type="monotone" dataKey="valueKw" stroke="#65e692" strokeWidth={2} fill="url(#powerFill)" connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom committed power History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#151d1a" tickFormatter={() => ''} /></AreaChart></ResponsiveContainer></div> : <EmptyState title="No committed power yet" detail={scopedBacklog > 0 ? `${scopedBacklog.toLocaleString()} authenticated intervals remain queued on the selected scope; History will appear after server acknowledgement.` : 'Authenticated interval data will appear here without filling missing gaps.'} />}
-        <div className="chart-footer"><Clock3 aria-hidden="true" /><span>{dateTime(new Date(now.getTime() - dashboardDays * 86_400_000).toISOString(), history24.data?.timezone)} – {dateTime(now.toISOString(), history24.data?.timezone)}</span>{history24.data && <span>{percent(history24.data.completeness === null ? null : Number(history24.data.completeness))} complete · {history24.data.missing_ranges.length} gap{history24.data.missing_ranges.length === 1 ? '' : 's'}</span>}</div>
+    <section className="dashboard-content" aria-label="Saved usage, commands, and alerts">
+      {(visibleCards.has('live_power') || visibleCards.has('completeness')) && <Card title={`Power History – ${dashboardRangeLabel}`} eyebrow="Saved sensor readings" action={<span className="select-chip">kW</span>} className="dashboard-chart-card dashboard-power-history">
+        {history24.isLoading ? <Loading label="Loading saved readings" /> : history24.isError ? <ErrorState error={history24.error} /> : history24.data && chartData.length > 0 && hasCommittedPower ? <div className="chart-wrap" data-testid="usage-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart title={`Saved power over ${dashboardRangeLabel.toLowerCase()}`} desc="Saved sensor power. Missing readings render as gaps." data={chartData} margin={{ top: 16, right: 12, bottom: 8, left: -12 }}><defs><linearGradient id="powerFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#65e692" stopOpacity={0.48} /><stop offset="100%" stopColor="#65e692" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" minTickGap={70} interval="preserveStartEnd" tickFormatter={(value: number) => chartTick(value, dashboardDays * 24, history24.data?.timezone ?? 'America/Los_Angeles')} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} width={42} unit=" kW" /><Tooltip content={<UsageTooltip timezone={history24.data.timezone} />} /><Area type="monotone" dataKey="valueKw" stroke="#65e692" strokeWidth={2} fill="url(#powerFill)" connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom saved power History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#151d1a" tickFormatter={() => ''} /></AreaChart></ResponsiveContainer></div> : <EmptyState title="No saved power readings yet" detail={scopedBacklog > 0 ? `${scopedBacklog.toLocaleString()} reading${scopedBacklog === 1 ? ' is' : 's are'} waiting to sync.` : 'Missing readings remain gaps instead of being changed to zero.'} />}
+        <div className="chart-footer"><Clock3 aria-hidden="true" /><span>{dateTime(new Date(now.getTime() - dashboardDays * 86_400_000).toISOString(), history24.data?.timezone)} – {dateTime(now.toISOString(), history24.data?.timezone)}</span>{history24.data && <span>{percent(history24.data.completeness === null ? null : Number(history24.data.completeness))} reading coverage · {history24.data.missing_ranges.length} gap{history24.data.missing_ranges.length === 1 ? '' : 's'}</span>}</div>
       </Card>}
-      {visibleCards.has('energy') && <Card title="Daily Energy (kWh)" eyebrow="Committed, non-overlapping totals" action={<span className="select-chip">{dashboardRangeLabel}</span>} className="dashboard-chart-card dashboard-daily-energy">
-        {daily.isLoading ? <Loading label="Loading daily energy" /> : daily.isError ? <ErrorState error={daily.error} /> : daily.data && dailyData.length > 0 ? <div className="chart-wrap" data-testid="daily-chart"><ResponsiveContainer width="100%" height="100%"><BarChart title={`Committed daily energy over ${dashboardRangeLabel.toLowerCase()}`} desc="Authenticated non-overlapping daily sensor energy totals." data={dailyData} margin={{ top: 16, right: 8, bottom: 8, left: -16 }}><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" minTickGap={45} interval="preserveStartEnd" tickFormatter={(value: number) => dailyTick(value, daily.data?.timezone ?? 'America/Los_Angeles')} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><Tooltip content={<UsageTooltip timezone={daily.data.timezone} unit="kWh" />} /><Bar dataKey="value" fill="#65d98b" radius={[5, 5, 0, 0]} maxBarSize={32} isAnimationActive={false} /></BarChart></ResponsiveContainer></div> : <EmptyState title="No committed energy yet" detail="Daily totals appear after authenticated intervals are committed." />}
+      {visibleCards.has('energy') && <Card title="Daily Energy (kWh)" eyebrow="Saved service-branch totals" action={<span className="select-chip">{dashboardRangeLabel}</span>} className="dashboard-chart-card dashboard-daily-energy">
+        {daily.isLoading ? <Loading label="Loading daily energy" /> : daily.isError ? <ErrorState error={daily.error} /> : daily.data && dailyData.length > 0 ? <div className="chart-wrap" data-testid="daily-chart"><ResponsiveContainer width="100%" height="100%"><BarChart title={`Saved daily energy over ${dashboardRangeLabel.toLowerCase()}`} desc="Saved daily energy from sensors confirmed not to overlap." data={dailyData} margin={{ top: 16, right: 8, bottom: 8, left: -16 }}><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" minTickGap={45} interval="preserveStartEnd" tickFormatter={(value: number) => dailyTick(value, daily.data?.timezone ?? 'America/Los_Angeles')} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><Tooltip content={<UsageTooltip timezone={daily.data.timezone} unit="kWh" />} /><Bar dataKey="value" fill="#65d98b" radius={[5, 5, 0, 0]} maxBarSize={32} isAnimationActive={false} /></BarChart></ResponsiveContainer></div> : <EmptyState title="No saved energy yet" detail="Daily totals appear after saved sensor readings reach the server." />}
         <div className="dashboard-energy-total"><span>Total</span><strong>{numeric(daily.data?.energy_kwh === null || daily.data?.energy_kwh === undefined ? null : Number(daily.data.energy_kwh), 'kWh')}</strong></div>
       </Card>}
       <aside className="dashboard-side-stack">

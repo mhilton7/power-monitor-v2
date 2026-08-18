@@ -34,7 +34,7 @@ DIGEST_C = "sha256:" + "3" * 64
 DIGEST_D = "sha256:" + "4" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
-VERSION = "0.1.0-rc.14"
+VERSION = "0.1.0-rc.16"
 
 
 @pytest.fixture
@@ -53,7 +53,17 @@ def _write(path: Path, value: str) -> None:
 
 def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]:
     template = (ROOT / "deploy/truenas/power-monitor-v2.yaml").read_text(encoding="utf-8")
-    compose_text = render(template, VERSION, DIGEST_A, DIGEST_B, DIGEST_D, DIGEST_C)
+    compose_text = render(
+        template,
+        VERSION,
+        DIGEST_A,
+        DIGEST_B,
+        DIGEST_D,
+        DIGEST_C,
+        revision=COMMIT,
+        build_time="2026-08-17T00:00:00Z",
+        frontend_asset_id=f"{VERSION}-{COMMIT[:16]}",
+    )
     compose_path = directory / "power-monitor-v2-test.yaml"
     compose_path.write_text(compose_text, encoding="utf-8")
     manifest: dict[str, object] = {
@@ -62,6 +72,26 @@ def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]
         "version": VERSION,
         "revision": COMMIT,
         "release_status": "candidate_physical_certification_pending",
+        "database": {"expected_migration": "20260817_0016"},
+        "frontend": {
+            "version": VERSION,
+            "revision": COMMIT,
+            "static_asset_build_id": f"{VERSION}-{COMMIT[:16]}",
+            "build_time": "2026-08-17T00:00:00Z",
+        },
+        "firmware_release_url": (
+            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.16"
+        ),
+        "firmware": {
+            "repository": "https://github.com/mhilton7/power-monitor-sensor-headless",
+            "tag": "v0.1.0-rc.16",
+            "revision": COMMIT,
+            "build_id": 19,
+            "image_sha256": IMAGE,
+            "protocol": "pm-protocol/1.0.0",
+            "board_profile": "esp32-s3-devkitc-n16r8-reference/1",
+        },
+        "hardware_certification": {"status": "pending", "physical": False},
         "images": {
             "api": {"name": "ghcr.io/mhilton7/power-monitor-v2-api", "digest": DIGEST_A},
             "frontend": {
@@ -598,6 +628,9 @@ def test_release_template_requires_exact_sentinels_and_real_digests() -> None:
     assert output.count(f"power-monitor-v2-api:{VERSION}@{DIGEST_A}") == 4
     assert output.count(f"power-monitor-v2-gateway:{VERSION}@{DIGEST_D}") == 1
     assert "UNPUBLISHED" not in output
+    assert f'PM_RELEASE_VERSION: "{VERSION}"' in output
+    assert f'PM_RELEASE_REVISION: "{"0" * 40}"' in output
+    assert 'PM_EXPECTED_DATABASE_REVISION: "20260817_0016"' in output
     validate_compose(load_yaml(output), published=True)
     with pytest.raises(ReleaseError):
         render(
@@ -662,6 +695,37 @@ def test_release_artifact_verifier_accepts_exact_four_image_binding(
 ) -> None:
     manifest_path, _ = _candidate_release_bundle(evidence_dir)
     verify_release_artifacts(manifest_path)
+
+
+@pytest.mark.parametrize("field", ["database", "frontend", "firmware"])
+def test_release_artifact_verifier_requires_runtime_build_identity(
+    evidence_dir: Path,
+    field: str,
+) -> None:
+    manifest_path, manifest = _candidate_release_bundle(evidence_dir)
+    del manifest[field]
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    with pytest.raises(ValueError):
+        verify_release_artifacts(manifest_path)
+
+
+def test_release_images_embed_exact_source_and_frontend_asset_identity() -> None:
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    frontend_dockerfile = (ROOT / "frontend/Dockerfile").read_text(encoding="utf-8")
+    backend_dockerfile = (ROOT / "backend/Dockerfile").read_text(encoding="utf-8")
+
+    for argument in (
+        "VERSION=${{ steps.identity.outputs.version }}",
+        "REVISION=${{ github.sha }}",
+        "BUILD_TIME=${{ steps.identity.outputs.build_time }}",
+        "FRONTEND_ASSET_ID=${{ steps.identity.outputs.frontend_asset_id }}",
+    ):
+        assert argument in workflow
+    assert 'PM_FRONTEND_VERSION="${VERSION}"' in frontend_dockerfile
+    assert 'PM_FRONTEND_REVISION="${REVISION}"' in frontend_dockerfile
+    assert 'PM_FRONTEND_ASSET_ID="${FRONTEND_ASSET_ID}"' in frontend_dockerfile
+    assert 'PM_BUILD_REVISION="${REVISION}"' in backend_dockerfile
+    assert 'PM_BUILD_TIME="${BUILD_TIME}"' in backend_dockerfile
 
 
 @pytest.mark.parametrize("mutation", ["missing", "extra"])

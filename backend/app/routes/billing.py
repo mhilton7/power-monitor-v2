@@ -4,9 +4,10 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +23,9 @@ from ..models import (
     AuditEvent,
     BillingEstimate,
     BillingEstimateSelection,
+    Circuit,
     Device,
+    DeviceHeartbeat,
     IntervalCostSelection,
     NormalizedInterval,
     RateAssignment,
@@ -34,6 +37,7 @@ from ..models import (
     RateSource,
     RateSourceRevision,
     RateSyncRun,
+    RawReading,
     UtilityAccount,
     UtilityBillRateCorrection,
     UtilityBillRateExtraction,
@@ -265,6 +269,25 @@ async def _existing_semantic_rate_candidate(
         if _semantic_rate_identity(_semantic_rate_values_from_row(extraction)) == expected:
             return extraction, upload
     return None
+
+
+def _current_billing_cycle_bounds(
+    account: UtilityAccount, now: datetime
+) -> tuple[datetime, datetime]:
+    zone = ZoneInfo(account.timezone)
+    local_now = now.astimezone(zone)
+    year = local_now.year
+    month = local_now.month
+    if local_now.day < account.billing_day:
+        month -= 1
+        if month == 0:
+            month = 12
+            year -= 1
+    local_start = datetime(year, month, account.billing_day, tzinfo=zone)
+    end_year = year + (1 if month == 12 else 0)
+    end_month = 1 if month == 12 else month + 1
+    local_end = datetime(end_year, end_month, account.billing_day, tzinfo=zone)
+    return local_start.astimezone(UTC), local_end.astimezone(UTC)
 
 
 @router.post("/bill-rate-imports", status_code=201)
@@ -796,6 +819,174 @@ async def billing_overview(
                 .order_by(BillingEstimate.scope_kind, BillingEstimate.scope_id)
             )
         ).all()
+        cycle_start, cycle_end = _current_billing_cycle_bounds(account, now)
+        scope_end = now.replace(second=0, microsecond=0)
+        home_total_branch = await session.scalar(
+            select(Circuit).where(
+                Circuit.home_id == scoped_home_id,
+                Circuit.is_home_total.is_(True),
+                Circuit.aggregate_mode == "verified_sum",
+                Circuit.non_overlapping_confirmed.is_(True),
+            )
+        )
+        member_ids: tuple[str, ...] = ()
+        if home_total_branch is not None:
+            member_ids = tuple(
+                (
+                    await session.scalars(
+                        select(Device.id)
+                        .where(
+                            Device.circuit_id == home_total_branch.id,
+                            Device.home_id == scoped_home_id,
+                            Device.include_in_aggregate.is_(True),
+                        )
+                        .order_by(Device.display_order, Device.id)
+                    )
+                ).all()
+            )
+        saved_energy_mwh = 0
+        reading_coverage = Decimal("0")
+        readings_waiting = 0
+        if member_ids and scope_end > cycle_start:
+            energy, completeness_sum = (
+                await session.execute(
+                    select(
+                        func.sum(NormalizedInterval.energy_mwh),
+                        func.sum(NormalizedInterval.completeness),
+                    )
+                    .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+                    .join(Device, Device.id == NormalizedInterval.device_id)
+                    .where(
+                        NormalizedInterval.device_id.in_(member_ids),
+                        RawReading.reset_generation == Device.reset_generation,
+                        NormalizedInterval.source_authenticated.is_(True),
+                        NormalizedInterval.start_utc >= cycle_start,
+                        NormalizedInterval.end_utc <= scope_end,
+                    )
+                )
+            ).one()
+            saved_energy_mwh = int(energy or 0)
+            expected = max(
+                1,
+                int((scope_end - cycle_start).total_seconds() // 60) * len(member_ids),
+            )
+            reading_coverage = min(Decimal("1"), Decimal(completeness_sum or 0) / Decimal(expected))
+            for member_id in member_ids:
+                latest_heartbeat = await session.scalar(
+                    select(DeviceHeartbeat)
+                    .where(DeviceHeartbeat.device_id == member_id)
+                    .order_by(DeviceHeartbeat.received_at.desc())
+                    .limit(1)
+                )
+                if latest_heartbeat is not None:
+                    readings_waiting += latest_heartbeat.backlog
+
+        periods = (
+            (
+                await session.scalars(
+                    select(RatePeriod).where(RatePeriod.rate_plan_version_id == version.id)
+                )
+            ).all()
+            if version is not None
+            else []
+        )
+        local_now = now.astimezone(ZoneInfo(account.timezone))
+        season = "summer" if local_now.month in (6, 7, 8, 9) else "winter"
+        seasonal_periods = [period for period in periods if period.season in (season, "all")]
+        tier_1_period = next(
+            (
+                period
+                for period in sorted(seasonal_periods, key=lambda item: item.tier_start_kwh)
+                if period.tier_start_kwh == 0 and period.tier_end_kwh is not None
+            ),
+            None,
+        )
+        tier_2_period = next(
+            (
+                period
+                for period in sorted(seasonal_periods, key=lambda item: item.tier_start_kwh)
+                if period.tier_start_kwh > 0 and period.tier_end_kwh is None
+            ),
+            None,
+        )
+        cycle_days = (
+            cycle_end.astimezone(ZoneInfo(account.timezone)).date()
+            - cycle_start.astimezone(ZoneInfo(account.timezone)).date()
+        ).days
+        tier_1_allowance = (
+            version.tier_threshold_kwh_per_day * cycle_days
+            if version is not None
+            and version.tier_threshold_kwh_per_day is not None
+            and version.tier_threshold_season in (season, "all")
+            else None
+        )
+        saved_usage_kwh = Decimal(saved_energy_mwh) / Decimal(1_000_000)
+        tier_state = "not_confirmed"
+        if reading_coverage >= Decimal("1") and tier_1_allowance is not None:
+            tier_state = "tier_1" if saved_usage_kwh <= tier_1_allowance else "tier_2"
+        home_estimate = next(
+            (
+                estimate
+                for estimate in estimates
+                if home_total_branch is not None
+                and estimate.scope_id == home_total_branch.id
+                and estimate.scope_kind == "full_account"
+            ),
+            None,
+        )
+        estimate_is_current = bool(
+            home_estimate is not None
+            and version is not None
+            and home_estimate.rate_plan_version_id == version.id
+            and tier_state != "not_confirmed"
+        )
+        current_rate_plan = {
+            "rate_plan_id": plan.id if plan else None,
+            "rate_plan_version_id": version.id if version else None,
+            "name": plan.name if plan else None,
+            "utility_name": plan.utility_name if plan else account.utility_name,
+            "rate_class": plan.rate_class if plan else None,
+            "effective_start": version.effective_start if version else None,
+            "currently_used": version is not None,
+            "tier_1_price_per_kwh": tier_1_period.price_per_kwh
+            if tier_1_period is not None
+            else None,
+            "tier_2_price_per_kwh": tier_2_period.price_per_kwh
+            if tier_2_period is not None
+            else None,
+            "daily_service_charge": version.daily_fixed_charge if version else None,
+            "daily_baseline_allowance_kwh": version.tier_threshold_kwh_per_day if version else None,
+            "generation_service": account.cca_provider or "SCE",
+        }
+        current_billing_cycle = {
+            "start_utc": cycle_start,
+            "end_utc": cycle_end,
+            "service_branch_id": home_total_branch.id if home_total_branch else None,
+            "service_branch_name": home_total_branch.name if home_total_branch else None,
+            "saved_usage_kwh": saved_usage_kwh if member_ids else None,
+            "reading_coverage": reading_coverage if member_ids else None,
+            "readings_waiting_to_sync": readings_waiting if member_ids else None,
+            "tier_state": tier_state,
+            "tier_confirmation_rule": "requires_100_percent_reading_coverage",
+            "tier_1_allowance_kwh": tier_1_allowance,
+            "tier_1_remaining_kwh": max(Decimal("0"), tier_1_allowance - saved_usage_kwh)
+            if tier_1_allowance is not None and tier_state != "not_confirmed"
+            else None,
+            "amount_above_tier_1_kwh": max(Decimal("0"), saved_usage_kwh - tier_1_allowance)
+            if tier_1_allowance is not None and tier_state != "not_confirmed"
+            else None,
+            "estimated_energy_charges": Decimal(home_estimate.energy_cost_microdollars)
+            / Decimal(1_000_000)
+            if estimate_is_current and home_estimate is not None
+            else None,
+            "estimated_fixed_charges": Decimal(home_estimate.fixed_charge_microdollars)
+            / Decimal(1_000_000)
+            if estimate_is_current and home_estimate is not None
+            else None,
+            "estimated_total": Decimal(home_estimate.total_microdollars) / Decimal(1_000_000)
+            if estimate_is_current and home_estimate is not None
+            else None,
+        }
         plans.append(
             {
                 "utility_account_id": account.id,
@@ -810,6 +1001,19 @@ async def billing_overview(
                 ),
                 "fixed_charges_included": account.cost_scope == "full_account",
                 "cca_or_direct_access": account.cca_provider,
+                "home_total_branch": {
+                    "id": home_total_branch.id,
+                    "name": home_total_branch.name,
+                    "description": home_total_branch.description,
+                    "purpose": home_total_branch.purpose,
+                    "is_home_total": home_total_branch.is_home_total,
+                    "non_overlapping_confirmed": home_total_branch.non_overlapping_confirmed,
+                    "device_ids": member_ids,
+                }
+                if home_total_branch is not None
+                else None,
+                "current_rate_plan": current_rate_plan,
+                "current_billing_cycle": current_billing_cycle,
                 "estimates": [
                     {
                         "id": estimate.id,

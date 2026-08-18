@@ -34,7 +34,7 @@ test('requires a UUID-disambiguated home and binds every home-specific page requ
   await exportRequest;
 
   await page.locator('.sidebar').getByRole('link', { name: 'Billing' }).click();
-  await expect(page.getByRole('heading', { name: 'Billing' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Billing', exact: true })).toBeVisible();
   await expect(page).toHaveTitle('Billing · PowerMeter V2');
   await page.getByRole('button', { name: 'Import rates from SCE bill PDF' }).click();
   await page.getByLabel('Choose an SCE PDF rate source').setInputFiles({ name: 'rates.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7') });

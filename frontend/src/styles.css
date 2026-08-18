@@ -385,6 +385,11 @@ code { color: #a6f0c1; background: #0e1513; border: 1px solid var(--border-soft)
 .card-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .aggregate-list { display: grid; gap: 6px; margin-top: 14px; padding: 12px; border: 1px solid var(--border-soft); border-radius: 8px; background: rgba(255, 255, 255, .018); }
 .aggregate-list span, .aggregate-list small { color: var(--muted); font-size: .72rem; }
+.service-branch-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 0; border-top: 1px solid var(--border-soft); }
+.service-branch-row > div { display: grid; gap: .2rem; }
+.technical-details { margin-top: 1rem; border-top: 1px solid var(--border-soft); padding-top: .75rem; }
+.technical-details summary { cursor: pointer; color: var(--muted); font-weight: 700; }
+.build-identity-grid { margin-top: 1rem; }
 .settings-form legend { padding: 0 6px; color: var(--muted); font-size: .7rem; }
 .account-enabled { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding: 10px; border: 1px solid var(--border-soft); border-radius: 8px; }
 .account-enabled span { display: grid; gap: 3px; }

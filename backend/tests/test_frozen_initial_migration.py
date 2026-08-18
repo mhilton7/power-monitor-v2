@@ -699,3 +699,152 @@ def test_sce_ota_revision_backfills_populated_legacy_deployment_and_rolls_back(
     finally:
         get_settings.cache_clear()
         database.unlink(missing_ok=True)
+
+
+def test_service_branch_revision_designates_only_unambiguous_populated_aggregate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = ROOT / ".test-runtime" / f"service-branch-migration-{uuid.uuid4().hex}.sqlite3"
+    async_url = _sqlite_url(database, async_driver=True)
+    sync_url = _sqlite_url(database, async_driver=False)
+    monkeypatch.setenv("PM_ENV", "test")
+    monkeypatch.setenv("PM_DATABASE_URL", async_url)
+    get_settings.cache_clear()
+    config = _config()
+    home_ids = (str(uuid.uuid4()), str(uuid.uuid4()))
+    account_ids = (str(uuid.uuid4()), str(uuid.uuid4()))
+    circuit_ids = tuple(str(uuid.uuid4()) for _ in range(3))
+    device_ids = tuple(str(uuid.uuid4()) for _ in range(6))
+    try:
+        command.upgrade(config, "20260817_0015")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                for index, home_id in enumerate(home_ids):
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO homes (id, name, timezone, created_at) VALUES "
+                            "(:id, :name, 'America/Los_Angeles', CURRENT_TIMESTAMP)"
+                        ),
+                        {"id": home_id, "name": f"Migration home {index}"},
+                    )
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO utility_accounts "
+                            "(id, home_id, utility_name, timezone, billing_day, cost_scope) VALUES "
+                            "(:id, :home_id, 'SCE', 'America/Los_Angeles', 22, 'energy_only')"
+                        ),
+                        {"id": account_ids[index], "home_id": home_id},
+                    )
+                for index, circuit_id in enumerate(circuit_ids):
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO circuits "
+                            "(id, home_id, name, aggregate_mode) VALUES "
+                            "(:id, :home_id, :name, 'verified_sum')"
+                        ),
+                        {
+                            "id": circuit_id,
+                            "home_id": home_ids[0] if index == 0 else home_ids[1],
+                            "name": f"Legacy aggregate {index}",
+                        },
+                    )
+                for index, device_id in enumerate(device_ids):
+                    circuit_index = 0 if index < 2 else 1 if index < 4 else 2
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO devices "
+                            "(id, home_id, circuit_id, friendly_name, protocol_id, pzem_variant, "
+                            "ct_rating_a, measurement_scope, state, contiguous_ack, "
+                            "maximum_sequence, reset_generation, include_in_aggregate, "
+                            "created_at) VALUES "
+                            "(:id, :home_id, :circuit_id, :name, 'pm-protocol/1.0.0', "
+                            "'pzem004t-v4-classic-candidate', 100, 'energy_only', 'online', "
+                            "0, 0, 0, true, CURRENT_TIMESTAMP)"
+                        ),
+                        {
+                            "id": device_id,
+                            "home_id": home_ids[0] if index < 2 else home_ids[1],
+                            "circuit_id": circuit_ids[circuit_index],
+                            "name": f"Sensor {index}",
+                        },
+                    )
+        finally:
+            engine.dispose()
+
+        command.upgrade(config, "head")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                designated = connection.execute(
+                    sa.text(
+                        "SELECT id, name, purpose, is_home_total, aggregate_mode, "
+                        "non_overlapping_confirmed FROM circuits WHERE home_id = :home_id"
+                    ),
+                    {"home_id": home_ids[0]},
+                ).one()
+                assert designated == (
+                    circuit_ids[0],
+                    "Main service",
+                    "whole_home_total",
+                    True,
+                    "verified_sum",
+                    True,
+                )
+                ambiguous = connection.execute(
+                    sa.text(
+                        "SELECT name, is_home_total, non_overlapping_confirmed FROM circuits "
+                        "WHERE home_id = :home_id ORDER BY name"
+                    ),
+                    {"home_id": home_ids[1]},
+                ).all()
+                assert [tuple(row) for row in ambiguous] == [
+                    ("Legacy aggregate 1", False, True),
+                    ("Legacy aggregate 2", False, True),
+                ]
+                device_membership = connection.execute(
+                    sa.text("SELECT id, circuit_id, measurement_scope FROM devices ORDER BY id")
+                ).all()
+                assert [tuple(row) for row in device_membership] == sorted(
+                    (
+                        device_ids[index],
+                        circuit_ids[0 if index < 2 else 1 if index < 4 else 2],
+                        "full_account" if index < 2 else "energy_only",
+                    )
+                    for index in range(6)
+                )
+                account_scopes = connection.execute(
+                    sa.text("SELECT id, cost_scope FROM utility_accounts ORDER BY id")
+                ).all()
+                assert [tuple(row) for row in account_scopes] == sorted(
+                    ((account_ids[0], "full_account"), (account_ids[1], "energy_only"))
+                )
+                circuit_columns = {
+                    item["name"] for item in sa.inspect(connection).get_columns("circuits")
+                }
+                assert {
+                    "description",
+                    "purpose",
+                    "is_home_total",
+                    "non_overlapping_confirmed",
+                    "created_at",
+                    "updated_at",
+                }.issubset(circuit_columns)
+        finally:
+            engine.dispose()
+
+        command.downgrade(config, "20260817_0015")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                circuit_columns = {
+                    item["name"] for item in sa.inspect(connection).get_columns("circuits")
+                }
+                assert "is_home_total" not in circuit_columns
+                assert connection.scalar(sa.text("SELECT count(*) FROM devices")) == 6
+                assert connection.scalar(sa.text("SELECT count(*) FROM circuits")) == 3
+        finally:
+            engine.dispose()
+    finally:
+        get_settings.cache_clear()
+        database.unlink(missing_ok=True)

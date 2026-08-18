@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Request
@@ -28,11 +29,155 @@ from ..schemas.api import (
     DeviceUpdateRequest,
     HomeScopesResponse,
     HomeUtilityUpdateRequest,
+    ServiceBranchCreateRequest,
+    ServiceBranchUpdateRequest,
     VerifiedAggregateRequest,
 )
 from ..security.auth import CurrentUser, current_user, require_permission
 
 router = APIRouter(prefix="/api/v1", tags=["settings"])
+
+
+async def _service_branch_response(session: AsyncSession, circuit: Circuit) -> dict[str, object]:
+    device_ids = tuple(
+        (
+            await session.scalars(
+                select(Device.id)
+                .where(
+                    Device.circuit_id == circuit.id,
+                    Device.include_in_aggregate.is_(True),
+                )
+                .order_by(Device.display_order, Device.id)
+            )
+        ).all()
+    )
+    return {
+        "id": circuit.id,
+        "home_id": circuit.home_id,
+        "name": circuit.name,
+        "description": circuit.description,
+        "purpose": circuit.purpose,
+        "is_home_total": circuit.is_home_total,
+        "aggregate_mode": circuit.aggregate_mode,
+        "non_overlapping_confirmed": circuit.non_overlapping_confirmed,
+        "device_ids": device_ids,
+        "created_at": circuit.created_at,
+        "updated_at": circuit.updated_at,
+    }
+
+
+async def _locked_branch(
+    session: AsyncSession, *, circuit_id: str, homes: tuple[str, ...]
+) -> Circuit:
+    circuit = await session.scalar(
+        select(Circuit)
+        .where(Circuit.id == circuit_id, Circuit.home_id.in_(homes))
+        .with_for_update()
+    )
+    if circuit is None:
+        raise NotFound("service branch does not exist")
+    return circuit
+
+
+async def _branch_devices(
+    session: AsyncSession,
+    *,
+    home_id: str,
+    device_ids: list[str],
+    current_circuit_id: str | None = None,
+    allow_reassignment: bool = False,
+) -> list[Device]:
+    devices = (
+        await session.scalars(
+            select(Device)
+            .where(
+                Device.id.in_(device_ids),
+                Device.home_id == home_id,
+                Device.revoked_at.is_(None),
+            )
+            .with_for_update()
+        )
+    ).all()
+    if {item.id for item in devices} != set(device_ids):
+        raise NotFound("one or more service-branch sensors do not exist")
+    source_circuit_ids = {
+        item.circuit_id
+        for item in devices
+        if item.circuit_id is not None and item.circuit_id != current_circuit_id
+    }
+    if source_circuit_ids and not allow_reassignment:
+        raise IntegrityConflict("a sensor already belongs to another service branch")
+    if source_circuit_ids:
+        protected_source = await session.scalar(
+            select(Circuit.id).where(
+                Circuit.id.in_(source_circuit_ids),
+                Circuit.home_id == home_id,
+                Circuit.is_home_total.is_(True),
+            )
+        )
+        if protected_source is not None:
+            raise IntegrityConflict(
+                "select another home-total service branch before moving a required member"
+            )
+    return list(devices)
+
+
+async def _select_home_total(session: AsyncSession, *, circuit: Circuit) -> str | None:
+    active_member_count = len(
+        (
+            await session.scalars(
+                select(Device.id).where(
+                    Device.circuit_id == circuit.id,
+                    Device.include_in_aggregate.is_(True),
+                    Device.revoked_at.is_(None),
+                )
+            )
+        ).all()
+    )
+    if active_member_count < 2:
+        raise IntegrityConflict("a home-total service branch requires at least two active sensors")
+    previous = await session.scalar(
+        select(Circuit)
+        .where(
+            Circuit.home_id == circuit.home_id,
+            Circuit.is_home_total.is_(True),
+            Circuit.id != circuit.id,
+        )
+        .with_for_update()
+    )
+    if previous is not None:
+        previous.is_home_total = False
+        previous.purpose = "electrical_section"
+        previous.updated_at = datetime.now(UTC)
+        previous_members = (
+            await session.scalars(select(Device).where(Device.circuit_id == previous.id))
+        ).all()
+        for member in previous_members:
+            member.measurement_scope = "energy_only"
+        # The one-home-total partial unique index observes statement order.
+        # Persist the old designation removal before selecting its replacement.
+        await session.flush()
+    circuit.is_home_total = True
+    circuit.purpose = "whole_home_total"
+    circuit.aggregate_mode = "verified_sum"
+    circuit.non_overlapping_confirmed = True
+    members = (
+        await session.scalars(
+            select(Device).where(
+                Device.circuit_id == circuit.id,
+                Device.include_in_aggregate.is_(True),
+                Device.revoked_at.is_(None),
+            )
+        )
+    ).all()
+    for member in members:
+        member.measurement_scope = "full_account"
+    account = await session.scalar(
+        select(UtilityAccount).where(UtilityAccount.home_id == circuit.home_id).with_for_update()
+    )
+    if account is not None:
+        account.cost_scope = "full_account"
+    return previous.id if previous is not None else None
 
 
 async def _home_ids(session: AsyncSession, user_id: str) -> tuple[str, ...]:
@@ -100,6 +245,12 @@ async def _validate_account_measurement_scope(
     if circuit is None or circuit.aggregate_mode != "verified_sum":
         raise IntegrityConflict(
             "multiple account-scoped sensors require one verified non-overlapping aggregate"
+        )
+    if scope == "full_account" and (
+        not circuit.is_home_total or not circuit.non_overlapping_confirmed
+    ):
+        raise IntegrityConflict(
+            "multiple full-account sensors require the designated home-total service branch"
         )
 
 
@@ -306,17 +457,60 @@ async def list_circuits(
             select(Circuit).where(Circuit.home_id == scoped_home_id).order_by(Circuit.id)
         )
     ).all()
-    return {
-        "circuits": [
-            {
-                "id": row.id,
-                "home_id": row.home_id,
-                "name": row.name,
-                "aggregate_mode": row.aggregate_mode,
-            }
-            for row in rows
-        ]
-    }
+    return {"circuits": [await _service_branch_response(session, row) for row in rows]}
+
+
+@router.post("/circuits", status_code=201)
+async def create_service_branch(
+    payload: ServiceBranchCreateRequest,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("sensors.configure")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    homes = await _home_ids(session, user.id)
+    if payload.home_id not in homes:
+        raise NotFound("home does not exist")
+    devices = await _branch_devices(
+        session,
+        home_id=payload.home_id,
+        device_ids=payload.device_ids,
+    )
+    circuit = Circuit(
+        home_id=payload.home_id,
+        name=payload.name,
+        description=payload.description,
+        purpose=payload.purpose,
+        is_home_total=False,
+        aggregate_mode="verified_sum",
+        non_overlapping_confirmed=True,
+    )
+    session.add(circuit)
+    await session.flush()
+    for device in devices:
+        device.circuit_id = circuit.id
+        device.include_in_aggregate = True
+    await session.flush()
+    previous_home_total_id = None
+    if payload.is_home_total:
+        previous_home_total_id = await _select_home_total(session, circuit=circuit)
+    session.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            event_code="SERVICE_BRANCH_CREATED",
+            target_type="circuit",
+            target_id=circuit.id,
+            correlation_id=request.state.correlation_id,
+            details={
+                "device_ids": sorted(payload.device_ids),
+                "purpose": circuit.purpose,
+                "is_home_total": circuit.is_home_total,
+                "non_overlapping_confirmed": True,
+                "previous_home_total_id": previous_home_total_id,
+            },
+        )
+    )
+    await session.commit()
+    return await _service_branch_response(session, circuit)
 
 
 @router.post("/circuits/verified-aggregates", status_code=201)
@@ -347,7 +541,9 @@ async def create_verified_aggregate(
     circuit = Circuit(
         home_id=payload.home_id,
         name=payload.name,
+        purpose="electrical_section",
         aggregate_mode="verified_sum",
+        non_overlapping_confirmed=True,
     )
     session.add(circuit)
     await session.flush()
@@ -364,7 +560,147 @@ async def create_verified_aggregate(
         )
     )
     await session.commit()
-    return {"id": circuit.id, "name": circuit.name, "device_ids": payload.device_ids}
+    return await _service_branch_response(session, circuit)
+
+
+@router.patch("/circuits/{circuit_id}")
+async def update_service_branch(
+    circuit_id: str,
+    payload: ServiceBranchUpdateRequest,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("sensors.configure")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    homes = await _home_ids(session, user.id)
+    circuit = await _locked_branch(session, circuit_id=circuit_id, homes=homes)
+    before = await _service_branch_response(session, circuit)
+    before_device_ids = cast(tuple[str, ...], before["device_ids"])
+    moved_from: dict[str, list[str]] = {}
+
+    if payload.is_home_total is False and circuit.is_home_total:
+        raise IntegrityConflict(
+            "select another home-total service branch before removing this designation"
+        )
+    if payload.device_ids is not None:
+        prior_ids = set(before_device_ids)
+        requested_ids = set(payload.device_ids)
+        if circuit.is_home_total and not prior_ids.issubset(requested_ids):
+            raise IntegrityConflict(
+                "select another home-total service branch before removing a required member"
+            )
+        devices = await _branch_devices(
+            session,
+            home_id=circuit.home_id,
+            device_ids=payload.device_ids,
+            current_circuit_id=circuit.id,
+            allow_reassignment=True,
+        )
+        existing = (
+            await session.scalars(
+                select(Device).where(Device.circuit_id == circuit.id).with_for_update()
+            )
+        ).all()
+        for device in existing:
+            if device.id not in requested_ids:
+                device.circuit_id = None
+                device.include_in_aggregate = False
+        for device in devices:
+            if device.circuit_id is not None and device.circuit_id != circuit.id:
+                moved_from.setdefault(device.circuit_id, []).append(device.id)
+            device.circuit_id = circuit.id
+            device.include_in_aggregate = True
+        # Home-total validation counts active persisted membership and must see
+        # same-request moves before evaluating the target branch.
+        await session.flush()
+    if payload.name is not None:
+        circuit.name = payload.name
+    if "description" in payload.model_fields_set:
+        circuit.description = payload.description
+
+    effective_home_total = (
+        payload.is_home_total if payload.is_home_total is not None else circuit.is_home_total
+    )
+    effective_purpose = payload.purpose if payload.purpose is not None else circuit.purpose
+    if effective_home_total:
+        if payload.purpose not in (None, "whole_home_total"):
+            raise InvalidRequest("the home-total service branch requires whole_home_total purpose")
+        await _select_home_total(session, circuit=circuit)
+    elif effective_purpose == "whole_home_total":
+        raise InvalidRequest("whole_home_total purpose requires home-total designation")
+    elif payload.purpose is not None:
+        circuit.purpose = payload.purpose
+    circuit.updated_at = datetime.now(UTC)
+
+    after = await _service_branch_response(session, circuit)
+    after_device_ids = cast(tuple[str, ...], after["device_ids"])
+    session.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            event_code="SERVICE_BRANCH_UPDATED",
+            target_type="circuit",
+            target_id=circuit.id,
+            correlation_id=request.state.correlation_id,
+            details={
+                "before_device_ids": sorted(before_device_ids),
+                "device_ids": sorted(after_device_ids),
+                "purpose": circuit.purpose,
+                "is_home_total": circuit.is_home_total,
+                "non_overlapping_confirmed": circuit.non_overlapping_confirmed,
+                "moved_from_branch_ids": sorted(moved_from),
+            },
+        )
+    )
+    for source_circuit_id, moved_device_ids in moved_from.items():
+        session.add(
+            AuditEvent(
+                actor_user_id=user.id,
+                event_code="SERVICE_BRANCH_MEMBERS_MOVED_OUT",
+                target_type="circuit",
+                target_id=source_circuit_id,
+                correlation_id=request.state.correlation_id,
+                details={
+                    "device_ids": sorted(moved_device_ids),
+                    "destination_branch_id": circuit.id,
+                },
+            )
+        )
+    await session.commit()
+    return await _service_branch_response(session, circuit)
+
+
+@router.delete("/circuits/{circuit_id}", status_code=204)
+async def delete_service_branch(
+    circuit_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("sensors.configure")),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    homes = await _home_ids(session, user.id)
+    circuit = await _locked_branch(session, circuit_id=circuit_id, homes=homes)
+    if circuit.is_home_total:
+        raise IntegrityConflict(
+            "select another home-total service branch before deleting this service branch"
+        )
+    devices = (
+        await session.scalars(
+            select(Device).where(Device.circuit_id == circuit.id).with_for_update()
+        )
+    ).all()
+    if devices:
+        raise IntegrityConflict("move or remove all sensors before deleting this service branch")
+    device_ids = sorted(device.id for device in devices)
+    session.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            event_code="SERVICE_BRANCH_DELETED",
+            target_type="circuit",
+            target_id=circuit.id,
+            correlation_id=request.state.correlation_id,
+            details={"device_ids": device_ids, "was_home_total": False},
+        )
+    )
+    await session.delete(circuit)
+    await session.commit()
 
 
 @router.post("/devices/{device_id}/revoke", status_code=204)

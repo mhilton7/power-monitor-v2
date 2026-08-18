@@ -54,6 +54,8 @@ EXPECTED_INITIALIZER_MOUNTS = {
     )
 }
 EXPECTED_HOST_SOURCES = set(EXPECTED_INITIALIZER_MOUNTS)
+DEFAULT_DATABASE_REVISION = "20260817_0016"
+DEFAULT_BUILD_TIME = "1970-01-01T00:00:00Z"
 
 
 class ReleaseError(ValueError):
@@ -221,6 +223,12 @@ def render(
     frontend_digest: str,
     gateway_digest: str,
     backup_digest: str,
+    *,
+    revision: str = "0" * 40,
+    build_time: str = DEFAULT_BUILD_TIME,
+    frontend_version: str | None = None,
+    frontend_asset_id: str | None = None,
+    database_revision: str = DEFAULT_DATABASE_REVISION,
 ) -> str:
     prefix = "ghcr.io/mhilton7/power-monitor-v2"
     unpublished = "0.0.0-unpublished"
@@ -234,6 +242,15 @@ def render(
         frontend_sentinel: f"{prefix}-frontend:{version}@{frontend_digest}",
         gateway_sentinel: f"{prefix}-gateway:{version}@{gateway_digest}",
         backup_sentinel: f"{prefix}-backup:{version}@{backup_digest}",
+        "UNPUBLISHED_RELEASE_VERSION": version,
+        "UNPUBLISHED_FRONTEND_VERSION": frontend_version or version,
+        "UNPUBLISHED_RELEASE_REVISION": revision,
+        "UNPUBLISHED_FRONTEND_REVISION": revision,
+        "UNPUBLISHED_FRONTEND_BUILD_TIME": build_time,
+        "sha256:UNPUBLISHED_RUNTIME_API_DIGEST": api_digest,
+        "sha256:UNPUBLISHED_RUNTIME_FRONTEND_DIGEST": frontend_digest,
+        "UNPUBLISHED_FRONTEND_ASSET_ID": frontend_asset_id or f"{version}-{revision[:16]}",
+        "UNPUBLISHED_DATABASE_REVISION": database_revision,
     }
     text = template
     for old, new in replacements.items():
@@ -263,6 +280,10 @@ def main() -> int:
     parser.add_argument("--frontend-digest", required=True)
     parser.add_argument("--gateway-digest", required=True)
     parser.add_argument("--backup-digest", required=True)
+    parser.add_argument("--build-time", required=True)
+    parser.add_argument("--frontend-version")
+    parser.add_argument("--frontend-asset-id", required=True)
+    parser.add_argument("--database-revision", default=DEFAULT_DATABASE_REVISION)
     parser.add_argument(
         "--release-status",
         choices=(
@@ -275,10 +296,11 @@ def main() -> int:
         "--compatible-firmware",
         default="PowerMeter V2 firmware using pm-protocol/1.0.0; see linked firmware release",
     )
-    parser.add_argument("--firmware-release-url")
-    parser.add_argument("--firmware-tag")
-    parser.add_argument("--firmware-revision")
-    parser.add_argument("--firmware-image-sha256")
+    parser.add_argument("--firmware-release-url", required=True)
+    parser.add_argument("--firmware-tag", required=True)
+    parser.add_argument("--firmware-revision", required=True)
+    parser.add_argument("--firmware-image-sha256", required=True)
+    parser.add_argument("--firmware-build-id", required=True)
     parser.add_argument("--hardware-certification-sha256")
     args = parser.parse_args()
 
@@ -287,39 +309,47 @@ def main() -> int:
         raise ReleaseError("version must be semantic version syntax (without build metadata)")
     if not re.fullmatch(r"[0-9a-f]{40,64}", args.revision.lower()):
         raise ReleaseError("revision must be a full Git object ID")
+    frontend_version = args.frontend_version or version
+    if not VERSION_RE.fullmatch(frontend_version):
+        raise ReleaseError("frontend version must use semantic version syntax")
+    try:
+        parsed_build_time = datetime.fromisoformat(args.build_time.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ReleaseError("build time must be an ISO-8601 timestamp") from exc
+    if parsed_build_time.tzinfo is None:
+        raise ReleaseError("build time must include a UTC offset")
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._-]{0,127}", args.frontend_asset_id):
+        raise ReleaseError("frontend asset ID must be a bounded opaque identifier")
+    if not re.fullmatch(r"[0-9]{8}_[0-9]{4}", args.database_revision):
+        raise ReleaseError("database revision must use the Alembic revision format")
     api_digest = parse_digest(args.api_digest, "api digest")
     frontend_digest = parse_digest(args.frontend_digest, "frontend digest")
     gateway_digest = parse_digest(args.gateway_digest, "gateway digest")
     backup_digest = parse_digest(args.backup_digest, "backup digest")
+    if not re.fullmatch(
+        r"https://github\.com/mhilton7/power-monitor-sensor-headless/releases/tag/v[^/]+",
+        args.firmware_release_url,
+    ):
+        raise ReleaseError("release requires the public compatible firmware release URL")
+    firmware_tag_pattern = (
+        r"v[0-9]+\.[0-9]+\.[0-9]+"
+        if args.release_status == "stable_physical_certification_passed"
+        else r"v[0-9]+\.[0-9]+\.[0-9]+-rc\.[1-9][0-9]*"
+    )
+    if not re.fullmatch(firmware_tag_pattern, args.firmware_tag):
+        raise ReleaseError("firmware tag does not match the release status")
+    if not re.fullmatch(r"[0-9a-f]{40,64}", args.firmware_revision):
+        raise ReleaseError("release requires a full firmware revision")
+    if not re.fullmatch(r"[0-9a-f]{64}", args.firmware_image_sha256):
+        raise ReleaseError("release requires the firmware image SHA-256")
+    if not re.fullmatch(r"[1-9][0-9]{0,9}", args.firmware_build_id):
+        raise ReleaseError("release requires a positive firmware build identifier")
     if args.release_status == "stable_physical_certification_passed":
-        if not args.firmware_release_url or not re.fullmatch(
-            r"https://github\.com/mhilton7/power-monitor-sensor-headless/releases/tag/v[^/]+",
-            args.firmware_release_url,
-        ):
-            raise ReleaseError("stable releases require the public compatible firmware release URL")
-        if not args.firmware_tag or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", args.firmware_tag):
-            raise ReleaseError("stable releases require a stable firmware tag")
-        if not args.firmware_revision or not re.fullmatch(
-            r"[0-9a-f]{40,64}", args.firmware_revision
-        ):
-            raise ReleaseError("stable releases require a full firmware revision")
-        if not args.firmware_image_sha256 or not re.fullmatch(
-            r"[0-9a-f]{64}", args.firmware_image_sha256
-        ):
-            raise ReleaseError("stable releases require the firmware image SHA-256")
         if not args.hardware_certification_sha256 or not re.fullmatch(
             r"[0-9a-f]{64}", args.hardware_certification_sha256
         ):
             raise ReleaseError("stable releases require a hardware-certification SHA-256")
-    elif any(
-        (
-            args.firmware_release_url,
-            args.firmware_tag,
-            args.firmware_revision,
-            args.firmware_image_sha256,
-            args.hardware_certification_sha256,
-        )
-    ):
+    elif args.hardware_certification_sha256:
         raise ReleaseError("hardware certification inputs are accepted only for stable releases")
 
     template = args.template.read_text(encoding="utf-8")
@@ -331,6 +361,11 @@ def main() -> int:
         frontend_digest,
         gateway_digest,
         backup_digest,
+        revision=args.revision.lower(),
+        build_time=args.build_time,
+        frontend_version=frontend_version,
+        frontend_asset_id=args.frontend_asset_id,
+        database_revision=args.database_revision,
     )
     validate_compose(load_yaml(output), published=True)
 
@@ -359,17 +394,31 @@ def main() -> int:
         "compose": {"file": args.output.name, "sha256": output_sha256},
         "release_status": args.release_status,
         "compatible_firmware": args.compatible_firmware,
-    }
-    if args.release_status == "stable_physical_certification_passed":
-        manifest["firmware_release_url"] = args.firmware_release_url
-        manifest["firmware"] = {
+        "database": {"expected_migration": args.database_revision},
+        "frontend": {
+            "version": frontend_version,
+            "revision": args.revision.lower(),
+            "static_asset_build_id": args.frontend_asset_id,
+            "build_time": args.build_time,
+        },
+        "firmware_release_url": args.firmware_release_url,
+        "firmware": {
             "repository": "https://github.com/mhilton7/power-monitor-sensor-headless",
             "tag": args.firmware_tag,
             "revision": args.firmware_revision,
+            "build_id": int(args.firmware_build_id),
             "image_sha256": args.firmware_image_sha256,
             "protocol": "pm-protocol/1.0.0",
             "board_profile": "esp32-s3-devkitc-n16r8-reference/1",
-        }
+        },
+        "hardware_certification": {
+            "status": "passed"
+            if args.release_status == "stable_physical_certification_passed"
+            else "pending",
+            "physical": args.release_status == "stable_physical_certification_passed",
+        },
+    }
+    if args.release_status == "stable_physical_certification_passed":
         manifest["hardware_certification"] = {
             "file": "hardware-certification.json",
             "sha256": args.hardware_certification_sha256,
