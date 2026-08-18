@@ -179,9 +179,11 @@ jobs:
           build_time="$(git show -s --format=%cI "$GITHUB_SHA")"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'build_time=%s\n' "$build_time" >> "$GITHUB_OUTPUT"
-          printf 'frontend_asset_id=%s-%s\n' "$version" "${GITHUB_SHA:0:16}" >> "$GITHUB_OUTPUT"
+          {
+            printf 'version=%s\n' "$version"
+            printf 'build_time=%s\n' "$build_time"
+            printf 'frontend_asset_id=%s-%s\n' "$version" "${GITHUB_SHA:0:16}"
+          } >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:

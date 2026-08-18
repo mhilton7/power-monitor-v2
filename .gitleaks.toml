@@ -17,6 +17,17 @@ regexes = [
   '''^(?:8c7c04e1e3615e5e9f53e30d7087e10b00c9a7a1fe1ad59289b20c6f16901a37|a85d515e3aec04f1109f32576283aafadcb57d06f90841149c0ddabc9e0397bf)$''',
 ]
 
+[[rules.allowlists]]
+description = "Allow only the generated RC16 OpenAPI document SHA-256 in the release notes"
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^release/RELEASE_NOTES\.md$''',
+]
+regexes = [
+  '''^8c6d3d73f7bfaa4bd34b4451c860b4199426e556cba1f6f9a48374ea22049c24$''',
+]
+
 [[rules]]
 id = "private-key"
 
