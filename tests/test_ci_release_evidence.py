@@ -861,11 +861,11 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     assert "prepare-host.sh" not in installation
     assert "pm-protocol/1.0.0" in installation
     assert "authenticated PZEM-004T readings" in installation
-    assert "$Tag = 'v0.1.0-rc.20'" in installation
+    assert "$Tag = 'v0.1.0-rc.21'" in installation
     assert "$env:TEMP" in installation
     assert "[guid]::NewGuid().ToString('N')" in installation
     assert "Join-Path $HOME" not in installation
-    assert "signed v0.1.0-rc.20 release" in normalized_installation
+    assert "signed v0.1.0-rc.21 release" in normalized_installation
     assert "Stage-PowerMeterTrueNAS.ps1" in installation
     assert "power-monitor.home.arpa -> 192.168.0.175" in installation
     assert "Direct-IP HTTPS is not supported" in installation
@@ -920,11 +920,11 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
 def test_candidate_notes_describe_workflow_output_without_claiming_source_publication() -> None:
     notes = (ROOT / "release/RELEASE_NOTES.md").read_text(encoding="utf-8")
     normalized = " ".join(notes.split())
-    assert "power-monitor-v2-v0.1.0-rc.20.yaml" in normalized
+    assert "power-monitor-v2-v0.1.0-rc.21.yaml" in normalized
     assert "Alembic revision `20260818_0017`" in normalized
-    assert "firmware tag: `v0.1.0-rc.20`, build number `23`" in normalized
+    assert "firmware tag: `v0.1.0-rc.21`, build number `24`" in normalized
     assert "pm-telemetry/2.0.0" in normalized
-    assert "dd49a242ebcd374b3e7574742aa010a29d4c5dab2008960ea9e0c842c62fd915" in normalized
+    assert "6d276b738467c867d062ab78b6cdc76d246f15d5aca7e2c505cddabf9b6f2c24" in normalized
     assert "original bytes/full OCR text are never persisted" in normalized
     assert "Automated tests do not install firmware on physical sensors" in normalized
     assert "actual marked-unit" in normalized

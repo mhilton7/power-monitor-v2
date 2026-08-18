@@ -14,7 +14,7 @@ describe('History', () => {
       ? { status: 200, body: { devices: [device] } }
       : path.includes('/circuits?') ? { status: 200, body: { circuits: [] } } : { status: 200, body: history });
     renderWithProviders(<HistoryPage />);
-    expect(await screen.findByTestId('history-chart')).toBeInTheDocument();
+    expect(await screen.findByTestId('history-chart')).toHaveAttribute('data-missing-gap-style', 'unshaded');
     expect(screen.getByText('18.74 kWh')).toBeInTheDocument();
     expect(screen.getAllByText('Some readings are missing.').length).toBeGreaterThanOrEqual(1);
     const legend = screen.getByText(/A measured zero renders at zero/).closest('.chart-legend');
