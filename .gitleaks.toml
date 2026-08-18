@@ -18,14 +18,14 @@ regexes = [
 ]
 
 [[rules.allowlists]]
-description = "Allow only the generated RC16 OpenAPI document SHA-256 in the release notes"
+description = "Allow only the generated RC21 OpenAPI document SHA-256 in the release notes"
 condition = "AND"
 regexTarget = "secret"
 paths = [
   '''^release/RELEASE_NOTES\.md$''',
 ]
 regexes = [
-  '''^8c6d3d73f7bfaa4bd34b4451c860b4199426e556cba1f6f9a48374ea22049c24$''',
+  '''^6d276b738467c867d062ab78b6cdc76d246f15d5aca7e2c505cddabf9b6f2c24$''',
 ]
 
 [[rules]]

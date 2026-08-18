@@ -13,7 +13,7 @@ valid signed server `v0.1.0-rc.4` tag
 is historical failed prepublication evidence, not a Release. Hardware execution
 confirmed that firmware rc.1 through rc.5 crash in the main stack before
 provisioning. Public `v0.1.0-rc.16` is installation evidence for the prior
-durable sensor-backlog architecture. Candidate `v0.1.0-rc.20` retains
+durable sensor-backlog architecture. Candidate `v0.1.0-rc.21` retains
 `pm-protocol/1.0.0`, adds `pm-telemetry/2.0.0`, and extends the Alembic head to
 `20260818_0017`. It moves current telemetry durability and History ownership to
 PostgreSQL, removes active microSD/backlog behavior from new firmware, preserves
@@ -21,8 +21,8 @@ NVS identity/configuration, and adds Main-service History and exact tiered
 Billing. Firmware and server rc.16 remain immutable and must not be relabeled.
 Firmware rc.17 is immutable failed-candidate evidence because its public
 compatibility record omitted the telemetry protocol binding. The exact
-firmware rc.20 metadata and artifacts must be published and independently
-verified before the server rc.20 tag is created; server
+firmware rc.21 metadata and artifacts must be published and independently
+verified before the server rc.21 tag is created; server
 publication still requires every automated gate to pass.
 Stable publication remains blocked until physical hardware, TLS,
 OTA-install/rollback, and soak certification from the actual marked unit
@@ -83,18 +83,18 @@ assertion. Its generated OpenAPI SHA-256 is
 `66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591`.
 
 Public rc.16 carries named service branches and the explicitly designated Main
-service. Candidate rc.20 makes the server the durable owner of independently
+service. Candidate rc.21 makes the server the durable owner of independently
 accepted telemetry and active History. Firmware keeps one in-flight and one
 newest pending sample in RAM, and a missing sample never blocks a later sample.
 The UI removes normal storage/backlog controls; History preserves connection
 gaps and cumulative-energy recovery without inventing a power curve. Billing
 uses Main service with exact Decimal tier and fixed-charge semantics.
-The generated rc.20 OpenAPI SHA-256 is
-`dd49a242ebcd374b3e7574742aa010a29d4c5dab2008960ea9e0c842c62fd915`;
+The generated rc.21 OpenAPI SHA-256 is
+`6d276b738467c867d062ab78b6cdc76d246f15d5aca7e2c505cddabf9b6f2c24`;
 control remains `pm-protocol/1.0.0`, telemetry is `pm-telemetry/2.0.0`, and the
 Alembic head is `20260818_0017`.
 The checked-in YAML retains `UNPUBLISHED_*` sentinels until its tagged workflow
-supplies exact registry digests. Rc.20 must pass clean
+supplies exact registry digests. Rc.21 must pass clean
 dependency/backend/PostgreSQL gates, security scans, public package
 verification, first-run plus idempotent initializer smoke, checksums, and
 attestations. Its explicit migration chain extends to `20260818_0017`;
@@ -142,8 +142,8 @@ Release assets include manifest, digest-pinned YAML, SBOMs/attestations,
 test/security/migration reports, checksums, installation/upgrade/rollback
 guides, the tracked Windows SMB staging helper, the auditable initializer
 source embedded in the API image, and release notes. The GitHub Release
-cross-links the compatible firmware release. Coordinated rc.19 publishes under
-a new immutable tag without rewriting rc.16 or any earlier release.
+cross-links the compatible firmware release. Coordinated rc.21 publishes under
+a new immutable tag without rewriting rc.20 or any earlier release.
 
 ## Stable prohibition and promotion
 
