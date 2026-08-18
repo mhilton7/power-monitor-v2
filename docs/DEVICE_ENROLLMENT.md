@@ -12,7 +12,7 @@ Enrollment does not make a sensor a whole-home meter. Set circuit topology and a
 
 Revoke/unclaim is distinct from clearing readings, logs, or factory reset.
 Revocation immediately rejects device authentication but never silently erases
-History. RC17 firmware does not mount or modify microSD. Re-enrollment retains
+History. RC18 firmware does not mount or modify microSD. Re-enrollment retains
 the existing NVS identity/configuration unless an explicit reviewed recovery
 flow says otherwise.
 

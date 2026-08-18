@@ -77,11 +77,11 @@ The valid signed server `v0.1.0-rc.4` tag is historical, but its deterministic
 deployment-smoke failure skipped release assembly; it has no server GitHub
 Release or generated YAML and is not installable. Hardware execution has now
 confirmed that firmware rc.1 through rc.5 crash in the main stack before
-provisioning. Coordinated rc.17 is pending with stateless sensor telemetry,
+provisioning. Coordinated rc.18 is pending with stateless sensor telemetry,
 server-owned History, Main service, exact tiered Billing, and the removal of
 sensor microSD/backlog behavior;
 it is not an installation artifact until its signed tagged workflow publishes
-the complete matching asset set after distinct firmware rc.17 build-20 metadata
+the complete matching asset set after distinct firmware rc.18 build-21 metadata
 and artifacts are public and verified. Firmware/server rc.16 remain immutable.
 Stable release remains fail-closed until the hardware identity, electrical
 interface, TLS, OTA rollback, outage recovery, and 72-hour soak gates have

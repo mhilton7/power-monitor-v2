@@ -25,6 +25,6 @@
    service scope.
 10. Verify encrypted backup and isolated restore evidence in Settings.
 
-RC17 firmware does not mount or modify microSD. Tests do not flash or OTA a
+RC18 firmware does not mount or modify microSD. Tests do not flash or OTA a
 physical sensor. Move sensors only in explicit operator maintenance windows,
-one at a time, after the RC17 server is healthy.
+one at a time, after the RC18 server is healthy.

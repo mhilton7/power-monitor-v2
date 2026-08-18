@@ -1,9 +1,16 @@
-# PowerMeter V2 v0.1.0-rc.17
+# PowerMeter V2 v0.1.0-rc.18
 
-RC17 replaces the sensor microSD backlog architecture with independently
+RC18 replaces the sensor microSD backlog architecture with independently
 accepted, stateless current telemetry. It is a release candidate: automated
 software evidence is required, while marked-unit hardware certification and
 physical migration of Indoor-AC and Outdoor-AC remain pending.
+
+Firmware RC17 was published as an immutable prerelease, but its generated
+`compatibility.json` omitted the required `pm-telemetry/2.0.0` contract field.
+The server release gate correctly rejected that metadata before server RC17
+could be tagged or published. RC18 adds the missing compatibility binding
+without changing the validated stateless runtime; RC17 is never moved,
+rewritten, or used as the coordinated installation authority.
 
 ## Stateless sensor telemetry
 
@@ -78,24 +85,24 @@ physical migration of Indoor-AC and Outdoor-AC remain pending.
 
 ## Release binding
 
-- Server and frontend version: `0.1.0-rc.17`.
-- Compatible firmware tag: `v0.1.0-rc.17`, build number `20`.
+- Server and frontend version: `0.1.0-rc.18`.
+- Compatible firmware tag: `v0.1.0-rc.18`, build number `21`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
 - Alembic head: `20260818_0017`.
 - Generated contract-document SHA-256:
-  `c2aaa98fc0d31402eac7bd38495838ce830cd21242bc1b32a2929ed7da712e41`.
+  `c0711c053343a5a95120a6f793cd7cb9f6f3c6e59adc403553fe53767eeb7a61`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned
-`power-monitor-v2-v0.1.0-rc.17.yaml`, release manifest, migration/security/test
+`power-monitor-v2-v0.1.0-rc.18.yaml`, release manifest, migration/security/test
 evidence, and checksums. The firmware prerelease must be published and
 independently verified first, then the server compatibility variable must be
-set to the exact RC17 firmware tag.
+set to the exact RC18 firmware tag.
 
 ## Deployment boundary
 
-Deploy the server RC17 YAML first while both RC16 sensors continue using the
+Deploy the server RC18 YAML first while both RC16 sensors continue using the
 legacy authenticated endpoints. Migrate one sensor only during an explicit
 operator maintenance window, preserving NVS and identity, verify v2 acceptance,
 History, reconnect behavior, and OTA, then migrate the second sensor and verify
