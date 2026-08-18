@@ -798,13 +798,14 @@ def test_service_branch_revision_designates_only_unambiguous_populated_aggregate
                     ),
                     {"home_id": home_ids[1]},
                 ).all()
-                assert ambiguous == [
+                assert [tuple(row) for row in ambiguous] == [
                     ("Legacy aggregate 1", False, True),
                     ("Legacy aggregate 2", False, True),
                 ]
-                assert connection.execute(
+                device_membership = connection.execute(
                     sa.text("SELECT id, circuit_id, measurement_scope FROM devices ORDER BY id")
-                ).all() == sorted(
+                ).all()
+                assert [tuple(row) for row in device_membership] == sorted(
                     (
                         device_ids[index],
                         circuit_ids[0 if index < 2 else 1 if index < 4 else 2],
@@ -812,9 +813,10 @@ def test_service_branch_revision_designates_only_unambiguous_populated_aggregate
                     )
                     for index in range(6)
                 )
-                assert connection.execute(
+                account_scopes = connection.execute(
                     sa.text("SELECT id, cost_scope FROM utility_accounts ORDER BY id")
-                ).all() == sorted(
+                ).all()
+                assert [tuple(row) for row in account_scopes] == sorted(
                     ((account_ids[0], "full_account"), (account_ids[1], "energy_only"))
                 )
                 circuit_columns = {

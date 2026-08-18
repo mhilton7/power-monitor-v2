@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from decimal import Decimal
 
 import pytest
@@ -21,22 +21,23 @@ from backend.app.models import (
 from backend.app.routes import billing as billing_route
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class _FixedDateTime(datetime):
     current = datetime(2026, 8, 17, 7, 2, tzinfo=UTC)
 
     @classmethod
-    def now(cls, tz=None):  # type: ignore[no-untyped-def]
-        return cls.current if tz is None else cls.current.astimezone(tz)
+    def now(cls, tz: tzinfo | None = None) -> _FixedDateTime:
+        return cls.fromtimestamp(cls.current.timestamp(), tz=tz or cls.current.tzinfo)
 
 
 async def _saved_interval(
     *,
-    session,
+    session: AsyncSession,
     device: Device,
     start: datetime,
-    sequence: int,  # type: ignore[no-untyped-def]
+    sequence: int,
 ) -> None:
     raw = RawReading(
         device_id=device.id,
