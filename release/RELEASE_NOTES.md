@@ -1,16 +1,17 @@
-# PowerMeter V2 v0.1.0-rc.18
+# PowerMeter V2 v0.1.0-rc.19
 
-RC18 replaces the sensor microSD backlog architecture with independently
-accepted, stateless current telemetry. It is a release candidate: automated
-software evidence is required, while marked-unit hardware certification and
-physical migration of Indoor-AC and Outdoor-AC remain pending.
+RC19 is a frontend compatibility repair for the coordinated stateless-telemetry
+release. Stateless sensors intentionally report the retired storage status as
+`null`; the RC18 frontend rejected that valid value and could replace the
+entire Dashboard with a schema error. RC19 accepts null or omitted legacy
+storage fields on the Dashboard, device details, and diagnostics. It remains a
+release candidate: marked-unit hardware certification is still pending.
 
-Firmware RC17 was published as an immutable prerelease, but its generated
-`compatibility.json` omitted the required `pm-telemetry/2.0.0` contract field.
-The server release gate correctly rejected that metadata before server RC17
-could be tagged or published. RC18 adds the missing compatibility binding
-without changing the validated stateless runtime; RC17 is never moved,
-rewritten, or used as the coordinated installation authority.
+Firmware and server RC18 remain immutable public prereleases and introduced the
+stateless runtime described below. RC19 retains that runtime, database schema,
+API, protocols, and firmware bytes; only coordinated version metadata changes
+in firmware so the same-tag server release gate remains fail-closed. RC17 also
+remains immutable failed-candidate evidence and is never moved or rewritten.
 
 ## Stateless sensor telemetry
 
@@ -72,6 +73,8 @@ rewritten, or used as the coordinated installation authority.
 
 - Normal sensor UI removes microSD status, capacity, backlog progress,
   acknowledgement cursors, missing-prefix state, Format SD, and Sync Backlog.
+- Legacy storage fields may be null or omitted for stateless sensors without
+  preventing Dashboard, device-detail, or diagnostics rendering.
 - Sensor health shows the latest accepted reading, PZEM health, server delivery,
   and firmware identity. Reboot and signed OTA remain.
 - Settings supports service-branch management plus telemetry cadence, History
@@ -85,30 +88,27 @@ rewritten, or used as the coordinated installation authority.
 
 ## Release binding
 
-- Server and frontend version: `0.1.0-rc.18`.
-- Compatible firmware tag: `v0.1.0-rc.18`, build number `21`.
+- Server and frontend version: `0.1.0-rc.19`.
+- Compatible firmware tag: `v0.1.0-rc.19`, build number `22`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
 - Alembic head: `20260818_0017`.
 - Generated contract-document SHA-256:
-  `c0711c053343a5a95120a6f793cd7cb9f6f3c6e59adc403553fe53767eeb7a61`.
+  `1f0fe0aed5fe187a6c22523469dc9d2e76de9f5c75bed4433a654e339968deda`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned
-`power-monitor-v2-v0.1.0-rc.18.yaml`, release manifest, migration/security/test
+`power-monitor-v2-v0.1.0-rc.19.yaml`, release manifest, migration/security/test
 evidence, and checksums. The firmware prerelease must be published and
 independently verified first, then the server compatibility variable must be
-set to the exact RC18 firmware tag.
+set to the exact RC19 firmware tag.
 
 ## Deployment boundary
 
-Deploy the server RC18 YAML first while both RC16 sensors continue using the
-legacy authenticated endpoints. Migrate one sensor only during an explicit
-operator maintenance window, preserving NVS and identity, verify v2 acceptance,
-History, reconnect behavior, and OTA, then migrate the second sensor and verify
-the Main service total and Billing. Automated tests do not install firmware on
-physical sensors. No card was formatted and no NVS namespace was erased while
-preparing this release.
+Deploy the server RC19 YAML before applying the metadata-only firmware RC19
+update. Existing RC18 sensors remain protocol-compatible throughout. Automated
+tests do not install firmware on physical sensors. No card was formatted and no
+NVS namespace was erased while preparing this release.
 
 Stable promotion remains blocked on actual marked-unit electrical identity,
 TLS/HMAC, OTA install/rollback, outage/power-cycle/USB recovery, runtime
