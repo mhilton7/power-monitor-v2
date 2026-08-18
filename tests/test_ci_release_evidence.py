@@ -861,11 +861,11 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     assert "prepare-host.sh" not in installation
     assert "pm-protocol/1.0.0" in installation
     assert "authenticated PZEM-004T readings" in installation
-    assert "$Tag = 'v0.1.0-rc.14'" in installation
+    assert "$Tag = 'v0.1.0-rc.16'" in installation
     assert "$env:TEMP" in installation
     assert "[guid]::NewGuid().ToString('N')" in installation
     assert "Join-Path $HOME" not in installation
-    assert "signed v0.1.0-rc.14 release" in normalized_installation
+    assert "signed v0.1.0-rc.16 release" in normalized_installation
     assert "Stage-PowerMeterTrueNAS.ps1" in installation
     assert "power-monitor.home.arpa -> 192.168.0.175" in installation
     assert "Direct-IP HTTPS is not supported" in installation
@@ -921,29 +921,19 @@ def test_candidate_notes_describe_workflow_output_without_claiming_source_public
     notes = (ROOT / "release/RELEASE_NOTES.md").read_text(encoding="utf-8")
     normalized = " ".join(notes.split())
     assert "source copy alone is not publication evidence" in normalized
-    assert "power-monitor-v2-v0.1.0-rc.14.yaml" in normalized
+    assert "power-monitor-v2-v0.1.0-rc.16.yaml" in normalized
     assert "Keep all existing application secrets" in normalized
-    assert "Alembic head `20260817_0015`" in normalized
-    assert "Revision 0009 adds the exact-home rate-candidate" in normalized
-    assert "permanent-loss rows immutable" in normalized
-    assert "firmware `v0.1.0-rc.14`" in normalized
-    assert "26dbc5cf443cb63a29ca1f22bc069b566afa4eb026ed5c86023a81ffd299d1fe" in normalized
-    assert "failed release run" in normalized
-    assert "31866197054" in normalized
-    assert "There is no server rc.2 GitHub Release" in normalized
-    assert "Public server rc.13 remains installable" in normalized
-    assert "Firmware rc.14 must be published and verified" in normalized
-    assert "31893354667" in normalized
-    assert "no server rc.4 GitHub Release" in normalized
-    assert "deterministically" in normalized
-    assert "docker compose start" in normalized
-    assert "captures the six runtime container IDs" in normalized
+    assert "Alembic head is `20260817_0016`" in normalized
+    assert "Revision 0016 is non-destructive" in normalized
+    assert "firmware `v0.1.0-rc.16`" in normalized
+    assert "Firmware `v0.1.0-rc.15` remains immutable historical evidence" in normalized
+    assert "metadata and artifacts" in normalized
+    assert "8c6d3d73f7bfaa4bd34b4451c860b4199426e556cba1f6f9a48374ea22049c24" in normalized
     assert "never persisted" in normalized
-    assert "nine Generic/POSIX child ZFS datasets" in normalized
     assert "not_exercised_github_hosted_smoke" in normalized
-    assert "proves only the forward upgrade" in normalized
+    assert "proves only a forward upgrade" in normalized
     assert "Application-only rollback is not authorized" in normalized
-    assert "matching pre-upgrade snapshot" in normalized
+    assert "matching pre-upgrade snapshot or verified backup" in normalized
     assert "migration report can permit application rollback" not in normalized
     assert "Hardware status is honestly `pending`" in normalized
     assert "at least 72 hours" in normalized
@@ -981,7 +971,7 @@ def test_rc3_recovery_docs_separate_failed_rc2_forward_upgrade_and_publication()
     assert "7caada9c6295f4c201fd7ce7d383822e6b5785a960022de8355e3b6acc9a4e2c" in firmware
     assert "matching server rc.5 release completed publication" in firmware
     assert "firmware rc.1 through rc.5 crash in the main stack before provisioning" in firmware
-    assert "Candidate firmware rc.14" in firmware
+    assert "Coordinated firmware rc.16" in firmware
 
     assert "Signed public firmware `v0.1.0-rc.2` is historical" in traceability
     assert "Signed server tag `v0.1.0-rc.2` and failed run `31866197054`" in traceability

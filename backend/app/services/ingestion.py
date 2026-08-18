@@ -6,16 +6,19 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import orjson
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..constants import MAX_FUTURE_TIME_SECONDS
 from ..errors import IntegrityConflict, NotFound
 from ..models import (
+    BillingEstimateSelection,
     Device,
+    IntervalCostSelection,
     NormalizedInterval,
     RawReading,
     UnavailableSequenceRange,
+    UtilityAccount,
 )
 from ..schemas.device import DurableReading, PermanentLossRange, ReadingBatchRequest
 
@@ -71,6 +74,7 @@ async def ingest_batch(
     ).all()
     accepted = 0
     identical = 0
+    earliest_new_interval_start: datetime | None = None
 
     for record in batch.records:
         if record.interval_end_utc is not None and record.interval_end_utc.astimezone(
@@ -156,10 +160,40 @@ async def ingest_batch(
                     source_authenticated=True,
                 )
             )
+            normalized_start = record.interval_start_utc.astimezone(UTC)
+            if (
+                earliest_new_interval_start is None
+                or normalized_start < earliest_new_interval_start
+            ):
+                earliest_new_interval_start = normalized_start
 
     if sequences:
         device.maximum_sequence = max(device.maximum_sequence, max(sequences))
     await session.flush()
+    if earliest_new_interval_start is not None:
+        # Backlog records can arrive after newer intervals have already been
+        # priced. Remove only the mutable selections at and after the newly
+        # inserted point so the worker rebuilds tier progression chronologically.
+        # Immutable cost runs, cost rows, readings, and rate versions remain.
+        affected_intervals = (
+            select(NormalizedInterval.id)
+            .join(Device, Device.id == NormalizedInterval.device_id)
+            .where(
+                Device.home_id == device.home_id,
+                NormalizedInterval.start_utc >= earliest_new_interval_start,
+            )
+        )
+        await session.execute(
+            delete(IntervalCostSelection)
+            .where(IntervalCostSelection.normalized_interval_id.in_(affected_intervals))
+            .execution_options(synchronize_session=False)
+        )
+        account_ids = select(UtilityAccount.id).where(UtilityAccount.home_id == device.home_id)
+        await session.execute(
+            delete(BillingEstimateSelection)
+            .where(BillingEstimateSelection.utility_account_id.in_(account_ids))
+            .execution_options(synchronize_session=False)
+        )
     acknowledgement = await advance_contiguous_cursor(session, device)
     return IngestionResult(
         accepted, identical, acknowledgement, tuple(await find_gaps(session, device))

@@ -189,6 +189,26 @@ def test_sce_source_bill_reconciles_through_the_existing_cost_engine() -> None:
     assert result.energy_cost_microdollars == 331_075_410
     assert fixed == 23_070_000
     assert result.total_microdollars + fixed == 354_145_410
+    rounded_dollars = (Decimal(result.total_microdollars + fixed) / Decimal(1_000_000)).quantize(
+        Decimal("0.01")
+    )
+    assert rounded_dollars == Decimal("354.15")
+
+
+def test_sce_579_point_1_kwh_places_only_point_1_in_tier_two() -> None:
+    result = price_sensor_interval(
+        start_utc=datetime(2026, 7, 1, tzinfo=UTC),
+        end_utc=datetime(2026, 7, 1, 0, 1, tzinfo=UTC),
+        energy_mwh=579_100_000,
+        rate=_sce_domestic_rate(),
+        context=CostContext(billing_cycle_days=30),
+    )
+    assert [item.energy_mwh for item in result.slices] == [579_000_000, 100_000]
+    assert [item.period_name for item in result.slices] == ["tier-one", "tier-two"]
+    assert [item.price_per_kwh for item in result.slices] == [
+        Decimal("0.30863"),
+        Decimal("0.40962"),
+    ]
 
 
 def test_cca_adjustment_and_surcharge_use_decimal_arithmetic() -> None:

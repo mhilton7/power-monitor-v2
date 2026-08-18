@@ -9,7 +9,7 @@ test('Home shows live readings, committed summaries and sensor evidence', async 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   await expect(page.locator('.dashboard-live-reading').getByText('2.48', { exact: true })).toBeVisible();
-  await expect(page.getByText('Live heartbeat measurement · not yet committed History')).toBeVisible();
+  await expect(page.getByText(/Live readings can appear before saved History because stored readings must be accepted by the server first/)).toBeVisible();
   const summary = page.locator('.dashboard-summary-card');
   await expect(summary.getByText('18.74 kWh')).toBeVisible();
   await expect(summary.getByText('$3.21')).toBeVisible();
@@ -54,7 +54,7 @@ test('Home totals a verified live aggregate and uses adaptive power units per se
   await page.goto('/');
 
   await expect(page.getByLabel('2 kilowatts', { exact: true })).toBeVisible();
-  await expect(page.getByText('Combined authenticated power from 2 verified non-overlapping live sensors.')).toBeVisible();
+  await expect(page.getByText('Main service combines live power from 2 non-overlapping sensors.')).toBeVisible();
   const indoorRow = page.getByRole('rowheader', { name: /Main Panel Sensor/ }).locator('..');
   const outdoorRow = page.getByRole('rowheader', { name: /Outdoor AC/ }).locator('..');
   await expect(indoorRow.getByText('600 W')).toBeVisible();

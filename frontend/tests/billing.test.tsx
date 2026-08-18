@@ -19,6 +19,24 @@ describe('Billing rate-source boundary', () => {
     state: 'review_required', resulting_rate_version_id: null, review_required: true,
   } as const;
 
+  it('shows four plain-language sections and does not confirm a tier with low reading coverage', async () => {
+    installFetchMock();
+    renderWithProviders(<BillingPage />);
+
+    expect(await screen.findByRole('heading', { name: 'Rate currently used' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Current billing cycle' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'SCE rate update' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Imported bill rates' })).toBeInTheDocument();
+    expect(screen.getByText('SCE Domestic')).toBeInTheDocument();
+    expect(screen.getByText('$0.30863/kWh')).toBeInTheDocument();
+    expect(screen.getByText('$0.40962/kWh')).toBeInTheDocument();
+    expect(screen.getByText('$0.769/day')).toBeInTheDocument();
+    expect(screen.getByText('19.3 kWh per billing day')).toBeInTheDocument();
+    expect(screen.getByText('Whole-home branch used: Main service')).toBeInTheDocument();
+    expect(screen.getAllByText('Tier not confirmed').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Tier confirmation requires 100% reading coverage/)).toBeInTheDocument();
+  });
+
   it('labels PDF upload as rate-only and has no historical bill comparison surface', async () => {
     const fetchMock = installFetchMock();
     renderWithProviders(<BillingPage />);

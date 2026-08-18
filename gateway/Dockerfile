@@ -48,7 +48,15 @@ RUN set -eux; \
 
 FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
 
-LABEL org.opencontainers.image.base.name="docker.io/library/caddy:2.11.4-alpine" \
+ARG VERSION=0.1.0-rc.16
+ARG REVISION=unknown
+ARG BUILD_TIME=unknown
+LABEL org.opencontainers.image.title="PowerMeter V2 gateway" \
+      org.opencontainers.image.source="https://github.com/mhilton7/power-monitor-v2" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.created="${BUILD_TIME}" \
+      org.opencontainers.image.base.name="docker.io/library/caddy:2.11.4-alpine" \
       org.opencontainers.image.base.digest="sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648" \
       io.powermeter.gateway.caddy.source="https://github.com/caddyserver/caddy/tree/e2eee6a7fce366321294c9c2a79f3146891dcbdf" \
       io.powermeter.gateway.caddy.module-sum="h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0=" \

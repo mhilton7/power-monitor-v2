@@ -72,12 +72,17 @@ def test_release_version_metadata_is_consistent() -> None:
     package = json.loads((ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
     package_lock = json.loads((ROOT / "frontend" / "package-lock.json").read_text(encoding="utf-8"))
 
-    assert VERSION == "0.1.0-rc.14"
-    assert project["version"] == "0.1.0rc14"
+    assert VERSION == "0.1.0-rc.16"
+    assert project["version"] == "0.1.0rc16"
     assert package["version"] == VERSION
     assert package_lock["version"] == VERSION
     assert package_lock["packages"][""]["version"] == VERSION
-    for relative in ("backend/Dockerfile", "frontend/Dockerfile", "backup/Dockerfile"):
+    for relative in (
+        "backend/Dockerfile",
+        "frontend/Dockerfile",
+        "gateway/Dockerfile",
+        "backup/Dockerfile",
+    ):
         dockerfile = (ROOT / relative).read_text(encoding="utf-8")
         assert f"ARG VERSION={VERSION}" in dockerfile
 
@@ -92,5 +97,5 @@ def test_release_version_metadata_is_consistent() -> None:
         hashlib.sha256(
             (ROOT / "shared/openapi/power-meter-v2.openapi.json").read_bytes()
         ).hexdigest()
-        == "26dbc5cf443cb63a29ca1f22bc069b566afa4eb026ed5c86023a81ffd299d1fe"
+        == "8c6d3d73f7bfaa4bd34b4451c860b4199426e556cba1f6f9a48374ea22049c24"
     )

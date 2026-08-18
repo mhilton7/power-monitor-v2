@@ -1,6 +1,6 @@
 # Upgrade PowerMeter V2 on TrueNAS
 
-> This UI-only flow is prepared for the complete signed v0.1.0-rc.14 release
+> This UI-only flow is prepared for the complete signed v0.1.0-rc.16 release
 > asset set. Public rc.12, rc.11, rc.10, rc.9, rc.8, rc.6, rc.5, and immutable rc.3 assets retain their attached
 > procedures. Never mix release asset sets.
 
@@ -23,9 +23,11 @@ Never edit one image tag/digest, accept a generic image-update suggestion, use
    `Apps/PowerMeterV2` named with the old version and UTC time. A snapshot
    supplements rather than replaces the verified logical backup.
 
-The coordinated rc.14 release extends public rc.13 to Alembic head
-`20260817_0015`; revision 0015 adds structured SCE thresholds and per-sensor
-OTA batches while preserving and linking every legacy deployment. No existing
+The coordinated rc.16 release extends the migration chain to Alembic head
+`20260817_0016`; revision 0016 generalizes verified circuits into named service
+branches and safely designates an eligible existing verified aggregate as Main
+service/home total. Revision 0015 retains structured SCE thresholds and
+per-sensor OTA batches while preserving and linking every legacy deployment. No existing
 home, sensor, reading, rate, release, deployment, or command is deleted. Upgrades from rc.5 or
 earlier still traverse the additive fail-closed revisions. The 0008 preflight can
 stop when existing immutable ingestion evidence conflicts, including a raw
@@ -35,7 +37,7 @@ that evidence automatically. It also stops if a legacy database row references
 a retained original bill document; the new runtime forbids all persistent
 original-bill storage, including encrypted storage, and does not silently
 delete an operator's legacy file. Complete and verify the backup and snapshot
-above before applying rc.14. If either preflight stops, leave the prior datasets
+above before applying rc.16. If either preflight stops, leave the prior datasets
 intact and preserve the exact failure for reviewed recovery; do not edit
 evidence or delete a referenced file merely to make the migration pass.
 
@@ -55,6 +57,12 @@ Revision 0015 backfills each historical firmware deployment into an explicit
 `legacy` batch before making that relationship required. Its downgrade removes
 only the additive batch and threshold fields and preserves the original
 deployment identity, state, progress, evidence, and timestamps.
+
+Revision 0016 adds branch descriptions, purpose, explicit home-total and
+non-overlap confirmation, membership timestamps, and audit evidence. It does
+not rewrite immutable readings, rate versions, or firmware evidence. A home
+total must contain at least two eligible sensors from the same home and cannot
+silently absorb a revoked or cross-home device.
 
 Unchanged secrets are not restaged and the secrets dataset is not reshared.
 Never rotate a database/application/TLS value merely to upgrade. If a future

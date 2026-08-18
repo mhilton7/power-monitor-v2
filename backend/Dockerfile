@@ -59,18 +59,22 @@ RUN install -d \
 
 FROM python:3.13.14-alpine3.23@sha256:9fdbf2e3e82628351513560b121e2ee6ce31cac212be9e070c5a5e2769fb5e76
 
-ARG VERSION=0.1.0-rc.14
+ARG VERSION=0.1.0-rc.16
 ARG REVISION=unknown
+ARG BUILD_TIME=unknown
 LABEL org.opencontainers.image.title="PowerMeter V2 API and worker" \
       org.opencontainers.image.description="Authenticated PZEM-only PowerMeter V2 services" \
       org.opencontainers.image.source="https://github.com/mhilton7/power-monitor-v2" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.created="${BUILD_TIME}" \
       org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
+    PM_BUILD_REVISION="${REVISION}" \
+    PM_BUILD_TIME="${BUILD_TIME}" \
     PATH=/usr/local/bin:/usr/bin:/bin
 
 RUN /sbin/apk add --no-cache \

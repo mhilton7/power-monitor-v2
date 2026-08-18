@@ -79,9 +79,13 @@ export function RateSourceStatusCard({ homeId }: { homeId: string }) {
     },
   });
 
-  return <Card title="Official SCE source" eyebrow="Allowlisted synchronous validation" className="source-card">
+  return <div className="source-card">
+    <div className="source-state"><ShieldCheck aria-hidden="true" /><div><strong>Official SCE rate check</strong>{status.data && <StatusPill state={status.data.last_run?.state ?? status.data.scheduled.state} />}</div></div>
+    <PermissionGate permission="rates.sync"><button type="button" className="button button-secondary" onClick={() => check.mutate()} disabled={check.isPending}><RefreshCw className={check.isPending ? 'spin' : ''} aria-hidden="true" /> {check.isPending ? 'Checking official source…' : 'Check now'}</button></PermissionGate>
+    {check.data && checkResult(check.data)}
+    {check.isError && <Notice kind="warning"><strong>Check request failed.</strong> {check.error instanceof Error ? check.error.message : 'The source check could not run.'} No success was recorded.</Notice>}
+    <details className="technical-details"><summary>Technical details</summary>
     {status.isLoading ? <Loading label="Loading exact-home source status" /> : status.isError ? <ErrorState error={status.error} retry={() => void status.refetch()} /> : status.data ? <>
-      <div className="source-state"><ShieldCheck aria-hidden="true" /><div><strong>{status.data.scheduled.state === 'not_configured' ? 'Southern California Edison' : status.data.scheduled.source_name}</strong><StatusPill state={status.data.last_run?.state ?? status.data.scheduled.state} /></div></div>
       <dl className="source-evidence-list">
         <div><dt>Scheduled source</dt><dd>{status.data.scheduled.state.replaceAll('_', ' ')}</dd></div>
         <div><dt>Last run</dt><dd>{status.data.last_run ? `${dateTime(status.data.last_run.completed_at)} · ${status.data.last_run.event_code}` : 'Never checked'}</dd></div>
@@ -89,14 +93,12 @@ export function RateSourceStatusCard({ homeId }: { homeId: string }) {
         <div><dt>Last success</dt><dd>{status.data.last_success ? `${dateTime(status.data.last_success.completed_at)} · ${status.data.last_success.state.replaceAll('_', ' ')}` : 'No verified run'}</dd></div>
         <div><dt>Last failure</dt><dd>{status.data.last_failure ? `${dateTime(status.data.last_failure.completed_at)} · ${status.data.last_failure.error_code ?? status.data.last_failure.event_code}` : 'None recorded'}</dd></div>
         <div><dt>Active rate</dt><dd>{status.data.active.state === 'active' ? `${status.data.active.plan_name} · ${dateTime(status.data.active.effective_start)} to ${status.data.active.effective_end ? dateTime(status.data.active.effective_end) : 'open-ended'}` : 'Not configured'}</dd></div>
-        <div><dt>Active provenance</dt><dd>{status.data.active.state === 'active' ? `${status.data.active.provenance.source_name ?? status.data.active.provenance.origin} · ${status.data.active.provenance.source_url ?? status.data.active.provenance.origin} · ${shortHash(status.data.active.provenance.source_artifact_sha256)}` : 'Unavailable'}</dd></div>
-        <div><dt>Last known good</dt><dd>{status.data.last_known_good.state === 'available' ? `${status.data.last_known_good.source_name} · ${dateTime(status.data.last_known_good.retrieved_at)} · ${shortHash(status.data.last_known_good.source_artifact_sha256)}${status.data.last_known_good.active_source_match ? ' · active match' : ''}` : 'Unavailable'}</dd></div>
+        <div><dt>Current rate source</dt><dd>{status.data.active.state === 'active' ? `${status.data.active.provenance.source_name ?? status.data.active.provenance.origin} · ${status.data.active.provenance.source_url ?? status.data.active.provenance.origin} · ${shortHash(status.data.active.provenance.source_artifact_sha256)}` : 'Unavailable'}</dd></div>
+        <div><dt>Last accepted rate information</dt><dd>{status.data.last_known_good.state === 'available' ? `${status.data.last_known_good.source_name} · ${dateTime(status.data.last_known_good.retrieved_at)} · ${shortHash(status.data.last_known_good.source_artifact_sha256)}${status.data.last_known_good.active_source_match ? ' · active match' : ''}` : 'Unavailable'}</dd></div>
       </dl>
-      <PermissionGate permission="rates.sync"><button type="button" className="button button-secondary" onClick={() => check.mutate()} disabled={check.isPending}><RefreshCw className={check.isPending ? 'spin' : ''} aria-hidden="true" /> {check.isPending ? 'Checking official source…' : 'Check now'}</button></PermissionGate>
-      {check.data && checkResult(check.data)}
-      {check.isError && <Notice kind="warning"><strong>Check request failed.</strong> {check.error instanceof Error ? check.error.message : 'The source check could not run.'} No success was recorded.</Notice>}
     </> : null}
-  </Card>;
+    </details>
+  </div>;
 }
 
 export function RateSourceWorkflow({ homeId, accounts }: { homeId: string; accounts: UtilityAccountOption[] }) {
@@ -117,21 +119,22 @@ export function RateSourceWorkflow({ homeId, accounts }: { homeId: string; accou
   }
 
   return <>
-    <Card title="SCE rate candidates" eyebrow="Review, publish, then activate for an exact account" action={<PermissionGate permission="rates.manage"><button type="button" className="button button-secondary" onClick={() => { setManualMessage(''); setManualOpen(true); }}><Plus aria-hidden="true" /> Manual fallback</button></PermissionGate>}>
-      <Notice><strong>Rate facts only.</strong> These candidates contain reusable schedules, exact prices, effective dates and provenance. They never contain customer identity, bill usage, readings, totals, balances or payment data.</Notice>
+    <Card title="SCE rate update" eyebrow="Review before applying" action={<PermissionGate permission="rates.manage"><button type="button" className="button button-secondary" onClick={() => { setManualMessage(''); setManualOpen(true); }}><Plus aria-hidden="true" /> Enter rates manually</button></PermissionGate>}>
+      <Notice><strong>SCE’s public rate information has changed.</strong> Review the new values before replacing the current rate plan. Rate updates never contain customer identity, bill usage, balances, or payments.</Notice>
+      <RateSourceStatusCard homeId={homeId} />
       {manualMessage && <Notice kind="success">{manualMessage}</Notice>}
       {candidates.isLoading ? <Loading label="Loading exact-home rate candidates" /> : candidates.isError ? <ErrorState error={candidates.error} retry={() => void candidates.refetch()} /> : candidates.data?.candidates.length ? <div className="draft-list rate-candidate-list">{candidates.data.candidates.map((candidate) => {
         const names = candidate.normalized_rates.plans.map((plan) => plan.rate_plan_name).join(', ');
         const manual = candidate.validation_evidence.origin === 'manual_administrator_entry';
-        return <button type="button" key={candidate.id} onClick={() => setSelectedCandidateId(candidate.id)} aria-label={`Open ${manual ? 'manual' : 'official'} rate candidate ${candidate.id}`}><FileCheck2 aria-hidden="true" /><div><strong>{names}</strong><span>{manual ? 'Manual official-source entry' : 'Official HTTPS source'} · retrieved {dateTime(candidate.source.retrieved_at)} · {shortHash(candidate.source.artifact_sha256)}</span></div><StatusPill state={candidate.workflow.state} /><ArrowRight aria-hidden="true" /></button>;
+        return <button type="button" key={candidate.id} onClick={() => setSelectedCandidateId(candidate.id)} aria-label={`Open ${manual ? 'manual' : 'official'} rate update ${candidate.id}`}><FileCheck2 aria-hidden="true" /><div><strong>{names}</strong><span>{manual ? 'Entered from an official source' : 'Official SCE source'} · retrieved {dateTime(candidate.source.retrieved_at)}</span></div><StatusPill state={candidate.workflow.state} {...(candidate.workflow.state === 'review_required' ? { label: 'Review before applying' } : {})} /><ArrowRight aria-hidden="true" /></button>;
       })}</div> : <EmptyState title="No SCE candidates for this home" detail="Run an official source check or create a manual candidate from verified official SCE rate facts." />}
     </Card>
-    <Dialog open={Boolean(selectedCandidateId)} title="Review SCE rate candidate" description="Advancement is scoped to the active home and requires separate review, publication and account activation." onClose={() => setSelectedCandidateId('')} wide>
+    <Dialog open={Boolean(selectedCandidateId)} title="Review SCE rate update" description="Confirm the rate and effective date before applying it to this home." onClose={() => setSelectedCandidateId('')} wide>
       {selected ? <CandidateReview candidate={selected} homeId={homeId} accounts={accounts} onWorkflow={updateWorkflow} onClose={() => setSelectedCandidateId('')} /> : candidates.isLoading || candidates.isFetching ? <Loading label="Loading selected candidate" /> : <ErrorState error={new Error('The selected candidate is no longer available for this home.')} />}
     </Dialog>
     <ManualCandidateDialog open={manualOpen} homeId={homeId} onClose={() => setManualOpen(false)} onCreated={(candidateId, created) => {
       setManualOpen(false);
-      setManualMessage(created ? 'Manual candidate created for this home. It still requires review.' : 'The identical manual candidate already exists for this home; no duplicate was created.');
+      setManualMessage(created ? 'Manual candidate created for this home. This manual official-source entry still requires review.' : 'The identical manual candidate already exists for this home; no duplicate was created.');
       setSelectedCandidateId(candidateId);
       void queryClient.invalidateQueries({ queryKey: rateCandidatesKey(homeId) });
       void queryClient.invalidateQueries({ queryKey: rateStatusKey(homeId) });

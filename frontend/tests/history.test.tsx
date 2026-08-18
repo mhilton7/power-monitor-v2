@@ -1,10 +1,14 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HistoryPage } from '../src/pages/HistoryPage';
 import { device, history } from './fixtures';
 import { installFetchMock, renderWithProviders } from './render';
 
 describe('History', () => {
+  afterEach(() => {
+    sessionStorage.clear();
+    window.history.replaceState(null, '', '/');
+  });
   it('renders committed values, exact selected range, zero, and missing evidence separately', async () => {
     installFetchMock((path) => path.includes('/devices?')
       ? { status: 200, body: { devices: [device] } }
@@ -12,11 +16,11 @@ describe('History', () => {
     renderWithProviders(<HistoryPage />);
     expect(await screen.findByTestId('history-chart')).toBeInTheDocument();
     expect(screen.getByText('18.74 kWh')).toBeInTheDocument();
-    expect(screen.getByText(/1 missing range/)).toBeInTheDocument();
+    expect(screen.getAllByText('Some readings are missing').length).toBeGreaterThanOrEqual(1);
     const legend = screen.getByText(/A measured zero renders at zero/).closest('.chart-legend');
     expect(legend).not.toBeNull();
-    expect(within(legend as HTMLElement).getByText(/unavailable values form a gap/)).toBeInTheDocument();
-    expect(screen.getByText('Authenticated sensor evidence unavailable')).toBeInTheDocument();
+    expect(within(legend as HTMLElement).getByText(/missing values form a gap/)).toBeInTheDocument();
+    expect(screen.getByText('No saved reading is available for this interval')).toBeInTheDocument();
   });
 
   it('queries only an explicitly verified aggregate when that scope is selected', async () => {
@@ -28,9 +32,9 @@ describe('History', () => {
       return { status: 404, body: {} };
     });
     renderWithProviders(<HistoryPage />);
-    await screen.findByRole('option', { name: 'Verified whole home · verified aggregate' });
-    await userEvent.selectOptions(screen.getByLabelText('Sensor or aggregate scope'), 'circuit:circuit-verified');
-    expect(await screen.findByText(/Aggregate choices appear only after an operator verifies non-overlapping meters/)).toBeInTheDocument();
+    await screen.findByRole('option', { name: 'Verified whole home' });
+    await userEvent.selectOptions(screen.getByLabelText('Service branch or sensor'), 'circuit:circuit-verified');
+    expect(await screen.findByText(/Sensors that measure the same electricity must not be added together/)).toBeInTheDocument();
     expect(requested.some((path) => path.includes('aggregate_circuit_id=circuit-verified') && !path.includes('device_id='))).toBe(true);
   });
 
@@ -57,8 +61,84 @@ describe('History', () => {
 
     renderWithProviders(<HistoryPage />);
 
-    expect((await screen.findAllByText(/199 authenticated intervals remain queued/)).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('No committed active power')).toBeInTheDocument();
+    expect((await screen.findAllByText(/199 readings are waiting to sync/)).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('No saved readings are available for this time range')).toBeInTheDocument();
     expect(screen.queryByTestId('history-chart')).not.toBeInTheDocument();
+  });
+
+  it('renders valid saved points even when overall coverage is very low', async () => {
+    installFetchMock((path) => {
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [{ ...device, backlog: 500 }] } };
+      if (path.includes('/circuits?')) return { status: 200, body: { circuits: [] } };
+      if (path.includes('/history')) return { status: 200, body: { ...history, completeness: '0.01', points: [{ ...history.points[0]!, value: 0 }, { ...history.points[1]!, value: null }, { ...history.points[2]!, value: '1.25' }] } };
+      return { status: 404, body: {} };
+    });
+    renderWithProviders(<HistoryPage />);
+    expect(await screen.findByTestId('history-chart')).toBeInTheDocument();
+    expect(screen.getByText('1%')).toBeInTheDocument();
+    expect(screen.getByText(/500 readings are waiting to sync/)).toBeInTheDocument();
+  });
+
+  it('selects URL, session, designated Main service, then the first sensor in that order', async () => {
+    const second = { ...device, id: 'device-second', friendly_name: 'Second sensor' };
+    const main = { id: 'branch-main', home_id: device.home_id, name: 'Main service', description: null, purpose: 'whole_home_total', is_home_total: true, aggregate_mode: 'verified_sum', non_overlapping_confirmed: true, device_ids: [device.id, second.id] };
+    const other = { ...main, id: 'branch-other', name: 'Garage', purpose: 'electrical_section', is_home_total: false };
+    const requested: string[] = [];
+    const handler = (path: string) => {
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [device, second] } };
+      if (path.includes('/circuits?')) return { status: 200, body: { circuits: [other, main] } };
+      if (path.includes('/history')) { requested.push(path); return { status: 200, body: history }; }
+      return { status: 404, body: {} };
+    };
+    installFetchMock(handler);
+
+    sessionStorage.setItem(`powermeter:history-scope:${device.home_id}`, 'circuit:branch-other');
+    window.history.replaceState(null, '', '/history?scope=device:device-second');
+    const first = renderWithProviders(<HistoryPage />);
+    await waitFor(() => expect(requested.some((path) => path.includes('device_id=device-second'))).toBe(true));
+    first.unmount();
+
+    requested.length = 0;
+    window.history.replaceState(null, '', '/history');
+    const secondRender = renderWithProviders(<HistoryPage />);
+    await waitFor(() => expect(requested.some((path) => path.includes('aggregate_circuit_id=branch-other'))).toBe(true));
+    secondRender.unmount();
+
+    requested.length = 0;
+    sessionStorage.clear();
+    const third = renderWithProviders(<HistoryPage />);
+    await waitFor(() => expect(requested.some((path) => path.includes('aggregate_circuit_id=branch-main'))).toBe(true));
+    third.unmount();
+
+    requested.length = 0;
+    installFetchMock((path) => path.includes('/devices?') ? { status: 200, body: { devices: [device, second] } } : path.includes('/circuits?') ? { status: 200, body: { circuits: [] } } : path.includes('/history') ? (requested.push(path), { status: 200, body: history }) : { status: 404, body: {} });
+    renderWithProviders(<HistoryPage />);
+    await waitFor(() => expect(requested.some((path) => path.includes('device_id=device-main'))).toBe(true));
+  });
+
+  it('advances only the Live display window each second without one-second API requests', async () => {
+    let historyRequests = 0;
+    installFetchMock((path) => {
+      if (path.endsWith('/auth/preferences')) return { status: 200, body: { preferences: { dashboard_range: 'today', history_range: 'day', refresh_seconds: 15, power_unit: 'auto', energy_unit: 'auto', date_format: 'us', time_format: '12h', decimal_precision: 2, density: 'comfortable', dashboard_cards: ['live_power'] } } };
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [device] } };
+      if (path.includes('/circuits?')) return { status: 200, body: { circuits: [] } };
+      if (path.includes('/history')) { historyRequests += 1; return { status: 200, body: history }; }
+      return { status: 404, body: {} };
+    });
+    renderWithProviders(<HistoryPage />);
+    await screen.findByTestId('history-chart');
+    await userEvent.click(screen.getByRole('button', { name: 'Live' }));
+    const status = await screen.findByTestId('live-timeline-status');
+    await waitFor(() => expect(historyRequests).toBeGreaterThan(1));
+    const firstEnd = Number(status.dataset.viewEnd);
+    const firstRequestCount = historyRequests;
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 1_100)); });
+    expect(Number(screen.getByTestId('live-timeline-status').dataset.viewEnd)).toBeGreaterThan(firstEnd);
+    expect(historyRequests).toBe(firstRequestCount);
+    await userEvent.click(screen.getByRole('button', { name: '24 hours' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '24 hours' })).toHaveAttribute('aria-pressed', 'true'));
+    const staticRequestCount = historyRequests;
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 1_100)); });
+    expect(historyRequests).toBe(staticRequestCount);
   });
 });

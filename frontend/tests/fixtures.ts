@@ -50,7 +50,10 @@ export const homeUtility = {
   usage_source: 'authenticated PZEM-004T sensor intervals only',
 };
 
-export const circuits = { circuits: [] };
+export const circuits = { circuits: [{
+  id: 'circuit-main-service', home_id: homeScopes[0]!.id, name: 'Main service', description: 'Whole-home service', purpose: 'whole_home_total', is_home_total: true,
+  aggregate_mode: 'verified_sum', non_overlapping_confirmed: true, device_ids: ['device-main'], created_at: '2026-08-13T16:00:00Z', updated_at: '2026-08-13T16:00:00Z',
+}] };
 
 export const firmwareReleases = {
   releases: [{
@@ -90,7 +93,11 @@ export const alerts = {
 };
 
 export const billing = {
-  accounts: [{ utility_account_id: '00000000-0000-0000-0000-000000000020', plan_name: 'SCE TOU-D-4-9PM', rate_version_id: 'rate-version-2026-08', effective_start: '2026-08-01T07:00:00Z', cost_scope: 'energy_only', baseline_credit_included: false, fixed_charges_included: false, cca_or_direct_access: null }],
+  accounts: [{ utility_account_id: '00000000-0000-0000-0000-000000000020', plan_name: 'SCE Domestic', rate_version_id: 'rate-version-2026-08', effective_start: '2026-08-01T07:00:00Z', cost_scope: 'full_account', baseline_credit_included: false, fixed_charges_included: true, cca_or_direct_access: null,
+    home_total_branch: { id: 'circuit-main-service', name: 'Main service', device_ids: ['device-main'] },
+    current_rate_plan: { rate_plan_id: 'rate-domestic', rate_plan_version_id: 'rate-version-2026-08', name: 'SCE Domestic', utility_name: 'Southern California Edison', rate_class: 'residential_tiered', effective_start: '2026-08-01T07:00:00Z', currently_used: true, tier_1_price_per_kwh: '0.30863', tier_2_price_per_kwh: '0.40962', daily_service_charge: '0.769', daily_baseline_allowance_kwh: '19.3', generation_service: 'SCE' },
+    current_billing_cycle: { start_utc: '2026-08-01T07:00:00Z', end_utc: '2026-09-01T07:00:00Z', service_branch_id: 'circuit-main-service', service_branch_name: 'Main service', saved_usage_kwh: '0.17', reading_coverage: '0.004', readings_waiting_to_sync: 2946, tier_state: 'not_confirmed', tier_confirmation_rule: 'requires_100_percent_reading_coverage', tier_1_allowance_kwh: '598.3', tier_1_remaining_kwh: null, amount_above_tier_1_kwh: null, estimated_energy_charges: null, estimated_fixed_charges: null, estimated_total: null },
+  }],
   usage_source: 'authenticated PZEM-004T sensor intervals only', rate_import_notice: 'PDFs create reviewed reusable rate-plan drafts only.',
 };
 
@@ -144,7 +151,7 @@ export const rateSourceStatus = {
 };
 
 export const systemHealth = {
-  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.14', protocol: 'pm-protocol/1.0.0', database: 'reachable',
+  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.16', protocol: 'pm-protocol/1.0.0', database: 'reachable',
   sensors: [{ device_id: 'device-main', state: 'online', heartbeat_age_seconds: 5, pzem_status: 'ok', storage_status: 'healthy', backlog: 3 }],
   open_alert_count: 1, last_rate_sync: { id: 'rate-run-old', state: 'review_required', event_code: 'RATE_SOURCE_SNAPSHOT_CAPTURED', completed_at: '2026-08-13T16:00:00Z' },
   backup: {}, restore_test: {}, physical_hardware_certification: 'pending',
@@ -183,6 +190,9 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (path.includes('/credentials/rotations/') && path.endsWith('/cancel') && method === 'POST') return { status: 202, body: { rotation: { rotation_id: '00000000-0000-0000-0000-000000000050', credential_fingerprint: 'b'.repeat(64), state: 'pending', overlap_expires_at: '2026-08-13T17:42:10Z', prepare_command_id: '00000000-0000-0000-0000-000000000051', commit_command_id: null, cancel_command_id: '00000000-0000-0000-0000-000000000052' } } };
   if (path.endsWith('/enrollment-tokens') && method === 'POST') return { status: 201, body: { token: 'single-use-enrollment-token-value-000000000000', expires_at: '2026-08-13T17:47:00Z' } };
   if (path.endsWith('/circuits/verified-aggregates') && method === 'POST') return { status: 201, body: { id: '00000000-0000-0000-0000-000000000040', name: 'Verified whole home', device_ids: ['device-main', 'device-secondary'] } };
+  if (pathname.endsWith('/circuits') && method === 'POST') return { status: 201, body: circuits.circuits[0] };
+  if (pathname.includes('/circuits/') && method === 'PATCH') return { status: 200, body: circuits.circuits[0] };
+  if (pathname.includes('/circuits/') && method === 'DELETE') return { status: 204 };
   if (pathname.endsWith('/circuits')) return { status: 200, body: circuits };
   if (pathname.endsWith('/devices')) return { status: 200, body: { home_scopes: homeScopes, devices: [device] } };
   if (path.includes('/devices/') && path.endsWith('/revoke') && method === 'POST') return { status: 204 };

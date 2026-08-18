@@ -5,12 +5,13 @@ import { mockApi } from './mocks';
 test('official candidate advances through explicit review, publish and exact-account activation', async ({ page }) => {
   await mockApi(page);
   await page.goto('/billing');
-  await expect(page.getByText('Last known good')).toBeVisible();
+  await page.getByText('Technical details').first().click();
+  await expect(page.getByText('Last accepted rate information')).toBeVisible();
   await expect(page.getByText(`${rateCandidate.source.name} · official_https · ${rateCandidate.source.url}`)).toBeVisible();
-  await expect(page.getByText(/Official HTTPS source.*retrieved/)).toBeVisible();
+  await expect(page.getByText('Last run source')).toBeVisible();
 
   const reviewRequest = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/review'));
-  await page.getByRole('button', { name: new RegExp(`Open official rate candidate ${rateCandidate.id}`) }).click();
+  await page.getByRole('button', { name: new RegExp(`Open official rate update ${rateCandidate.id}`) }).click();
   await page.getByLabel('Effective start date').fill('2026-08-01');
   await page.getByLabel(/confirmed this exact effective range/).check();
   await page.getByLabel(/confirmed the recorded source/).check();
@@ -43,7 +44,7 @@ test('candidate rejection confirms, exposes loading and error, resets, then beco
   });
   await mockApi(page, { rateRejectFailureOnce: true, rateRejectDelayMs: 250 });
   await page.goto('/billing');
-  await page.getByRole('button', { name: new RegExp(`Open official rate candidate ${rateCandidate.id}`) }).click();
+  await page.getByRole('button', { name: new RegExp(`Open official rate update ${rateCandidate.id}`) }).click();
 
   await page.getByRole('button', { name: 'Reject candidate' }).click();
   await expect(page.getByRole('dialog', { name: 'Reject this rate candidate?' })).toBeVisible();
@@ -76,7 +77,7 @@ test('synchronous failed source check is never described as queued or successful
 test('manual fallback sends only rate facts and remains review-required', async ({ page }) => {
   await mockApi(page);
   await page.goto('/billing');
-  await page.getByRole('button', { name: 'Manual fallback' }).click();
+  await page.getByRole('button', { name: 'Enter rates manually' }).click();
   await page.getByLabel('Official source title').fill('SCE Schedule D official tariff');
   await page.getByLabel('Tariff identifier').fill('Schedule D 2026-08-01');
   await page.getByLabel('Official SCE HTTPS URL (optional)').fill('https://www.sce.com/regulatory/tariff-books/rates-pricing-choices');
@@ -92,7 +93,7 @@ test('manual fallback sends only rate facts and remains review-required', async 
   expect(payload).toMatchObject({ administrator_attests_official_source: true, rate_plan_name: 'MANUAL-TOU-D', periods: [{ season: 'all', day_type: 'all', start_minute: 0, end_minute: 1440, price_per_kwh: '0.12345678' }] });
   expect(Object.keys(payload)).not.toEqual(expect.arrayContaining(['customer_name', 'account_number', 'usage_kwh', 'meter_reading', 'amount_due']));
   await expect(page.getByText(/Manual candidate created for this home/)).toBeVisible();
-  await expect(page.getByRole('dialog', { name: 'Review SCE rate candidate' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Review SCE rate update' })).toBeVisible();
   await expect(page.getByText('Manual official-source entry')).toBeVisible();
 });
 
@@ -118,11 +119,11 @@ test('multi-home selection scopes candidate reads and clears prior-home review s
   await page.goto('/billing');
   const selector = page.getByLabel('Active home');
   await selector.selectOption(firstHome);
-  await page.getByRole('button', { name: new RegExp(`Open official rate candidate ${rateCandidate.id}`) }).click();
-  await expect(page.getByRole('dialog', { name: 'Review SCE rate candidate' })).toBeVisible();
+  await page.getByRole('button', { name: new RegExp(`Open official rate update ${rateCandidate.id}`) }).click();
+  await expect(page.getByRole('dialog', { name: 'Review SCE rate update' })).toBeVisible();
 
   await selector.selectOption(secondHome);
-  await expect(page.getByRole('dialog', { name: 'Review SCE rate candidate' })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Review SCE rate update' })).toHaveCount(0);
   await expect(page.getByText('SECOND-HOME-TOU')).toBeVisible();
   await expect(page.getByText('TOU-D-4-9PM', { exact: true })).toHaveCount(0);
   expect(candidateRequests).toContain(firstHome);

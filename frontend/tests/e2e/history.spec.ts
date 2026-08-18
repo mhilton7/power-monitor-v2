@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => { await mockApi(page); });
 test('History renders committed gaps, cost tooltips and non-overlapping time ticks', async ({ page }) => {
   await page.goto('/history');
   await expect(page.getByTestId('history-chart')).toBeVisible();
-  await expect(page.getByText('Authenticated sensor evidence unavailable')).toBeVisible();
+  await expect(page.getByText(/Showing saved readings for Main service/)).toBeVisible();
   await expect(page.getByText(/measured zero renders at zero/)).toBeVisible();
   const ticks = page.locator('[data-testid="history-chart"] .recharts-xAxis-tick-labels text');
   await expect(ticks).not.toHaveCount(0);

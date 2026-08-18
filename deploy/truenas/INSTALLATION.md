@@ -5,7 +5,7 @@ authenticated SMB share, and the TrueNAS web UI. It does **not** require SSH,
 the TrueNAS shell, a container console, or a host-side preparation command.
 
 > **Release boundary:** this source guide is prepared for the complete signed
-> v0.1.0-rc.14 release asset set. Public server rc.13 remains installable only
+> v0.1.0-rc.16 release asset set. Earlier public releases remain installable only
 > with its own attached rc.11 guide and assets. The immutable rc.3 assets use
 > their attached rc.3 instructions and do not contain this initializer/staging
 > helper. The signed server rc.4 tag has no GitHub Release or YAML. Never
@@ -30,7 +30,7 @@ the exact coordinated release tag. A unique directory below Windows `%TEMP%`
 prevents an earlier partial download from contaminating this asset set:
 
 ```powershell
-$Tag = 'v0.1.0-rc.14'
+$Tag = 'v0.1.0-rc.16'
 $TempRoot = [IO.Path]::GetFullPath($env:TEMP)
 $Release = Join-Path $TempRoot ("powermeter-{0}-{1}" -f $Tag, [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $Release -ErrorAction Stop | Out-Null

@@ -583,6 +583,67 @@ class VerifiedAggregateRequest(BaseModel):
         return self
 
 
+class ServiceBranchCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    home_id: str = Field(min_length=36, max_length=36)
+    name: str = Field(min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+    purpose: Literal["electrical_section", "whole_home_total"] = "electrical_section"
+    is_home_total: bool = False
+    device_ids: list[str] = Field(min_length=1, max_length=32)
+    confirmation: Literal["I VERIFIED THESE NON-OVERLAPPING METERS"]
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return _clean_label(value, field="service branch name")
+
+    @field_validator("description")
+    @classmethod
+    def clean_description(cls, value: str | None) -> str | None:
+        return _clean_optional_label(value, field="service branch description")
+
+    @model_validator(mode="after")
+    def valid_branch(self) -> ServiceBranchCreateRequest:
+        if len(self.device_ids) != len(set(self.device_ids)):
+            raise ValueError("service branch device IDs must be unique")
+        if self.is_home_total and self.purpose != "whole_home_total":
+            raise ValueError("the home-total service branch requires whole_home_total purpose")
+        if not self.is_home_total and self.purpose == "whole_home_total":
+            raise ValueError("whole_home_total purpose requires home-total designation")
+        return self
+
+
+class ServiceBranchUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+    purpose: Literal["electrical_section", "whole_home_total"] | None = None
+    is_home_total: bool | None = None
+    device_ids: list[str] | None = Field(default=None, max_length=32)
+    confirmation: Literal["I VERIFIED THESE NON-OVERLAPPING METERS"] | None = None
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str | None) -> str | None:
+        return _clean_optional_label(value, field="service branch name")
+
+    @field_validator("description")
+    @classmethod
+    def clean_description(cls, value: str | None) -> str | None:
+        return _clean_optional_label(value, field="service branch description")
+
+    @model_validator(mode="after")
+    def unique_devices(self) -> ServiceBranchUpdateRequest:
+        if self.device_ids is not None and len(self.device_ids) != len(set(self.device_ids)):
+            raise ValueError("service branch device IDs must be unique")
+        if (
+            self.device_ids is not None or self.is_home_total is not None
+        ) and self.confirmation != "I VERIFIED THESE NON-OVERLAPPING METERS":
+            raise ValueError("membership or home-total changes require non-overlap confirmation")
+        return self
+
+
 class DeviceRevokeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirmation: Literal["REVOKE SENSOR"]

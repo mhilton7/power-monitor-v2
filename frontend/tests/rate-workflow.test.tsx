@@ -99,7 +99,7 @@ describe('exact-home SCE rate workflow', () => {
     });
     renderWithProviders(<BillingPage />);
 
-    await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate candidate ${candidate.id}`) }));
+    await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate update ${candidate.id}`) }));
     expect(screen.getByText(/Additional baseline evidence required/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Confirm candidate review' })).toBeDisabled();
   });
@@ -176,7 +176,7 @@ describe('exact-home SCE rate workflow', () => {
     });
     renderWithProviders(<BillingPage />);
 
-    await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate candidate ${rateCandidate.id}`) }));
+    await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate update ${rateCandidate.id}`) }));
     await userEvent.type(screen.getByLabelText('Effective start date'), '2026-08-01');
     await userEvent.click(screen.getByLabelText(/confirmed this exact effective range/));
     await userEvent.click(screen.getByLabelText(/confirmed the recorded source/));
@@ -214,7 +214,7 @@ describe('exact-home SCE rate workflow', () => {
       return apiResponse(path, method);
     });
     renderWithProviders(<BillingPage />);
-    await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate candidate ${rateCandidate.id}`) }));
+    await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate update ${rateCandidate.id}`) }));
 
     await userEvent.click(screen.getByRole('button', { name: 'Reject candidate' }));
     expect(screen.getByRole('dialog', { name: 'Reject this rate candidate?' })).toBeInTheDocument();
@@ -247,7 +247,7 @@ describe('exact-home SCE rate workflow', () => {
     });
     renderWithProviders(<BillingPage />);
 
-    await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate candidate ${rateCandidate.id}`) }));
+    await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate update ${rateCandidate.id}`) }));
     await userEvent.click(screen.getByRole('button', { name: 'Delete candidate' }));
     const confirmation = screen.getByRole('dialog', { name: 'Delete this disposable rate candidate?' });
     await userEvent.click(within(confirmation).getByRole('button', { name: 'Delete candidate' }));
@@ -269,7 +269,7 @@ describe('exact-home SCE rate workflow', () => {
     });
     renderWithProviders(<WorkflowSwitchHarness secondHomeId={secondHomeId} />);
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Manual fallback' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Enter rates manually' }));
     await userEvent.type(screen.getByLabelText('Official source title'), 'SCE Schedule D official tariff');
     await userEvent.type(screen.getByLabelText('Tariff identifier'), 'Schedule D 2026-08-01');
     await userEvent.type(screen.getByLabelText('Official SCE HTTPS URL (optional)'), 'https://www.sce.com/regulatory/tariff-books/rates-pricing-choices');
@@ -286,7 +286,7 @@ describe('exact-home SCE rate workflow', () => {
     expect(Object.keys(manualPayload ?? {})).not.toEqual(expect.arrayContaining(['customer_name', 'account_number', 'usage_kwh', 'amount_due', 'meter_reading']));
 
     await userEvent.click(screen.getByRole('button', { name: 'Switch test home' }));
-    expect(screen.queryByRole('dialog', { name: 'Review SCE rate candidate' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Review SCE rate update' })).not.toBeInTheDocument();
     await waitFor(() => expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.some(([input]) => new URL(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url, 'http://frontend.test').searchParams.get('home_id') === secondHomeId)).toBe(true));
   });
 });

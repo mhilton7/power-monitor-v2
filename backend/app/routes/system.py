@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
@@ -24,7 +24,11 @@ from ..models import (
     Device,
     DeviceCommand,
     DeviceHeartbeat,
+    FirmwareDeployment,
+    FirmwareRelease,
     RateSyncRun,
+    RawReading,
+    UnavailableSequenceRange,
     aware_utc,
     user_home_scopes,
 )
@@ -149,6 +153,47 @@ async def system_health(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
     now = datetime.now(UTC)
+    bind = session.get_bind()
+    if bind.dialect.name == "sqlite":
+        has_version_table = bool(
+            await session.scalar(
+                text(
+                    "SELECT COUNT(*) FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'alembic_version'"
+                )
+            )
+        )
+        current_database_revision = (
+            await session.scalar(text("SELECT version_num FROM alembic_version"))
+            if has_version_table
+            else None
+        )
+    else:
+        current_database_revision = await session.scalar(
+            text("SELECT version_num FROM alembic_version")
+        )
+    database_compatible = current_database_revision == settings.expected_database_revision
+    revision_pattern = re.compile(r"^[0-9a-f]{40,64}$")
+
+    def known(value: str) -> str | None:
+        normalized = value.strip()
+        return (
+            normalized
+            if normalized and normalized.lower() not in {"unknown", "not supplied"}
+            else None
+        )
+
+    backend_revision = known(settings.build_revision) or known(settings.release_revision)
+    frontend_revision = known(settings.frontend_revision)
+    frontend_version = known(settings.frontend_version)
+    identity_compatible = bool(
+        backend_revision
+        and frontend_revision
+        and revision_pattern.fullmatch(backend_revision)
+        and revision_pattern.fullmatch(frontend_revision)
+        and backend_revision == frontend_revision
+        and frontend_version == VERSION
+    )
     homes = tuple(
         (
             await session.scalars(
@@ -163,21 +208,133 @@ async def system_health(
     ).all()
     sensor_health = []
     for device in devices:
-        heartbeat = await session.scalar(
-            select(DeviceHeartbeat)
-            .where(DeviceHeartbeat.device_id == device.id)
-            .order_by(DeviceHeartbeat.received_at.desc())
+        version = device.firmware_version or ""
+        installed_release = None
+        if version:
+            installed_release = await session.scalar(
+                select(FirmwareRelease)
+                .where(
+                    FirmwareRelease.semantic_version.in_(
+                        {version, version.removeprefix("v"), f"v{version.removeprefix('v')}"}
+                    )
+                )
+                .order_by(FirmwareRelease.created_at.desc())
+                .limit(1)
+            )
+        last_successful_ota = await session.scalar(
+            select(FirmwareDeployment)
+            .where(
+                FirmwareDeployment.device_id == device.id,
+                FirmwareDeployment.state == "succeeded",
+            )
+            .order_by(FirmwareDeployment.completed_at.desc())
             .limit(1)
         )
+        heartbeats = (
+            await session.scalars(
+                select(DeviceHeartbeat)
+                .where(DeviceHeartbeat.device_id == device.id)
+                .order_by(DeviceHeartbeat.received_at.desc())
+                .limit(2)
+            )
+        ).all()
+        heartbeat = heartbeats[0] if heartbeats else None
+        prior_heartbeat = heartbeats[1] if len(heartbeats) > 1 else None
         age = (now - aware_utc(heartbeat.received_at)).total_seconds() if heartbeat else None
+        last_reading = await session.scalar(
+            select(RawReading)
+            .where(RawReading.device_id == device.id)
+            .order_by(RawReading.received_at.desc(), RawReading.sequence.desc())
+            .limit(1)
+        )
+        last_loss = await session.scalar(
+            select(UnavailableSequenceRange)
+            .where(UnavailableSequenceRange.device_id == device.id)
+            .order_by(UnavailableSequenceRange.authenticated_at.desc())
+            .limit(1)
+        )
+        drain_rate = None
+        if heartbeat is not None and prior_heartbeat is not None:
+            elapsed_minutes = (
+                aware_utc(heartbeat.received_at) - aware_utc(prior_heartbeat.received_at)
+            ).total_seconds() / 60
+            if elapsed_minutes > 0:
+                drain_rate = (prior_heartbeat.backlog - heartbeat.backlog) / elapsed_minutes
+        missing_prefix_status = "unavailable"
+        if heartbeat is not None and heartbeat.oldest_sequence is not None:
+            missing_prefix_status = (
+                "detected" if device.contiguous_ack + 1 < heartbeat.oldest_sequence else "none"
+            )
+        synchronization_errors = (
+            [
+                flag
+                for flag in heartbeat.health_flags
+                if flag.startswith(("BACKLOG_", "MISSING_PREFIX_", "SYNC_"))
+            ]
+            if heartbeat is not None
+            else []
+        )
+        last_error = synchronization_errors[0] if synchronization_errors else None
         sensor_health.append(
             {
                 "device_id": device.id,
+                "device_name": device.friendly_name,
                 "state": "online" if age is not None and age <= 30 else "offline",
                 "heartbeat_age_seconds": age,
                 "pzem_status": heartbeat.pzem_status if heartbeat else "unavailable",
                 "storage_status": heartbeat.storage_status if heartbeat else "unavailable",
                 "backlog": heartbeat.backlog if heartbeat else None,
+                "firmware_version": device.firmware_version,
+                "firmware_build_id": installed_release.build_number if installed_release else None,
+                "firmware_digest": installed_release.sha256 if installed_release else None,
+                "protocol": device.protocol_id,
+                "boot_partition": None,
+                "last_successful_ota": last_successful_ota.completed_at
+                if last_successful_ota
+                else None,
+                "acknowledgement": device.contiguous_ack,
+                "oldest_sequence": heartbeat.oldest_sequence if heartbeat else None,
+                "newest_sequence": heartbeat.newest_sequence if heartbeat else None,
+                "synchronization": {
+                    "server_contiguous_acknowledgement": device.contiguous_ack,
+                    "earliest_sd_sequence": heartbeat.oldest_sequence if heartbeat else None,
+                    "latest_sd_sequence": heartbeat.newest_sequence if heartbeat else None,
+                    "queued_records": heartbeat.backlog if heartbeat else None,
+                    "queue_drain_rate_per_minute": drain_rate,
+                    "queue_drain_rate": drain_rate,
+                    "queue_drain_rate_basis": (
+                        "difference between the two latest authenticated heartbeats"
+                    ),
+                    "missing_prefix_status": missing_prefix_status,
+                    "last_accepted_sequence": last_reading.sequence if last_reading else None,
+                    "last_accepted_at": last_reading.received_at if last_reading else None,
+                    "last_successful_batch_start": None,
+                    "last_successful_batch_end": None,
+                    "last_successful_batch_record_count": None,
+                    "last_successful_batch_body_bytes": None,
+                    # Compatibility aliases used by the browser diagnostics.
+                    # These remain null because pm-protocol/1.0.0 does not
+                    # carry device-side request attempt details.
+                    "last_batch_start": None,
+                    "last_batch_end": None,
+                    "selected_record_count": None,
+                    "serialized_bytes": None,
+                    "http_result": None,
+                    "last_error": last_error,
+                    "last_permanent_loss": {
+                        "first_sequence": last_loss.first_sequence,
+                        "last_sequence": last_loss.last_sequence,
+                        "reason_code": last_loss.reason_code,
+                        "authenticated_at": last_loss.authenticated_at,
+                        "status": "accepted",
+                    }
+                    if last_loss
+                    else None,
+                    "unavailable_fields_reason": (
+                        "pm-protocol/1.0.0 does not report device-side failed HTTP attempts; "
+                        "server request batch boundaries and body bytes are not persisted"
+                    ),
+                },
             }
         )
     last_sync = await session.scalar(
@@ -197,6 +354,56 @@ async def system_health(
         "version": VERSION,
         "protocol": PROTOCOL_ID,
         "database": "reachable",
+        "frontend": {
+            **({"version": frontend_version} if frontend_version else {}),
+            **({"commit": frontend_revision} if frontend_revision else {}),
+            **(
+                {"build_time": settings.frontend_build_time}
+                if known(settings.frontend_build_time)
+                else {}
+            ),
+            "image_name": "ghcr.io/mhilton7/power-monitor-v2-frontend",
+            **(
+                {"image_digest": settings.frontend_image_digest}
+                if known(settings.frontend_image_digest)
+                else {}
+            ),
+            **(
+                {"static_asset_build_id": settings.frontend_static_asset_id}
+                if known(settings.frontend_static_asset_id)
+                else {}
+            ),
+            "cache_version": "content-hashed assets; no service worker; HTML revalidates",
+        },
+        "backend": {
+            "version": VERSION,
+            **({"commit": backend_revision} if backend_revision else {}),
+            **({"build_time": settings.build_time} if known(settings.build_time) else {}),
+            "api_version": VERSION,
+            "image_name": "ghcr.io/mhilton7/power-monitor-v2-api",
+            **(
+                {"image_digest": settings.api_image_digest}
+                if known(settings.api_image_digest)
+                else {}
+            ),
+            "protocol": PROTOCOL_ID,
+        },
+        "database_migration": {
+            **({"current": current_database_revision} if current_database_revision else {}),
+            "expected": settings.expected_database_revision,
+            "compatible": database_compatible,
+        },
+        "compatibility": {
+            "compatible": identity_compatible and database_compatible,
+            "message": (
+                "Frontend, backend, protocol, and database migration identities match"
+                if identity_compatible and database_compatible
+                else (
+                    "Deploy the matching frontend/backend release and apply the required "
+                    "database migration"
+                )
+            ),
+        },
         "sensors": sensor_health,
         "open_alert_count": open_alert_count,
         "last_rate_sync": {

@@ -99,6 +99,7 @@ jobs:
           set -Eeuo pipefail
           version="${FIRMWARE_TAG#v}"
           image_sha256="$(sha256sum firmware-assets/firmware.bin | cut -d' ' -f1)"
+          build_id="$(jq -er '.build_number' firmware-assets/manifest.json)"
           jq -e --arg version "$version" --arg revision "$FIRMWARE_REVISION" \
             --arg image_sha256 "$image_sha256" \
             '.schema == "pm-firmware-release/1.0.0" and .version == $version and .git_commit == $revision and .image_sha256 == $image_sha256 and .project_name == "power-monitor-sensor-headless" and .target_chip == "esp32s3" and .board_profile == "esp32-s3-devkitc-n16r8-reference/1" and .minimum_protocol == "pm-protocol/1.0.0" and .minimum_config_version == 1 and .ota_authentication.mode == "per-device-hmac-sha256" and .hardware_certification == "pending"' \
@@ -116,7 +117,8 @@ jobs:
             --arg firmware_revision "$FIRMWARE_REVISION" \
             --arg firmware_release_url "${{ steps.firmware.outputs.url }}" \
             --arg firmware_image_sha256 "$image_sha256" \
-            '{schema:"pm-cross-repository-contract/1.0.0",protocol:"pm-protocol/1.0.0",firmware_tag:$firmware_tag,firmware_revision:$firmware_revision,firmware_release_url:$firmware_release_url,firmware_image_sha256:$firmware_image_sha256,host_and_contract_status:"passed",physical_certification_status:"pending"}' \
+            --argjson firmware_build_id "$build_id" \
+            '{schema:"pm-cross-repository-contract/1.0.0",protocol:"pm-protocol/1.0.0",firmware_tag:$firmware_tag,firmware_revision:$firmware_revision,firmware_release_url:$firmware_release_url,firmware_image_sha256:$firmware_image_sha256,firmware_build_id:$firmware_build_id,host_and_contract_status:"passed",physical_certification_status:"pending"}' \
             > firmware-compatibility-report.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -169,6 +171,17 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ github.token }}
+      - id: identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          build_time="$(git show -s --format=%cI "$GITHUB_SHA")"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'build_time=%s\n' "$build_time" >> "$GITHUB_OUTPUT"
+          printf 'frontend_asset_id=%s-%s\n' "$version" "${GITHUB_SHA:0:16}" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
@@ -186,6 +199,11 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
+          build-args: |
+            VERSION=${{ steps.identity.outputs.version }}
+            REVISION=${{ github.sha }}
+            BUILD_TIME=${{ steps.identity.outputs.build_time }}
+            FRONTEND_ASSET_ID=${{ steps.identity.outputs.frontend_asset_id }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -268,6 +286,10 @@ jobs:
           pattern: release-image-*
           path: release/smoke
           merge-multiple: true
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: release-gate-firmware-compatibility
+          path: release/smoke/firmware-compatibility
       - id: digests
         shell: bash
         run: |
@@ -289,6 +311,15 @@ jobs:
           --frontend-digest ${{ steps.digests.outputs.frontend_digest }}
           --gateway-digest ${{ steps.digests.outputs.gateway_digest }}
           --backup-digest ${{ steps.digests.outputs.backup_digest }}
+          --build-time "$(git show -s --format=%cI "$GITHUB_SHA")"
+          --frontend-version "${GITHUB_REF_NAME#v}"
+          --frontend-asset-id "${GITHUB_REF_NAME#v}-${GITHUB_SHA:0:16}"
+          --database-revision 20260817_0016
+          --firmware-release-url "$(jq -er '.firmware_release_url' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
+          --firmware-tag "$(jq -er '.firmware_tag' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
+          --firmware-revision "$(jq -er '.firmware_revision' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
+          --firmware-image-sha256 "$(jq -er '.firmware_image_sha256' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
+          --firmware-build-id "$(jq -er '.firmware_build_id' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
       - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -411,6 +442,15 @@ jobs:
           --frontend-digest ${{ steps.digests.outputs.frontend_digest }}
           --gateway-digest ${{ steps.digests.outputs.gateway_digest }}
           --backup-digest ${{ steps.digests.outputs.backup_digest }}
+          --build-time "$(git show -s --format=%cI "$GITHUB_SHA")"
+          --frontend-version "${GITHUB_REF_NAME#v}"
+          --frontend-asset-id "${GITHUB_REF_NAME#v}-${GITHUB_SHA:0:16}"
+          --database-revision 20260817_0016
+          --firmware-release-url "$(jq -er '.firmware_release_url' release/assets/firmware-compatibility-report.json)"
+          --firmware-tag "$(jq -er '.firmware_tag' release/assets/firmware-compatibility-report.json)"
+          --firmware-revision "$(jq -er '.firmware_revision' release/assets/firmware-compatibility-report.json)"
+          --firmware-image-sha256 "$(jq -er '.firmware_image_sha256' release/assets/firmware-compatibility-report.json)"
+          --firmware-build-id "$(jq -er '.firmware_build_id' release/assets/firmware-compatibility-report.json)"
       - run: docker compose -f release/assets/power-monitor-v2-${{ github.ref_name }}.yaml config --quiet
       - run: python scripts/verify_release_artifacts.py --manifest release/assets/release-manifest.json
       - name: Refuse stale generated release files from source control

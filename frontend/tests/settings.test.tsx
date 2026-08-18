@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SettingsPage } from '../src/pages/SettingsPage';
 import { useHomeScope } from '../src/home/useHomeScope';
@@ -129,12 +129,46 @@ describe('Settings', () => {
     await userEvent.type(screen.getByLabelText('Notes'), 'Verified one-CT sensor');
     await userEvent.clear(screen.getByLabelText('Display order'));
     await userEvent.type(screen.getByLabelText('Display order'), '4');
-    await userEvent.click(screen.getByRole('checkbox', { name: /Eligible for aggregates/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /Eligible for service branches/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Save sensor' }));
     await waitFor(() => expect(update).toMatchObject({
       location: 'Garage panel', notes: 'Verified one-CT sensor', display_order: 4,
       include_in_aggregate: false, show_on_dashboard: true, monitoring_enabled: true,
     }));
+  });
+
+  it('updates and deletes a service branch without changing sensor records', async () => {
+    let branchUpdate: Record<string, unknown> | undefined;
+    let deletedBranch = '';
+    installFetchMock((path, method, body) => {
+      if (path.includes('/circuits/circuit-main-service') && method === 'PATCH') {
+        if (typeof body !== 'string') throw new Error('Expected JSON service-branch body.');
+        branchUpdate = JSON.parse(body) as Record<string, unknown>;
+        return apiResponse(path, method);
+      }
+      if (path.includes('/circuits/circuit-main-service') && method === 'DELETE') {
+        deletedBranch = path;
+        return { status: 204 };
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<SettingsPage />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Sensors' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+    await userEvent.clear(screen.getByLabelText('Service branch name'));
+    await userEvent.type(screen.getByLabelText('Service branch name'), 'Main service updated');
+    await userEvent.type(screen.getByLabelText(/Type I VERIFIED THESE NON-OVERLAPPING METERS/), 'I VERIFIED THESE NON-OVERLAPPING METERS');
+    await userEvent.click(screen.getByRole('button', { name: 'Save service branch' }));
+    await waitFor(() => expect(branchUpdate).toMatchObject({
+      name: 'Main service updated', purpose: 'whole_home_total', is_home_total: true,
+      device_ids: ['device-main'], confirmation: 'I VERIFIED THESE NON-OVERLAPPING METERS',
+    }));
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(screen.getByRole('dialog', { name: 'Delete Main service?' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Delete service branch' }));
+    await waitFor(() => expect(deletedBranch).toContain('/circuits/circuit-main-service'));
   });
 
   it('saves server-persisted per-user display preferences', async () => {
@@ -181,9 +215,16 @@ describe('Settings', () => {
   it('shows exact system health evidence', async () => {
     installFetchMock();
     renderWithProviders(<SettingsPage />);
-    await userEvent.click(await screen.findByRole('button', { name: /Advanced system health/ }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Diagnostics' }));
     expect(screen.getByText('reachable')).toBeInTheDocument();
-    expect(screen.getByText(/PZEM ok; storage healthy; backlog 3/)).toBeInTheDocument();
+    expect(screen.getByText(/3 readings waiting to sync/)).toBeInTheDocument();
+    const diagnostics = screen.getByRole('heading', { name: 'Diagnostics' }).closest('.card');
+    expect(diagnostics).not.toBeNull();
+    expect(within(diagnostics as HTMLElement).getByText('Frontend')).toBeInTheDocument();
+    expect(within(diagnostics as HTMLElement).getByText('Backend')).toBeInTheDocument();
+    expect(within(diagnostics as HTMLElement).getAllByText('not supplied').length).toBeGreaterThanOrEqual(1);
+    expect(within(diagnostics as HTMLElement).getAllByText(/Not reported/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('v1.2.3 · build not reported')).toBeInTheDocument();
   });
 
   it('removes firmware bytes only after an explicit destructive confirmation', async () => {
