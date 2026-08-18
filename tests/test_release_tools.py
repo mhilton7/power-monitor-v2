@@ -34,7 +34,7 @@ DIGEST_C = "sha256:" + "3" * 64
 DIGEST_D = "sha256:" + "4" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
-VERSION = "0.1.0-rc.19"
+VERSION = "0.1.0-rc.20"
 
 
 @pytest.fixture
@@ -81,11 +81,11 @@ def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]
             "build_time": "2026-08-17T00:00:00Z",
         },
         "firmware_release_url": (
-            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.19"
+            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.20"
         ),
         "firmware": {
             "repository": "https://github.com/mhilton7/power-monitor-sensor-headless",
-            "tag": "v0.1.0-rc.19",
+            "tag": "v0.1.0-rc.20",
             "revision": COMMIT,
             "build_id": 20,
             "image_sha256": IMAGE,

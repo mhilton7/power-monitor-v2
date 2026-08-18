@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SettingsPage } from '../src/pages/SettingsPage';
 import { useHomeScope } from '../src/home/useHomeScope';
-import { apiResponse, homeUtility } from './fixtures';
+import { apiResponse, device, homeUtility, systemHealth } from './fixtures';
 import { installFetchMock, renderWithProviders } from './render';
 
 describe('Settings', () => {
@@ -233,19 +233,45 @@ describe('Settings', () => {
   });
 
   it('shows exact system health evidence', async () => {
-    installFetchMock();
+    installFetchMock((path, method) => {
+      const response = apiResponse(path, method);
+      if (path.endsWith('/system/health')) {
+        return {
+          status: 200,
+          body: {
+            ...systemHealth,
+            sensors: [
+              { ...systemHealth.sensors[0]!, acknowledgement: null },
+              { ...systemHealth.sensors[0]!, device_id: 'device-outdoor', device_name: 'Outdoor AC', acknowledgement: null },
+            ],
+          },
+        };
+      }
+      if (path.includes('/devices?')) {
+        return {
+          status: 200,
+          body: {
+            devices: [
+              { ...device, acknowledgement: null },
+              { ...device, id: 'device-outdoor', friendly_name: 'Outdoor AC', acknowledgement: null },
+            ],
+          },
+        };
+      }
+      return response;
+    });
     renderWithProviders(<SettingsPage />);
     await userEvent.click(await screen.findByRole('button', { name: 'Diagnostics' }));
     expect(screen.getByText('reachable')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Sensor delivery' })).toBeInTheDocument();
-    expect(screen.getByText('received')).toBeInTheDocument();
+    expect(screen.getAllByText('received')).toHaveLength(2);
     const diagnostics = screen.getByRole('heading', { name: 'Diagnostics' }).closest('.card');
     expect(diagnostics).not.toBeNull();
     expect(within(diagnostics as HTMLElement).getByText('Frontend')).toBeInTheDocument();
     expect(within(diagnostics as HTMLElement).getByText('Backend')).toBeInTheDocument();
     expect(within(diagnostics as HTMLElement).getAllByText('not supplied').length).toBeGreaterThanOrEqual(1);
     expect(within(diagnostics as HTMLElement).getAllByText(/Not reported/).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('v1.2.3 · build not reported')).toBeInTheDocument();
+    expect(screen.getAllByText('v1.2.3 · build not reported')).toHaveLength(2);
   });
 
   it('removes firmware bytes only after an explicit destructive confirmation', async () => {

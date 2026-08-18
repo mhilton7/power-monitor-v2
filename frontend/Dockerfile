@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 FROM node:22.22.2-alpine3.23@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f AS build
-ARG VERSION=0.1.0-rc.19
+ARG VERSION=0.1.0-rc.20
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
 ARG FRONTEND_ASSET_ID=unknown
@@ -15,7 +15,7 @@ COPY . .
 RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.30.4-alpine3.24@sha256:44e36330f74d4f3a1d4e222acca9e23b401fb87811a7597024502bb759c4dd49
-ARG VERSION=0.1.0-rc.19
+ARG VERSION=0.1.0-rc.20
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
 LABEL org.opencontainers.image.title="PowerMeter V2 frontend" \
