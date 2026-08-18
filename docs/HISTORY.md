@@ -1,13 +1,32 @@
 # History
 
-History is generated only from committed authenticated sensor evidence. It cannot be populated, calibrated, reconciled, scaled, or gap-filled from a utility bill.
+History is generated only from committed authenticated PZEM telemetry. It can
+never be populated, calibrated, reconciled, scaled, or gap-filled from a bill.
 
-Each raw reading is immutable and unique by `(device_id, sequence)`. Normalized intervals reference raw evidence and record selection/quality metadata. Rollups reference their source intervals and algorithm version so they can be recomputed without mutating raw evidence. Duplicate retries do not double count.
+New samples are immutable and unique by
+`(sensor_id, boot_id, sample_sequence)`. Identical retries are idempotent;
+different content for an existing identity is an integrity conflict. The
+server owns active interval buckets, retained History, energy events, and
+connection-gap evidence.
 
-Queries support live, today, 24 hours, 7 days, 30 days, billing cycle, and custom UTC ranges; metrics include power, voltage, current, frequency, power factor, energy, and cost. The response reports timezone, aggregation resolution, completeness, missing/unavailable ranges, and rate version when cost is requested.
+Queries support live, today, 24 hours, 7 days, 30 days, billing cycle, and
+custom UTC ranges. Missing values are null, measured zero remains zero, and
+chart lines break across connection gaps. Trusted sensor time is used only
+within the accepted skew; otherwise server receipt time places the sample.
 
-Missing values are null and chart lines break across gaps. Measured zero is retained. Server aggregation and client decimation bound large ranges. Time-aware ticks use viewport-dependent minimum pixel spacing, auto-skip, and zoom/pan so labels do not overlap; rotation is a last resort. CSV export uses the same permission/scope filters and includes evidence/quality fields without secrets.
+Main service is an explicitly confirmed set of non-overlapping members. Power
+and energy may be summed only when the requested branch is valid for that
+instant. Voltage, current, frequency, and power factor remain per-sensor.
+Revoked or moved membership remains historical topology rather than being
+rewritten.
 
-DST rules use UTC instants and the configured IANA timezone: no energy is invented in a spring-forward gap and repeated local times in a fall-back hour remain distinct. Rate and billing boundaries split intervals before cost aggregation.
+Cumulative PZEM energy may recover energy across a connection gap without
+inventing a missing power curve. Counter decreases create reset evidence and
+never negative usage. Energy spanning a billing-cycle boundary remains
+unresolved until reviewed.
 
-Deletion is an explicit coordinated data-reset workflow. It increments a reset generation and prevents pre-reset microSD records from silently repopulating History while preserving device enrollment, sequence floor, acknowledgment evidence, network configuration, and OTA compatibility.
+History interval and retention are server settings. Shortening retention
+requires exact confirmation and deletes only expired derived History for the
+selected home. Immutable samples, cost-linked evidence, rates, audit records,
+and identities remain. A downgrade from revision `20260818_0017` fails closed
+when accepted stateless samples or cutover evidence would be lost.

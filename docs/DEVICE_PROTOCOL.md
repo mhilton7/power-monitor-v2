@@ -1,10 +1,13 @@
-# Device protocol
+# Device protocols
 
-Protocol identifier: `pm-protocol/1.0.0`. Breaking changes require a coordinated server and firmware version bump; additive optional fields preserve compatibility.
+Authentication, control, enrollment, repair, and OTA use
+`pm-protocol/1.0.0`. Breaking changes require a coordinated server and firmware
+version bump. Stateless measurements use the additive body contract
+`pm-telemetry/2.0.0`.
 
 ## Authentication
 
-The canonical signature input is:
+The canonical signature input remains:
 
 ```text
 PM-HMAC-SHA256-V1
@@ -15,22 +18,34 @@ PM-HMAC-SHA256-V1
 <LOWERCASE SHA-256 OF EXACT BODY BYTES>
 ```
 
-Both repositories consume the same deterministic HMAC/HKDF/canonical-query test vectors. Requests with a wrong protocol, credential, signature, body hash, timestamp window, nonce, device scope, or size fail with typed RFC 9457 problems. The server stores a bounded nonce replay record.
+Wrong protocol, credential, signature, body hash, timestamp window, nonce,
+device scope, schema, semantics, or size receives an ordinary typed 4xx
+problem. TLS chain and hostname verification remain mandatory.
 
-## Heartbeat and live evidence
+## Stateless telemetry
 
-The default heartbeat is 15 seconds. It reports firmware/protocol, health flags, measurement values with UTC/monotonic evidence, PZEM/storage/network state, backlog/cursors, resource watermarks, command/OTA state, and typed diagnostics. Signed receipt—not ping—sets online state. Invalid/missing values are null, not zero.
+`POST /api/v1/device/telemetry/v2` carries:
 
-The response provides authoritative server time, desired configuration version, acknowledgment/gaps, and only commands owned by that device. Backlog upload cannot starve heartbeat.
+- `telemetry_protocol: pm-telemetry/2.0.0`;
+- signed sensor identity, per-boot UUID, and RAM-only unsigned sample number;
+- trusted timestamp or null, uptime, decimal-string electrical values or null,
+  cumulative PZEM energy or null, PZEM status, firmware version and full build
+  ID, time status, RSSI, and bounded command results.
 
-## Durable readings
-
-A batch contains at most 500 immutable records and obeys the stricter byte limit. Every record preserves device sequence, interval UTC when trusted, sample completeness/quality, electrical values, cumulative PZEM energy evidence, selected interval energy, and typed flags.
-
-The server deduplicates `(device_id, sequence)`. An identical retry succeeds idempotently; different content at an existing sequence is a critical integrity conflict. Acknowledgment advances only after commit over contiguous sequences plus authenticated permanent-loss ranges and never regresses.
+The signed response reports `accepted` or `duplicate`, server receive time,
+the exact echoed sample identity, timestamp source, optional cadence settings,
+and owned command envelopes. It contains no acknowledgment cursor, missing
+prefix, gap list, or backlog. A rejected request is never encoded as a success
+status.
 
 ## Commands and OTA
 
-Commands are delivered through heartbeat or bounded poll. State/progress/result posts include the original command and idempotency IDs. The device validates type, capability, not-before/expiry, ownership, and prepare/commit token. OTA download uses the same outbound authenticated HTTPS channel and verifies project, chip, board, compatibility, size, and SHA-256 before boot selection.
+Commands remain durable, expiring, idempotent, and device-scoped. OTA uses
+authenticated outbound HTTPS and verifies project, target, board, protocol,
+configuration, size, semantic upgrade policy, and SHA-256 before changing the
+inactive boot slot. Server deployment success additionally requires the same
+sensor to report the expected semantic version and full firmware build ID
+after reboot.
 
-Browser clients never use this device protocol and never receive device secrets.
+Browser clients never use these device protocols and never receive device
+secrets.

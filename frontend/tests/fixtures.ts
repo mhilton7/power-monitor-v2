@@ -20,7 +20,7 @@ export const home = {
   devices: [{
     id: 'device-main', friendly_name: 'Main Panel Sensor', state: 'live',
     measurement: { voltage_v: 122.6, current_a: 20.2, active_power_w: 2480, frequency_hz: 60.01, power_factor: 0.97, measured_at: '2026-08-13T17:32:10Z', pzem_status: 'ok' },
-    heartbeat_at: '2026-08-13T17:32:10Z', last_committed_at: '2026-08-13T17:31:00Z', backlog: 3, storage_status: 'healthy', firmware_version: 'v1.2.3', measurement_scope: 'energy_only', estimated_cost_per_hour: '0.42656',
+    heartbeat_at: '2026-08-13T17:32:10Z', last_committed_at: '2026-08-13T17:31:00Z', server_delivery_status: 'received', last_server_received_at: '2026-08-13T17:32:11Z', last_sensor_sampled_at: '2026-08-13T17:32:10Z', sensor_time_trusted: true, cumulative_energy_kwh: 392.8, telemetry_protocol: 'direct_https', firmware_version: 'v1.2.3', measurement_scope: 'energy_only', estimated_cost_per_hour: '0.42656',
   }],
   summaries: {
     today: { energy_kwh: 18.74, cost: '3.21', completeness: .99, missing_intervals: 2 },
@@ -37,9 +37,9 @@ export const home = {
 export const device = {
   id: 'device-main', home_id: '00000000-0000-0000-0000-000000000010', circuit_id: null, friendly_name: 'Main Panel Sensor', device_fingerprint: '8a34f119dd31', credential_fingerprint: 'a'.repeat(64), credential_key_version: 1, credential_rotation: null, firmware_version: 'v1.2.3', protocol: 'pm-protocol/1.0.0',
   location: 'Main electrical panel', notes: null, display_order: 0, include_in_aggregate: true, show_on_dashboard: true, monitoring_enabled: true,
-  pzem_variant: 'pzem004t-v4-classic-candidate', ct_rating_a: '100', measurement_scope: 'energy_only', heartbeat_at: '2026-08-13T17:32:10Z', wifi_rssi: -54, ip_address: '192.0.2.24', pzem_status: 'ok', storage_status: 'healthy', storage_bytes_total: 31_914_983_424, storage_bytes_free: 31_913_934_848,
-  oldest_sequence: 100, newest_sequence: 2020, acknowledgement: 2017, backlog: 3, free_internal_heap: 208000, largest_internal_block: 98120,
-  last_reboot_reason: 'software_update', last_command: { id: 'cmd-old', type: 'sync_now', state: 'succeeded', progress_percent: 100 },
+  pzem_variant: 'pzem004t-v4-classic-candidate', ct_rating_a: '100', measurement_scope: 'energy_only', heartbeat_at: '2026-08-13T17:32:10Z', wifi_rssi: -54, ip_address: '192.0.2.24', pzem_status: 'ok', telemetry_protocol: 'direct_https', server_delivery_status: 'received', last_server_received_at: '2026-08-13T17:32:11Z', last_sensor_sampled_at: '2026-08-13T17:32:10Z', sensor_time_trusted: true, cumulative_energy_kwh: 392.8,
+  free_internal_heap: 208000, largest_internal_block: 98120,
+  last_reboot_reason: 'software_update', last_command: { id: 'cmd-old', type: 'reboot', state: 'succeeded', progress_percent: 100 },
 };
 
 export const homeScopes = [{ id: '00000000-0000-0000-0000-000000000010', name: 'Home' }];
@@ -52,7 +52,7 @@ export const homeUtility = {
 
 export const circuits = { circuits: [{
   id: 'circuit-main-service', home_id: homeScopes[0]!.id, name: 'Main service', description: 'Whole-home service', purpose: 'whole_home_total', is_home_total: true,
-  aggregate_mode: 'verified_sum', non_overlapping_confirmed: true, device_ids: ['device-main'], created_at: '2026-08-13T16:00:00Z', updated_at: '2026-08-13T16:00:00Z',
+  aggregate_mode: 'verified_sum', non_overlapping_confirmed: true, is_billing_source: true, device_ids: ['device-main'], created_at: '2026-08-13T16:00:00Z', updated_at: '2026-08-13T16:00:00Z',
 }] };
 
 export const firmwareReleases = {
@@ -76,6 +76,8 @@ export const history = {
   points: historyTimestamps.map((timestamp, index) => ({ timestamp, value: index === 3 ? null : [0, 2.1, 3.4, 0, 4.55, 2.7, 2.48][index], cost: index === 3 ? null : String(index * .11), quality: index === 3 ? .25 : 1 })),
   energy_kwh: 18.74, cost: '3.21', completeness: .93,
   missing_ranges: [{ start: '2026-08-13T15:30:00Z', end: '2026-08-13T16:30:00Z' }],
+  connection_gaps: [{ device_id: 'device-main', start_utc: '2026-08-13T15:30:00Z', end_utc: '2026-08-13T16:30:00Z', recovered_energy_kwh: '0.42', status: 'recovered', crosses_billing_cycle: false }],
+  recovered_gap_energy_kwh: '0.42',
   resolution_seconds: 7200, timezone: 'UTC', usage_source: 'authenticated PZEM-004T sensor intervals only', scope: { device_ids: ['device-main'], aggregate: false },
 };
 
@@ -87,7 +89,7 @@ export const dailyHistory = {
 
 export const alerts = {
   alerts: [
-    { id: 'alert-backlog', type: 'reading_backlog', severity: 'warning', state: 'open', opened_at: '2026-08-13T17:31:50Z', evidence: { backlog: 3 } },
+    { id: 'alert-delivery', type: 'sensor_delivery_delayed', severity: 'warning', state: 'open', opened_at: '2026-08-13T17:31:50Z', evidence: { last_received_at: '2026-08-13T17:31:40Z' } },
     { id: 'alert-rate', type: 'rate_source_changed', severity: 'info', state: 'acknowledged', opened_at: '2026-08-13T16:00:00Z', evidence: { review_required: true } },
   ],
 };
@@ -96,7 +98,7 @@ export const billing = {
   accounts: [{ utility_account_id: '00000000-0000-0000-0000-000000000020', plan_name: 'SCE Domestic', rate_version_id: 'rate-version-2026-08', effective_start: '2026-08-01T07:00:00Z', cost_scope: 'full_account', baseline_credit_included: false, fixed_charges_included: true, cca_or_direct_access: null,
     home_total_branch: { id: 'circuit-main-service', name: 'Main service', device_ids: ['device-main'] },
     current_rate_plan: { rate_plan_id: 'rate-domestic', rate_plan_version_id: 'rate-version-2026-08', name: 'SCE Domestic', utility_name: 'Southern California Edison', rate_class: 'residential_tiered', effective_start: '2026-08-01T07:00:00Z', currently_used: true, tier_1_price_per_kwh: '0.30863', tier_2_price_per_kwh: '0.40962', daily_service_charge: '0.769', daily_baseline_allowance_kwh: '19.3', generation_service: 'SCE' },
-    current_billing_cycle: { start_utc: '2026-08-01T07:00:00Z', end_utc: '2026-09-01T07:00:00Z', service_branch_id: 'circuit-main-service', service_branch_name: 'Main service', saved_usage_kwh: '0.17', reading_coverage: '0.004', readings_waiting_to_sync: 2946, tier_state: 'not_confirmed', tier_confirmation_rule: 'requires_100_percent_reading_coverage', tier_1_allowance_kwh: '598.3', tier_1_remaining_kwh: null, amount_above_tier_1_kwh: null, estimated_energy_charges: null, estimated_fixed_charges: null, estimated_total: null },
+    current_billing_cycle: { start_utc: '2026-08-01T07:00:00Z', end_utc: '2026-09-01T07:00:00Z', service_branch_id: 'circuit-main-service', service_branch_name: 'Main service', saved_usage_kwh: '0.17', reading_coverage: '0.004', tier_state: 'not_confirmed', tier_confirmation_rule: 'requires_100_percent_reading_coverage', tier_1_allowance_kwh: '598.3', tier_1_remaining_kwh: null, amount_above_tier_1_kwh: null, connection_gap_energy_kwh: '0', unresolved_energy_kwh: null, tier_1_usage_kwh: null, tier_2_usage_kwh: null, tier_1_rate_per_kwh: '0.30863', tier_2_rate_per_kwh: '0.40962', tier_1_cost: null, tier_2_cost: null, service_charge: null, cost_to_date: null, estimated_energy_charges: null, estimated_fixed_charges: null, estimated_total: null, projection: { status: 'not_enough_data', confidence_reasons: ['At least 24 hours of reliable readings are required.'] } },
   }],
   usage_source: 'authenticated PZEM-004T sensor intervals only', rate_import_notice: 'PDFs create reviewed reusable rate-plan drafts only.',
 };
@@ -151,8 +153,8 @@ export const rateSourceStatus = {
 };
 
 export const systemHealth = {
-  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.16', protocol: 'pm-protocol/1.0.0', database: 'reachable',
-  sensors: [{ device_id: 'device-main', state: 'online', heartbeat_age_seconds: 5, pzem_status: 'ok', storage_status: 'healthy', backlog: 3 }],
+  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.18', protocol: 'pm-protocol/1.0.0', database: 'reachable',
+  sensors: [{ device_id: 'device-main', state: 'online', heartbeat_age_seconds: 5, pzem_status: 'ok', telemetry_protocol: 'direct_https', server_delivery_status: 'received', last_server_received_at: '2026-08-13T17:32:11Z', last_sensor_sampled_at: '2026-08-13T17:32:10Z', sensor_time_trusted: true }],
   open_alert_count: 1, last_rate_sync: { id: 'rate-run-old', state: 'review_required', event_code: 'RATE_SOURCE_SNAPSHOT_CAPTURED', completed_at: '2026-08-13T16:00:00Z' },
   backup: {}, restore_test: {}, physical_hardware_certification: 'pending',
 };
@@ -182,6 +184,7 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (path.endsWith('/auth/login') || path.endsWith('/auth/bootstrap')) return { status: 200, body: { user: session.user } };
   if (pathname.endsWith('/home-scopes')) return { status: 200, body: { home_scopes: homeScopes } };
   if (pathname.endsWith('/settings/home-utility')) return { status: 200, body: homeUtility };
+  if (pathname.endsWith('/settings/telemetry')) return { status: 200, body: { config_version: 1, telemetry_interval_seconds: 5, history_interval_seconds: 60, retention_days: 365 } };
   if (pathname.endsWith('/home')) return { status: 200, body: home };
   if (path.includes('/history/export')) return { status: 200, body: 'timestamp,value\n2026-08-13T10:00:00Z,0\n', contentType: 'text/csv' };
   if (path.includes('/history')) return { status: 200, body: path.includes('resolution_seconds=86400') ? dailyHistory : history };
@@ -198,8 +201,8 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (path.includes('/devices/') && path.endsWith('/revoke') && method === 'POST') return { status: 204 };
   if (path.includes('/devices/') && method === 'PATCH') return { status: 200, body: { id: device.id, friendly_name: device.friendly_name, measurement_scope: 'energy_only' } };
   if (path.endsWith('/alerts')) return { status: 200, body: alerts };
-  if (path.endsWith('/acknowledge')) return { status: 200, body: { id: 'alert-backlog', state: 'acknowledged' } };
-  if (path.endsWith('/silence')) return { status: 200, body: { id: 'alert-backlog', silenced_until: '2026-08-14T17:32:00Z' } };
+  if (path.endsWith('/acknowledge')) return { status: 200, body: { id: 'alert-delivery', state: 'acknowledged' } };
+  if (path.endsWith('/silence')) return { status: 200, body: { id: 'alert-delivery', silenced_until: '2026-08-14T17:32:00Z' } };
   if (pathname.endsWith('/billing')) return { status: 200, body: billing };
   if (pathname.endsWith('/bill-rate-imports')) return { status: 200, body: { extractions: [] } };
   if (pathname.endsWith('/rate-sources/status')) return { status: 200, body: rateSourceStatus };

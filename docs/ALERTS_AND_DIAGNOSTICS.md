@@ -1,13 +1,24 @@
 # Alerts, logs, and diagnostics
 
-Typed alert rules cover sensor offline, delayed heartbeat, reading backlog, PZEM unavailable, microSD missing/read-only/nearly-full/corrupt segment, time untrusted, TLS validation failure, repeated Wi-Fi failure, OTA failed/rolled back, rate source changed, rate sync failed, backup failed, and restore test failed.
+Typed alert rules cover sensor offline or delayed, telemetry delivery failure,
+PZEM unavailable, time untrusted, TLS validation failure, repeated Wi-Fi
+failure, OTA failed or rolled back, energy counter reset, unresolved
+cross-cycle gap energy, rate source change/failure, backup failure, and restore
+test failure. Stateless firmware has no microSD or persistent-backlog alert.
 
-An alert is backed by evidence and state transitions: observation → debounce threshold → open → acknowledged or silenced/maintenance → resolved. Repeated observations update the same alert rather than flooding. Acknowledgment does not erase evidence; silence has actor/scope/expiry; maintenance windows are bounded. Recovery evidence resolves the alert.
+Alerts follow observation, debounce, open, acknowledge/silence/maintenance,
+and resolution. Repeated evidence updates one alert instead of flooding.
 
-Application and gateway logs are JSON with UTC timestamp, severity, typed event code, message template, service/version, correlation ID, and relevant device/command/sync/rate-source IDs. Values are allowlisted/redacted; passwords, tokens, cookies, HMAC/OTA/encryption keys, customer bill fields, original PDF bytes, OCR text, and authorization headers never enter normal logs. Rotation and default retention are 90 days.
+Logs are structured, UTC, typed, correlated, and allowlisted. Passwords,
+tokens, cookies, device/OTA/encryption keys, authorization headers, private
+bill fields, original PDF bytes, and full OCR text never enter normal logs.
 
-Downloadable diagnostics bundles include only allowlisted health/configuration metadata, recent redacted event summaries, release/protocol versions, resource watermarks, and exact evidence identifiers. The bundle manifest lists every member's size and SHA-256 plus an archive SHA-256. Generation fails closed if redaction/schema validation fails. Original bill documents and full OCR text do not exist in persistent application storage and therefore cannot be bundled; secret files and immutable official-rate source artifacts are excluded.
+Diagnostics expose release/protocol/build/database identity, latest accepted
+telemetry, server delivery state, PZEM health, command/OTA state, resource
+watermarks, and exact evidence identifiers. Normal UI does not expose storage
+capacity, backlog, cursor, missing-prefix, format, or backlog-sync controls.
+Legacy fields may remain hidden temporarily while RC16 devices are staged to
+RC18.
 
-Operators use correlation IDs to join a device heartbeat, reading batch, command, rate sync, and backup event without exposing credentials. See `docs/OPERATIONS.md` for response playbooks.
-
-Operational views are home-scoped. `/system/health` selects sensors, open-alert counts, and the latest rate-sync run only from the authenticated actor's homes. New rate-sync runs carry their initiating home. Downloadable diagnostics include an application-log row only when it has at least one authorized home, device, command, or sync association and every populated association resolves inside the actor's scope. Unowned rows and rows with conflicting cross-home identifiers fail closed and are omitted.
+Operational views are home-scoped and permission-checked. Cross-home or
+unowned evidence is omitted fail closed.

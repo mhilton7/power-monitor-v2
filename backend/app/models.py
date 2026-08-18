@@ -186,6 +186,7 @@ class Circuit(Base):
     description: Mapped[str | None] = mapped_column(String(500))
     purpose: Mapped[str] = mapped_column(String(40), default="electrical_section", nullable=False)
     is_home_total: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_billing_source: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     non_overlapping_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     parent_id: Mapped[str | None] = mapped_column(ForeignKey("circuits.id", ondelete="SET NULL"))
     aggregate_mode: Mapped[str] = mapped_column(String(32), default="individual", nullable=False)
@@ -208,12 +209,23 @@ class Circuit(Base):
             "AND non_overlapping_confirmed = true)",
             name="home_total_verified",
         ),
+        CheckConstraint(
+            "is_billing_source = false OR is_home_total = true",
+            name="billing_source_home_total",
+        ),
         Index(
             "uq_circuits_one_home_total",
             "home_id",
             unique=True,
             postgresql_where=text("is_home_total = true"),
             sqlite_where=text("is_home_total = 1"),
+        ),
+        Index(
+            "uq_circuits_one_billing_source",
+            "home_id",
+            unique=True,
+            postgresql_where=text("is_billing_source = true"),
+            sqlite_where=text("is_billing_source = 1"),
         ),
     )
 
@@ -354,6 +366,174 @@ class DeviceHeartbeat(Base):
     largest_internal_block: Mapped[int | None] = mapped_column(BigInteger)
     reboot_reason: Mapped[str | None] = mapped_column(String(80))
     health_flags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+
+
+class HomeTelemetrySetting(Base):
+    __tablename__ = "home_telemetry_settings"
+    home_id: Mapped[str] = mapped_column(
+        ForeignKey("homes.id", ondelete="CASCADE"), primary_key=True
+    )
+    config_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    telemetry_interval_seconds: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    history_interval_seconds: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    retention_days: Mapped[int | None] = mapped_column(Integer, default=365)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    updated_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "telemetry_interval_seconds IN (2,5,10,15,30,60)",
+            name="telemetry_interval",
+        ),
+        CheckConstraint(
+            "history_interval_seconds IN (15,30,60,300,900)",
+            name="history_interval",
+        ),
+        CheckConstraint(
+            "retention_days IS NULL OR retention_days IN (30,90,180,365)",
+            name="retention_days",
+        ),
+        CheckConstraint("config_version > 0", name="config_version_positive"),
+    )
+
+
+class StatelessTelemetrySample(Base):
+    __tablename__ = "stateless_telemetry_samples"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    device_id: Mapped[str] = mapped_column(
+        ForeignKey("devices.id", ondelete="RESTRICT"), index=True
+    )
+    boot_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    sample_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    telemetry_protocol: Mapped[str] = mapped_column(String(40), nullable=False)
+    sampled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    sensor_time_trusted: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    uptime_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    voltage_v: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    current_a: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    active_power_w: Mapped[Decimal | None] = mapped_column(Numeric(14, 3))
+    frequency_hz: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
+    power_factor: Mapped[Decimal | None] = mapped_column(Numeric(6, 4))
+    pzem_energy_wh: Mapped[int | None] = mapped_column(BigInteger)
+    pzem_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    firmware_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    firmware_build_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    time_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    wifi_rssi: Mapped[int | None] = mapped_column(Integer)
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("device_id", "boot_id", "sample_sequence"),
+        CheckConstraint("sample_sequence > 0", name="sample_sequence_positive"),
+        CheckConstraint("uptime_ms >= 0", name="uptime_nonnegative"),
+        CheckConstraint("pzem_energy_wh IS NULL OR pzem_energy_wh >= 0", name="energy_nonnegative"),
+    )
+
+
+class DeviceTelemetryState(Base):
+    __tablename__ = "device_telemetry_states"
+    device_id: Mapped[str] = mapped_column(
+        ForeignKey("devices.id", ondelete="CASCADE"), primary_key=True
+    )
+    latest_sample_id: Mapped[str] = mapped_column(
+        ForeignKey("stateless_telemetry_samples.id", ondelete="RESTRICT"), unique=True
+    )
+    latest_server_received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    latest_sensor_sampled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sensor_time_trusted: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    timestamp_source: Mapped[str] = mapped_column(String(12), nullable=False)
+    telemetry_protocol: Mapped[str] = mapped_column(String(40), nullable=False)
+    firmware_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    firmware_build_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (
+        CheckConstraint("timestamp_source IN ('sensor','server')", name="timestamp_source"),
+    )
+
+
+class TelemetryCutover(Base):
+    __tablename__ = "telemetry_cutovers"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    device_id: Mapped[str] = mapped_column(
+        ForeignKey("devices.id", ondelete="RESTRICT"), unique=True
+    )
+    old_protocol: Mapped[str] = mapped_column(String(40), nullable=False)
+    new_protocol: Mapped[str] = mapped_column(String(40), nullable=False)
+    cutover_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    first_sample_id: Mapped[str] = mapped_column(
+        ForeignKey("stateless_telemetry_samples.id", ondelete="RESTRICT"), unique=True
+    )
+    firmware_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    firmware_build_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
+class TelemetryEnergyEvent(Base):
+    __tablename__ = "telemetry_energy_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    home_id: Mapped[str] = mapped_column(ForeignKey("homes.id", ondelete="RESTRICT"), index=True)
+    device_id: Mapped[str] = mapped_column(
+        ForeignKey("devices.id", ondelete="RESTRICT"), index=True
+    )
+    sample_id: Mapped[str] = mapped_column(
+        ForeignKey("stateless_telemetry_samples.id", ondelete="RESTRICT"), index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    gap_start_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    gap_end_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    prior_energy_wh: Mapped[int | None] = mapped_column(BigInteger)
+    current_energy_wh: Mapped[int | None] = mapped_column(BigInteger)
+    recovered_energy_mwh: Mapped[int | None] = mapped_column(BigInteger)
+    billing_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (
+        UniqueConstraint("sample_id", "event_type"),
+        CheckConstraint(
+            "event_type IN ('connection_gap_recovered','connection_gap_unresolved',"
+            "'counter_reset')",
+            name="event_type",
+        ),
+        CheckConstraint(
+            "billing_status IN ('included','unresolved','excluded')",
+            name="billing_status",
+        ),
+        CheckConstraint(
+            "recovered_energy_mwh IS NULL OR recovered_energy_mwh >= 0",
+            name="recovered_energy_nonnegative",
+        ),
+    )
+
+
+class BillingCycleAdjustment(Base):
+    __tablename__ = "billing_cycle_adjustments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    utility_account_id: Mapped[str] = mapped_column(
+        ForeignKey("utility_accounts.id", ondelete="RESTRICT"), index=True
+    )
+    cycle_start_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    energy_mwh: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reason: Mapped[str] = mapped_column(String(60), nullable=False)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    created_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (
+        UniqueConstraint(
+            "utility_account_id",
+            "cycle_start_utc",
+            "reason",
+            name="uq_billing_cycle_adjustment_once",
+        ),
+        CheckConstraint("energy_mwh >= 0", name="energy_nonnegative"),
+        CheckConstraint(
+            "reason IN ('verified_cycle_to_date_seed','gap_allocation')", name="reason"
+        ),
+    )
 
 
 class DeviceEvent(Base):
@@ -534,22 +714,54 @@ class NormalizedInterval(Base):
     device_id: Mapped[str] = mapped_column(
         ForeignKey("devices.id", ondelete="RESTRICT"), index=True
     )
-    raw_reading_id: Mapped[str] = mapped_column(
+    raw_reading_id: Mapped[str | None] = mapped_column(
         ForeignKey("raw_readings.id", ondelete="RESTRICT"), unique=True
     )
     start_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     end_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    energy_mwh: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    energy_mwh: Mapped[int | None] = mapped_column(BigInteger)
     average_power_mw: Mapped[int | None] = mapped_column(BigInteger)
     completeness: Mapped[Decimal] = mapped_column(Numeric(7, 6), nullable=False)
     energy_selection: Mapped[str] = mapped_column(String(40), nullable=False)
     algorithm_version: Mapped[str] = mapped_column(String(40), nullable=False)
     source_authenticated: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(24), default="legacy_durable", nullable=False)
+    minimum_power_mw: Mapped[int | None] = mapped_column(BigInteger)
+    maximum_power_mw: Mapped[int | None] = mapped_column(BigInteger)
+    ending_voltage_mv: Mapped[int | None] = mapped_column(BigInteger)
+    ending_current_ma: Mapped[int | None] = mapped_column(BigInteger)
+    average_frequency_mhz: Mapped[int | None] = mapped_column(BigInteger)
+    average_power_factor_milli: Mapped[int | None] = mapped_column(Integer)
+    received_sample_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    expected_sample_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    gap_status: Mapped[str] = mapped_column(String(24), default="complete", nullable=False)
+    finalized: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         CheckConstraint("end_utc > start_utc", name="time_order"),
-        CheckConstraint("energy_mwh >= 0", name="energy_nonnegative"),
+        CheckConstraint("energy_mwh IS NULL OR energy_mwh >= 0", name="energy_nonnegative"),
         CheckConstraint("completeness >= 0 AND completeness <= 1", name="completeness"),
         CheckConstraint("source_authenticated = true", name="authenticated_source"),
+        CheckConstraint("source_kind IN ('legacy_durable','stateless_v2')", name="source_kind"),
+        CheckConstraint(
+            "(source_kind = 'legacy_durable' AND raw_reading_id IS NOT NULL) OR "
+            "(source_kind = 'stateless_v2' AND raw_reading_id IS NULL)",
+            name="source_identity",
+        ),
+        CheckConstraint(
+            "received_sample_count >= 0 AND expected_sample_count > 0 "
+            "AND received_sample_count <= expected_sample_count",
+            name="server_sample_count",
+        ),
+        CheckConstraint("gap_status IN ('complete','partial','connection_gap')", name="gap_status"),
+        Index(
+            "uq_normalized_intervals_stateless_bucket",
+            "device_id",
+            "start_utc",
+            unique=True,
+            postgresql_where=text("source_kind = 'stateless_v2'"),
+            sqlite_where=text("source_kind = 'stateless_v2'"),
+        ),
     )
 
 
@@ -1142,6 +1354,10 @@ def _immutable(_mapper: object, _connection: object, target: object) -> None:
 
 for _model in (
     RawReading,
+    StatelessTelemetrySample,
+    TelemetryCutover,
+    TelemetryEnergyEvent,
+    BillingCycleAdjustment,
     UnavailableSequenceRange,
     AuditEvent,
     IntervalCost,

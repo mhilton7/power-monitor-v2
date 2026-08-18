@@ -16,11 +16,14 @@ describe('History', () => {
     renderWithProviders(<HistoryPage />);
     expect(await screen.findByTestId('history-chart')).toBeInTheDocument();
     expect(screen.getByText('18.74 kWh')).toBeInTheDocument();
-    expect(screen.getAllByText('Some readings are missing').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Some readings are missing.').length).toBeGreaterThanOrEqual(1);
     const legend = screen.getByText(/A measured zero renders at zero/).closest('.chart-legend');
     expect(legend).not.toBeNull();
-    expect(within(legend as HTMLElement).getByText(/missing values form a gap/)).toBeInTheDocument();
-    expect(screen.getByText('No saved reading is available for this interval')).toBeInTheDocument();
+    expect(within(legend as HTMLElement).getByText(/times without a reading form a gap/)).toBeInTheDocument();
+    expect(screen.getByText('No reading was received during this time.')).toBeInTheDocument();
+    expect(screen.getByText('0.42 kWh')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Connection gap details' })).toBeInTheDocument();
+    expect(screen.getByText(/0.42 kWh recovered/)).toBeInTheDocument();
   });
 
   it('queries only an explicitly verified aggregate when that scope is selected', async () => {
@@ -34,7 +37,7 @@ describe('History', () => {
     renderWithProviders(<HistoryPage />);
     await screen.findByRole('option', { name: 'Verified whole home' });
     await userEvent.selectOptions(screen.getByLabelText('Service branch or sensor'), 'circuit:circuit-verified');
-    expect(await screen.findByText(/Sensors that measure the same electricity must not be added together/)).toBeInTheDocument();
+    expect(await screen.findByText(/Sensors that measure the same electricity are never added together/)).toBeInTheDocument();
     expect(requested.some((path) => path.includes('aggregate_circuit_id=circuit-verified') && !path.includes('device_id='))).toBe(true);
   });
 
@@ -51,7 +54,7 @@ describe('History', () => {
     expect(screen.getByRole('button', { name: '7 days' })).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('explains that live values are absent from History while durable intervals remain queued', async () => {
+  it('shows the exact no-readings state without sensor storage wording', async () => {
     installFetchMock((path) => {
       if (path.includes('/devices?')) return { status: 200, body: { devices: [{ ...device, backlog: 199 }] } };
       if (path.includes('/circuits?')) return { status: 200, body: { circuits: [] } };
@@ -61,8 +64,8 @@ describe('History', () => {
 
     renderWithProviders(<HistoryPage />);
 
-    expect((await screen.findAllByText(/199 readings are waiting to sync/)).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('No saved readings are available for this time range')).toBeInTheDocument();
+    expect(await screen.findByText('No readings were received during this time.')).toBeInTheDocument();
+    expect(document.body.textContent?.toLowerCase()).not.toMatch(/backlog|waiting to sync|microsd/);
     expect(screen.queryByTestId('history-chart')).not.toBeInTheDocument();
   });
 
@@ -76,13 +79,13 @@ describe('History', () => {
     renderWithProviders(<HistoryPage />);
     expect(await screen.findByTestId('history-chart')).toBeInTheDocument();
     expect(screen.getByText('1%')).toBeInTheDocument();
-    expect(screen.getByText(/500 readings are waiting to sync/)).toBeInTheDocument();
+    expect(document.body.textContent?.toLowerCase()).not.toMatch(/backlog|waiting to sync|microsd/);
   });
 
   it('selects URL, session, designated Main service, then the first sensor in that order', async () => {
     const second = { ...device, id: 'device-second', friendly_name: 'Second sensor' };
-    const main = { id: 'branch-main', home_id: device.home_id, name: 'Main service', description: null, purpose: 'whole_home_total', is_home_total: true, aggregate_mode: 'verified_sum', non_overlapping_confirmed: true, device_ids: [device.id, second.id] };
-    const other = { ...main, id: 'branch-other', name: 'Garage', purpose: 'electrical_section', is_home_total: false };
+    const main = { id: 'branch-main', home_id: device.home_id, name: 'Main service', description: null, purpose: 'whole_home_total', is_home_total: true, is_billing_source: true, aggregate_mode: 'verified_sum', non_overlapping_confirmed: true, device_ids: [device.id, second.id] };
+    const other = { ...main, id: 'branch-other', name: 'Garage', purpose: 'electrical_section', is_home_total: false, is_billing_source: false };
     const requested: string[] = [];
     const handler = (path: string) => {
       if (path.includes('/devices?')) return { status: 200, body: { devices: [device, second] } };

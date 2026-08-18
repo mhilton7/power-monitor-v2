@@ -151,6 +151,23 @@
   overflow: hidden;
 }
 
+.dashboard-summary-card > .card-header {
+  grid-column: 1 / -1;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.dashboard-summary-card > .card-header + .dashboard-summary-metric { border-left: 0; }
+
+.dashboard-billing-warning {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px 20px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--warning);
+  font-size: .68rem;
+}
+
 .dashboard-summary-metric {
   min-width: 0;
   padding: 23px 20px;
@@ -238,7 +255,7 @@
   min-width: 0;
   min-height: 58px;
   display: grid;
-  grid-template-columns: minmax(145px, 1.65fr) minmax(76px, .82fr) minmax(83px, .88fr) minmax(62px, .7fr) minmax(62px, .7fr) minmax(61px, .68fr) minmax(68px, .78fr) minmax(38px, .45fr) minmax(66px, .76fr) minmax(59px, .65fr) minmax(59px, .65fr) 38px;
+  grid-template-columns: minmax(140px, 1.5fr) minmax(72px, .76fr) minmax(82px, .84fr) repeat(5, minmax(56px, .62fr)) minmax(66px, .7fr) minmax(58px, .62fr) minmax(88px, .9fr) minmax(70px, .75fr) 38px;
   align-items: center;
   border-top: 1px solid var(--border-soft);
 }

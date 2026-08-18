@@ -98,6 +98,7 @@ async def test_billing_cycle_tier_is_unconfirmed_until_branch_coverage_is_comple
             name="Main service",
             purpose="whole_home_total",
             is_home_total=True,
+            is_billing_source=True,
             aggregate_mode="verified_sum",
             non_overlapping_confirmed=True,
         )
@@ -204,3 +205,10 @@ async def test_billing_cycle_tier_is_unconfirmed_until_branch_coverage_is_comple
     assert Decimal(str(complete_cycle["reading_coverage"])) == Decimal("1")
     assert complete_cycle["tier_state"] == "tier_1"
     assert complete_cycle["tier_1_remaining_kwh"] is not None
+    breakdown = complete_cycle["tier_breakdown"]
+    assert Decimal(str(breakdown["tier_1"]["usage_kwh"])) == Decimal("0.002")
+    assert Decimal(str(breakdown["tier_2"]["usage_kwh"])) == Decimal("0")
+    assert Decimal(str(breakdown["tier_2"]["cost"])) == Decimal("0")
+    assert Decimal(str(breakdown["service_charge_to_date"])) == Decimal("0")
+    assert complete_cycle["projection"]["status"] == "insufficient_data"
+    assert complete_cycle["projection"]["confidence"] is None

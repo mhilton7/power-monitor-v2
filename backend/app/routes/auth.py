@@ -10,6 +10,7 @@ from ..errors import AuthenticationError, IntegrityConflict
 from ..models import (
     AuditEvent,
     Home,
+    HomeTelemetrySetting,
     Session,
     User,
     UtilityAccount,
@@ -98,6 +99,7 @@ async def bootstrap_owner(
                 cost_scope="energy_only",
             )
         )
+        session.add(HomeTelemetrySetting(home_id=home.id))
         await session.execute(
             user_roles.insert().values(user_id=user.id, role_id=roles["Owner"].id)
         )

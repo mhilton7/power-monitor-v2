@@ -109,6 +109,60 @@
         "title": "AlertSilenceRequest",
         "type": "object"
       },
+      "BillingCycleAdjustmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "const": "I VERIFIED THIS CYCLE TO DATE ENERGY",
+            "title": "Confirmation",
+            "type": "string"
+          },
+          "cycle_start_utc": {
+            "format": "date-time",
+            "title": "Cycle Start Utc",
+            "type": "string"
+          },
+          "energy_kwh": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Energy Kwh"
+          },
+          "evidence_note": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Evidence Note",
+            "type": "string"
+          },
+          "through_utc": {
+            "format": "date-time",
+            "title": "Through Utc",
+            "type": "string"
+          },
+          "utility_account_id": {
+            "maxLength": 36,
+            "minLength": 36,
+            "title": "Utility Account Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "utility_account_id",
+          "cycle_start_utc",
+          "through_utc",
+          "energy_kwh",
+          "evidence_note",
+          "confirmation"
+        ],
+        "title": "BillingCycleAdjustmentRequest",
+        "type": "object"
+      },
       "Body_import_rates_from_bill_api_v1_bill_rate_imports_post": {
         "properties": {
           "document": {
@@ -330,6 +384,80 @@
           "idempotency_key"
         ],
         "title": "CommandCreateRequest",
+        "type": "object"
+      },
+      "CommandEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "command_type": {
+            "title": "Command Type",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "not_before": {
+            "format": "date-time",
+            "title": "Not Before",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Payload",
+            "type": "object"
+          },
+          "required_firmware_capability": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Firmware Capability"
+          }
+        },
+        "required": [
+          "command_id",
+          "command_type",
+          "not_before",
+          "expires_at",
+          "attempt",
+          "idempotency_key",
+          "required_firmware_capability",
+          "payload"
+        ],
+        "title": "CommandEnvelope",
         "type": "object"
       },
       "CredentialRotationCancelRequest": {
@@ -1316,6 +1444,11 @@
             "title": "Home Id",
             "type": "string"
           },
+          "is_billing_source": {
+            "default": false,
+            "title": "Is Billing Source",
+            "type": "boolean"
+          },
           "is_home_total": {
             "default": false,
             "title": "Is Home Total",
@@ -1388,6 +1521,17 @@
             ],
             "title": "Device Ids"
           },
+          "is_billing_source": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Billing Source"
+          },
           "is_home_total": {
             "anyOf": [
               {
@@ -1429,6 +1573,193 @@
           }
         },
         "title": "ServiceBranchUpdateRequest",
+        "type": "object"
+      },
+      "StatelessTelemetryConfiguration": {
+        "additionalProperties": false,
+        "properties": {
+          "telemetry_interval_seconds": {
+            "enum": [
+              2,
+              5,
+              10,
+              15,
+              30,
+              60
+            ],
+            "title": "Telemetry Interval Seconds",
+            "type": "integer"
+          },
+          "version": {
+            "exclusiveMinimum": 0.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "telemetry_interval_seconds"
+        ],
+        "title": "StatelessTelemetryConfiguration",
+        "type": "object"
+      },
+      "StatelessTelemetryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "commands": {
+            "items": {
+              "$ref": "#/components/schemas/CommandEnvelope"
+            },
+            "title": "Commands",
+            "type": "array"
+          },
+          "configuration": {
+            "$ref": "#/components/schemas/StatelessTelemetryConfiguration"
+          },
+          "protocol_id": {
+            "const": "pm-protocol/1.0.0",
+            "default": "pm-protocol/1.0.0",
+            "title": "Protocol Id",
+            "type": "string"
+          },
+          "sample": {
+            "$ref": "#/components/schemas/StatelessTelemetrySampleIdentity"
+          },
+          "server_received_at": {
+            "format": "date-time",
+            "title": "Server Received At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "duplicate"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "telemetry_protocol": {
+            "const": "pm-telemetry/2.0.0",
+            "default": "pm-telemetry/2.0.0",
+            "title": "Telemetry Protocol",
+            "type": "string"
+          },
+          "timestamp_source": {
+            "enum": [
+              "sensor",
+              "server"
+            ],
+            "title": "Timestamp Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "server_received_at",
+          "sample",
+          "timestamp_source",
+          "configuration",
+          "commands"
+        ],
+        "title": "StatelessTelemetryResponse",
+        "type": "object"
+      },
+      "StatelessTelemetrySampleIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "boot_id": {
+            "title": "Boot Id",
+            "type": "string"
+          },
+          "sample_sequence": {
+            "exclusiveMinimum": 0.0,
+            "title": "Sample Sequence",
+            "type": "integer"
+          },
+          "sensor_id": {
+            "title": "Sensor Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sensor_id",
+          "boot_id",
+          "sample_sequence"
+        ],
+        "title": "StatelessTelemetrySampleIdentity",
+        "type": "object"
+      },
+      "TelemetrySettingsUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "history_interval_seconds": {
+            "anyOf": [
+              {
+                "enum": [
+                  15,
+                  30,
+                  60,
+                  300,
+                  900
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History Interval Seconds"
+          },
+          "retention_confirmation": {
+            "anyOf": [
+              {
+                "const": "DELETE EXPIRED SAVED HISTORY",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retention Confirmation"
+          },
+          "retention_days": {
+            "anyOf": [
+              {
+                "enum": [
+                  30,
+                  90,
+                  180,
+                  365
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retention Days"
+          },
+          "telemetry_interval_seconds": {
+            "anyOf": [
+              {
+                "enum": [
+                  2,
+                  5,
+                  10,
+                  15,
+                  30,
+                  60
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Telemetry Interval Seconds"
+          }
+        },
+        "title": "TelemetrySettingsUpdateRequest",
         "type": "object"
       },
       "UserCreateRequest": {
@@ -1738,7 +2069,7 @@
   },
   "info": {
     "title": "PowerMeter V2 API",
-    "version": "0.1.0-rc.16"
+    "version": "0.1.0-rc.18"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3667,6 +3998,99 @@
         ]
       }
     },
+    "/api/v1/billing/cycle-adjustments": {
+      "post": {
+        "operationId": "create_billing_cycle_adjustment_api_v1_billing_cycle_adjustments_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BillingCycleAdjustmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Billing Cycle Adjustment Api V1 Billing Cycle Adjustments Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Billing Cycle Adjustment",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
     "/api/v1/circuits": {
       "get": {
         "operationId": "list_circuits_api_v1_circuits_get",
@@ -4145,6 +4569,307 @@
           }
         },
         "summary": "Readings",
+        "tags": [
+          "devices"
+        ]
+      }
+    },
+    "/api/v1/device/telemetry/v2": {
+      "post": {
+        "operationId": "stateless_telemetry_api_v1_device_telemetry_v2_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$defs": {
+                  "CommandResult": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "command_id": {
+                        "maxLength": 36,
+                        "minLength": 36,
+                        "title": "Command Id",
+                        "type": "string"
+                      },
+                      "evidence": {
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "integer"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "title": "Evidence",
+                        "type": "object"
+                      },
+                      "progress_percent": {
+                        "maximum": 100.0,
+                        "minimum": 0.0,
+                        "title": "Progress Percent",
+                        "type": "integer"
+                      },
+                      "result_code": {
+                        "maxLength": 80,
+                        "minLength": 1,
+                        "title": "Result Code",
+                        "type": "string"
+                      },
+                      "state": {
+                        "enum": [
+                          "accepted",
+                          "running",
+                          "succeeded",
+                          "failed",
+                          "awaiting_reboot",
+                          "awaiting_heartbeat",
+                          "rolled_back"
+                        ],
+                        "title": "State",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "command_id",
+                      "state",
+                      "progress_percent",
+                      "result_code"
+                    ],
+                    "title": "CommandResult",
+                    "type": "object"
+                  }
+                },
+                "additionalProperties": false,
+                "description": "One independently acceptable, latest-value telemetry sample.",
+                "properties": {
+                  "active_power_w": {
+                    "anyOf": [
+                      {
+                        "maximum": 300000.0,
+                        "minimum": 0.0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Active Power W"
+                  },
+                  "boot_id": {
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "title": "Boot Id",
+                    "type": "string"
+                  },
+                  "command_results": {
+                    "items": {
+                      "$ref": "#/$defs/CommandResult"
+                    },
+                    "maxItems": 16,
+                    "title": "Command Results",
+                    "type": "array"
+                  },
+                  "current_a": {
+                    "anyOf": [
+                      {
+                        "maximum": 1000.0,
+                        "minimum": 0.0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Current A"
+                  },
+                  "firmware_build_id": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "title": "Firmware Build Id",
+                    "type": "string"
+                  },
+                  "firmware_version": {
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "title": "Firmware Version",
+                    "type": "string"
+                  },
+                  "frequency_hz": {
+                    "anyOf": [
+                      {
+                        "maximum": 70.0,
+                        "minimum": 40.0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Frequency Hz"
+                  },
+                  "power_factor": {
+                    "anyOf": [
+                      {
+                        "maximum": 1.0,
+                        "minimum": 0.0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Power Factor"
+                  },
+                  "pzem_energy_wh": {
+                    "anyOf": [
+                      {
+                        "minimum": 0.0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Pzem Energy Wh"
+                  },
+                  "pzem_status": {
+                    "enum": [
+                      "ok",
+                      "timeout",
+                      "bad_crc",
+                      "short_frame",
+                      "wrong_address",
+                      "invalid",
+                      "absent"
+                    ],
+                    "title": "Pzem Status",
+                    "type": "string"
+                  },
+                  "sample_sequence": {
+                    "exclusiveMinimum": 0.0,
+                    "title": "Sample Sequence",
+                    "type": "integer"
+                  },
+                  "sampled_at": {
+                    "anyOf": [
+                      {
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Sampled At"
+                  },
+                  "sensor_id": {
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "title": "Sensor Id",
+                    "type": "string"
+                  },
+                  "telemetry_protocol": {
+                    "const": "pm-telemetry/2.0.0",
+                    "title": "Telemetry Protocol",
+                    "type": "string"
+                  },
+                  "time_status": {
+                    "enum": [
+                      "trusted",
+                      "untrusted",
+                      "stepped",
+                      "disputed"
+                    ],
+                    "title": "Time Status",
+                    "type": "string"
+                  },
+                  "uptime_ms": {
+                    "minimum": 0.0,
+                    "title": "Uptime Ms",
+                    "type": "integer"
+                  },
+                  "voltage_v": {
+                    "anyOf": [
+                      {
+                        "maximum": 300.0,
+                        "minimum": 0.0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Voltage V"
+                  },
+                  "wifi_rssi": {
+                    "anyOf": [
+                      {
+                        "maximum": 0.0,
+                        "minimum": -127.0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Wifi Rssi"
+                  }
+                },
+                "required": [
+                  "telemetry_protocol",
+                  "sensor_id",
+                  "boot_id",
+                  "sample_sequence",
+                  "sampled_at",
+                  "uptime_ms",
+                  "pzem_status",
+                  "firmware_version",
+                  "firmware_build_id",
+                  "time_status"
+                ],
+                "title": "StatelessTelemetryRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatelessTelemetryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Stateless Telemetry",
         "tags": [
           "devices"
         ]
@@ -7022,6 +7747,180 @@
           }
         },
         "summary": "Update Home Utility",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/telemetry": {
+      "get": {
+        "operationId": "get_telemetry_settings_api_v1_settings_telemetry_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Telemetry Settings Api V1 Settings Telemetry Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Telemetry Settings",
+        "tags": [
+          "settings"
+        ]
+      },
+      "patch": {
+        "operationId": "update_telemetry_settings_api_v1_settings_telemetry_patch",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelemetrySettingsUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Telemetry Settings Api V1 Settings Telemetry Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Telemetry Settings",
         "tags": [
           "settings"
         ]

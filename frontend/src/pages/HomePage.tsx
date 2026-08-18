@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Activity, ArrowRight, CalendarDays, ChevronRight, CircleDollarSign, Clock3, HardDrive, Info, RefreshCw, RotateCcw, UploadCloud, Waves, Zap } from 'lucide-react';
+import { Activity, ArrowRight, CalendarDays, ChevronRight, CircleDollarSign, Clock3, Info, RefreshCw, RotateCcw, Server, UploadCloud, Waves, Zap } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
 import { Area, AreaChart, Bar, BarChart, Brush, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from '../api';
@@ -81,10 +81,10 @@ function powerDisplay(watts: number | null | undefined) {
   return { value: numeric(value, '', 2), unit, text: numeric(value, unit, 2), aria: numeric(value, spokenUnit, 2) };
 }
 
-function livePowerScope(data: HomeData, primary: SensorSummary) {
+function livePowerScope(data: HomeData, primary: SensorSummary, branch?: { device_ids: string[] }) {
   const scope = data.summary_scope;
-  if (scope?.aggregate === true) {
-    const deviceIds = [...new Set(scope.device_ids ?? [])];
+  if (scope?.aggregate === true || branch) {
+    const deviceIds = [...new Set(scope?.aggregate === true ? scope.device_ids ?? branch?.device_ids ?? [] : branch?.device_ids ?? [])];
     const scopedSensors = deviceIds
       .map((id) => data.devices.find((sensor) => sensor.id === id))
       .filter((sensor): sensor is SensorSummary => sensor !== undefined);
@@ -93,13 +93,16 @@ function livePowerScope(data: HomeData, primary: SensorSummary) {
       .map((sensor) => sensor.measurement?.measured_at)
       .filter((value): value is string => Boolean(value))
       .sort((left, right) => new Date(left).getTime() - new Date(right).getTime())[0] ?? null;
+    const aggregate = data.aggregate_measurement;
+    const requiredCount = aggregate?.required_member_count ?? deviceIds.length;
+    const availableCount = aggregate?.available_member_count ?? liveSensors.length;
+    const memberPower = liveSensors.reduce((sum, sensor) => sum + Number(sensor.measurement?.active_power_w ?? 0), 0);
     return {
       aggregate: true,
-      watts: liveSensors.length === deviceIds.length && data.aggregate_measurement?.state === 'live'
-        ? data.aggregate_measurement.active_power_w
-        : null,
-      liveCount: liveSensors.length,
-      scopedCount: deviceIds.length,
+      watts: aggregate?.active_power_w ?? (liveSensors.length > 0 ? memberPower : null),
+      liveCount: availableCount,
+      scopedCount: requiredCount,
+      partial: Boolean(aggregate?.partial || availableCount < requiredCount),
       measuredAt,
     };
   }
@@ -108,6 +111,7 @@ function livePowerScope(data: HomeData, primary: SensorSummary) {
     watts: primary.measurement?.active_power_w ?? null,
     liveCount: primary.state === 'live' && primary.measurement?.active_power_w !== null && primary.measurement?.active_power_w !== undefined ? 1 : 0,
     scopedCount: 1,
+    partial: false,
     measuredAt: primary.measurement?.measured_at ?? null,
   };
 }
@@ -140,15 +144,15 @@ function SensorHealthPanel({ data, details, onSelect }: {
     </header>
     <div className="dashboard-sensor-table" role="table" aria-label="Sensor health and live electrical measurements">
       <div className="dashboard-sensor-row dashboard-sensor-header" role="row">
-        {['Sensor', 'Status', 'Last heartbeat', 'Power', 'Voltage', 'Current', 'Frequency', 'PF', 'Energy', 'PZEM', 'microSD'].map((label) => <span key={label} role="columnheader">{label}</span>)}
+        {['Sensor', 'Status', 'Last reading', 'Power', 'Voltage', 'Current', 'Frequency', 'PF', 'Energy', 'PZEM', 'Server delivery', 'Firmware'].map((label) => <span key={label} role="columnheader">{label}</span>)}
         <span role="columnheader"><span className="sr-only">Sensor details</span></span>
       </div>
       {data.devices.map((sensor) => {
         const detail = details.find((entry) => entry.id === sensor.id);
         const measurement = sensor.measurement;
         const pzem = detail?.pzem_status ?? measurement?.pzem_status;
-        const storage = detail?.storage_status ?? sensor.storage_status;
-        const energy = sensorEnergy(sensor, data);
+        const energy = detail?.cumulative_energy_kwh ?? sensor.cumulative_energy_kwh ?? sensorEnergy(sensor, data);
+        const delivery = detail?.server_delivery_status ?? sensor.server_delivery_status;
         const subtitle = detail?.location ?? sensor.location ?? (sensor.measurement_scope === 'energy_only' ? 'Individual energy scope' : null);
         return <div className="dashboard-sensor-row" role="row" key={sensor.id}>
           <div className="dashboard-sensor-identity" role="rowheader">
@@ -156,7 +160,7 @@ function SensorHealthPanel({ data, details, onSelect }: {
             <div><strong title={sensor.friendly_name}>{sensor.friendly_name}</strong>{subtitle && <small title={subtitle}>{subtitle}</small>}</div>
           </div>
           <SensorMetric label="Status"><StatusPill state={sensor.state} label={sensor.state === 'live' ? 'Online' : humanizeHealth(sensor.state)} /></SensorMetric>
-          <SensorMetric label="Last heartbeat"><HeartbeatAge timestamp={sensor.heartbeat_at} /></SensorMetric>
+          <SensorMetric label="Last reading"><HeartbeatAge timestamp={sensor.last_server_received_at ?? measurement?.measured_at ?? sensor.heartbeat_at} /></SensorMetric>
           <SensorMetric label="Power">{powerDisplay(measurement?.active_power_w).text}</SensorMetric>
           <SensorMetric label="Voltage">{numeric(measurement?.voltage_v, 'V', 1)}</SensorMetric>
           <SensorMetric label="Current">{numeric(measurement?.current_a, 'A', 2)}</SensorMetric>
@@ -164,7 +168,8 @@ function SensorHealthPanel({ data, details, onSelect }: {
           <SensorMetric label="PF">{numeric(measurement?.power_factor, '', 2)}</SensorMetric>
           <SensorMetric label="Energy">{numeric(energy, 'kWh', 2)}</SensorMetric>
           <SensorMetric label="PZEM" className={`dashboard-health-text dashboard-health-${healthTone(pzem)}`}>{humanizeHealth(pzem)}</SensorMetric>
-          <SensorMetric label="microSD" className={`dashboard-health-text dashboard-health-${healthTone(storage)}`}>{humanizeHealth(storage)}</SensorMetric>
+          <SensorMetric label="Server delivery" className={`dashboard-health-text dashboard-health-${healthTone(delivery)}`}><Server aria-hidden="true" /> {delivery ? humanizeHealth(delivery) : sensor.last_server_received_at || sensor.last_committed_at ? 'Received' : 'Not reported'}</SensorMetric>
+          <SensorMetric label="Firmware">{detail?.firmware_version ?? sensor.firmware_version ?? 'Not reported'}</SensorMetric>
           <div className="dashboard-sensor-action" role="cell">
             <button type="button" onClick={() => detail && onSelect(detail)} disabled={!detail} aria-label={`Open ${sensor.friendly_name} sensor details`}><ChevronRight aria-hidden="true" /></button>
           </div>
@@ -188,8 +193,7 @@ function UsageTooltip({ active, payload, timezone, unit = 'kW' }: {
 export function HomePage() {
   const [now] = useState(() => new Date());
   const [selectedDevice, setSelectedDevice] = useState<DeviceDetail>();
-  const [pendingCommand, setPendingCommand] = useState<'reboot' | 'format_storage_prepare' | 'format_storage_commit' | null>(null);
-  const [formatEvidence, setFormatEvidence] = useState<{ token: string; prepareCommandId: string } | null>(null);
+  const [rebootOpen, setRebootOpen] = useState(false);
   const queryClient = useQueryClient();
   const homeScope = useHomeScope();
   const { selectedHomeId } = homeScope;
@@ -201,10 +205,14 @@ export function HomePage() {
   const home = useQuery({ queryKey: ['home', selectedHomeId], queryFn: () => api.home(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: refreshInterval });
   const devices = useQuery({ queryKey: ['devices', selectedHomeId], queryFn: () => api.devices(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: refreshInterval });
   const circuits = useQuery({ queryKey: ['circuits', selectedHomeId], queryFn: () => api.circuits(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: refreshInterval });
+  const billing = useQuery({ queryKey: ['billing', selectedHomeId], queryFn: () => api.billing(selectedHomeId), enabled: Boolean(selectedHomeId), refetchInterval: refreshInterval });
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: api.alerts, refetchInterval: refreshInterval });
   const commandDeviceId = home.data?.summary_scope?.device_id ?? home.data?.devices[0]?.id ?? '';
-  const aggregateCircuitId = home.data?.summary_scope?.aggregate ? home.data.summary_scope.circuit_id ?? '' : '';
-  const homeTotalBranch = circuits.data?.circuits.find((branch) => branch.id === aggregateCircuitId) ?? circuits.data?.circuits.find((branch) => branch.is_home_total);
+  const serverAggregateCircuitId = home.data?.summary_scope?.aggregate ? home.data.summary_scope.circuit_id ?? '' : '';
+  const homeTotalBranch = circuits.data?.circuits.find((branch) => branch.id === serverAggregateCircuitId)
+    ?? circuits.data?.circuits.find((branch) => branch.is_billing_source)
+    ?? circuits.data?.circuits.find((branch) => branch.is_home_total);
+  const aggregateCircuitId = serverAggregateCircuitId || homeTotalBranch?.id || '';
   const liveScopeName = homeTotalBranch?.name ?? (aggregateCircuitId ? 'Main service' : home.data?.devices.find((sensor) => sensor.id === commandDeviceId)?.friendly_name ?? 'Selected sensor');
   const historyDeviceId = aggregateCircuitId ? '' : commandDeviceId;
   const historyScopeKey = aggregateCircuitId ? `aggregate:${aggregateCircuitId}` : `device:${historyDeviceId}`;
@@ -218,22 +226,9 @@ export function HomePage() {
     queryFn: () => api.history(historyParams(selectedHomeId, { deviceId: historyDeviceId, aggregateCircuitId }, new Date(now.getTime() - dashboardDays * 24 * 60 * 60 * 1000), now, 'energy', 86400)),
     enabled: Boolean(selectedHomeId && (historyDeviceId || aggregateCircuitId)),
   });
-  const command = useMutation({
-    mutationFn: ({ type, payload, prepare, typedConfirmation }: { type: string; payload?: Record<string, unknown>; prepare?: { commandId: string; confirmationToken: string }; typedConfirmation?: string }) => api.command(commandDeviceId, type, payload, prepare ? { ...prepare, typedConfirmation: typedConfirmation ?? '' } : undefined),
-    onSuccess: (result, variables) => {
-      if (variables.type === 'format_storage_prepare' && result.confirmation_token) {
-        setFormatEvidence({ token: result.confirmation_token, prepareCommandId: result.command.id });
-        setPendingCommand(null);
-      } else {
-        setPendingCommand(null);
-        setFormatEvidence(null);
-      }
-      void queryClient.invalidateQueries({ queryKey: ['devices'] });
-    },
-  });
+  const command = useMutation({ mutationFn: () => api.command(commandDeviceId, 'reboot'), onSuccess: () => { setRebootOpen(false); void queryClient.invalidateQueries({ queryKey: ['devices'] }); } });
 
   const primary = home.data?.devices.find((sensor) => sensor.id === commandDeviceId) ?? home.data?.devices[0];
-  const primaryDetail = devices.data?.devices.find((device) => device.id === commandDeviceId);
   const selectedDeviceCurrent = selectedDevice
     ? devices.data?.devices.find((device) => device.id === selectedDevice.id) ?? selectedDevice
     : undefined;
@@ -241,14 +236,6 @@ export function HomePage() {
   const chartData = useMemo(() => history24.data?.points.map((point) => ({ ...point, epoch: new Date(point.timestamp).getTime(), valueKw: point.value === null ? null : Number(point.value) })) ?? [], [history24.data]);
   const dailyData = useMemo(() => daily.data?.points.map((point) => ({ ...point, epoch: new Date(point.timestamp).getTime(), value: point.value === null ? null : Number(point.value) })) ?? [], [daily.data]);
   const hasCommittedPower = chartData.some((point) => point.valueKw !== null);
-
-  const formatCommitReady = Boolean(
-    formatEvidence
-    && primaryDetail?.last_command?.id === formatEvidence.prepareCommandId
-    && primaryDetail.last_command.state === 'succeeded'
-    && primaryDetail.last_command.result_evidence?.ready === true,
-  );
-  const actionableCommand = pendingCommand ?? (formatCommitReady ? 'format_storage_commit' : null);
 
   if (homeScope.isLoading) return <div className="page"><h1 className="sr-only">Home</h1><Loading label="Loading authorized homes" /></div>;
   if (homeScope.isError) return <div className="page"><h1 className="sr-only">Home</h1><ErrorState error={homeScope.error} retry={homeScope.refetch} /></div>;
@@ -258,12 +245,7 @@ export function HomePage() {
   const data = home.data;
   if (!data) return <div className="page"><h1 className="sr-only">Home</h1><ErrorState error={new Error('The Home response was empty.')} retry={() => void home.refetch()} /></div>;
   if (!primary) return <div className="page"><h1 className="sr-only">Home</h1><EmptyState title="No enrolled sensor" detail="Ask an administrator to create an enrollment token, then provision a headless sensor over USB." /></div>;
-  const livePower = livePowerScope(data, primary);
-  const scopedBacklog = data.devices
-    .filter((sensor) => data.summary_scope?.aggregate
-      ? data.summary_scope.device_ids?.includes(sensor.id)
-      : sensor.id === commandDeviceId)
-    .reduce((total, sensor) => total + (sensor.backlog ?? 0), 0);
+  const livePower = livePowerScope(data, primary, homeTotalBranch);
   const livePowerDisplay = powerDisplay(livePower.watts);
   const livePowerState = livePower.aggregate
     ? livePower.liveCount === livePower.scopedCount && livePower.scopedCount > 0 ? 'live' : livePower.liveCount > 0 ? 'needs_attention' : 'offline'
@@ -271,19 +253,19 @@ export function HomePage() {
   const livePowerLabel = livePower.aggregate
     ? livePower.liveCount === livePower.scopedCount ? `${livePower.liveCount} Live` : `${livePower.liveCount}/${livePower.scopedCount} Live`
     : primary.state === 'live' ? 'Live' : undefined;
-  const formatResult = primaryDetail?.last_command?.result_evidence;
-  const formatImpact = formatResult?.ready === true
-    ? `The sensor authenticated its prepare result: ${typeof formatResult.acknowledged_records_lost === 'number' ? formatResult.acknowledged_records_lost : 0} acknowledged and ${typeof formatResult.unacknowledged_records_lost === 'number' ? formatResult.unacknowledged_records_lost : 0} unacknowledged stored records will be removed. Identity, credentials, configuration, sequence floor and acknowledgement remain preserved.`
-    : 'Authenticated storage-impact evidence is not available; commit remains disabled.';
+  const billingAccount = billing.data?.accounts[0];
+  const billingCycle = billingAccount?.current_billing_cycle;
+  const projection = billingCycle?.projection;
+  const tierName = billingCycle?.tier_state === 'tier_1' ? 'Tier 1' : billingCycle?.tier_state === 'tier_2' ? 'Tier 2' : 'Not confirmed';
   const lastUpdated = data.generated_at ?? livePower.measuredAt ?? primary.heartbeat_at;
   const showSummary = visibleCards.has('energy') || visibleCards.has('cost');
   const showOverview = visibleCards.has('live_power') || showSummary;
   const liveSupportingText = livePower.aggregate
     ? livePower.liveCount === 0
       ? `${liveScopeName} has no live power reading yet; missing readings remain missing.`
-      : livePower.liveCount === livePower.scopedCount
+      : !livePower.partial
         ? `${liveScopeName} combines live power from ${livePower.liveCount} non-overlapping sensors.`
-        : `${livePower.scopedCount - livePower.liveCount} ${liveScopeName} sensor${livePower.scopedCount - livePower.liveCount === 1 ? ' is' : 's are'} unavailable; partial power is not shown or treated as zero.`
+        : `Partial total: ${livePower.liveCount} of ${livePower.scopedCount} ${liveScopeName} sensors are reporting. Missing sensors are not treated as zero.`
     : measurement?.active_power_w === null || measurement?.active_power_w === undefined
       ? 'Live meter power is unavailable; missing readings remain missing.'
       : primary.state === 'live'
@@ -296,7 +278,6 @@ export function HomePage() {
       <div className="dashboard-updated" title={lastUpdated ? dateTime(lastUpdated) : 'No update timestamp available'}><RefreshCw aria-hidden="true" /><span>Last updated {timeAgo(lastUpdated)}</span></div>
     </header>
     {command.isSuccess && <Notice kind="success">Command {command.data.command.id} is queued. Awaiting authenticated device progress.</Notice>}
-    {formatEvidence && !formatCommitReady && <Notice>Storage-format prepare {formatEvidence.prepareCommandId} is queued. Commit remains unavailable until authenticated readiness and loss-count evidence arrives.</Notice>}
 
     {showOverview && <section className={`dashboard-overview${!visibleCards.has('live_power') ? ' dashboard-overview-summary-only' : ''}${!showSummary ? ' dashboard-overview-live-only' : ''}`} aria-label="Live power and home summary">
       {visibleCards.has('live_power') && <Card className="dashboard-live-card">
@@ -306,13 +287,14 @@ export function HomePage() {
           <PowerGauge watts={livePower.watts} />
         </div>
         <p><Waves aria-hidden="true" />{liveSupportingText}</p>
-        <small>Live readings can appear before saved History because stored readings must be accepted by the server first.</small>
+        <small>{livePower.partial ? 'This is a partial live total.' : 'History may take a moment to show the newest accepted reading.'}</small>
       </Card>}
-      {showSummary && <Card className="dashboard-summary-card">
-        {visibleCards.has('energy') && <SummaryMetric icon={<Zap aria-hidden="true" />} label="Today Energy" value={numeric(data.summaries.today.energy_kwh === null ? null : Number(data.summaries.today.energy_kwh), 'kWh')} detail="Accepted sensor readings" unavailable={data.summaries.today.energy_kwh === null} />}
-        {visibleCards.has('cost') && <SummaryMetric icon={<CircleDollarSign aria-hidden="true" />} label="Today Estimated Cost" value={money(data.summaries.today.cost)} detail="Selected published rate" unavailable={data.summaries.today.cost === null} />}
-        {visibleCards.has('cost') && <SummaryMetric icon={<CalendarDays aria-hidden="true" />} label="This Week Cost" value={money(data.summaries.week.cost)} {...(data.summaries.week.energy_kwh === null ? {} : { detail: `${numeric(Number(data.summaries.week.energy_kwh), 'kWh')} monitored` })} unavailable={data.summaries.week.cost === null} />}
-        {visibleCards.has('cost') && <SummaryMetric icon={<Clock3 aria-hidden="true" />} label="Current Rate" value={data.current_rate?.price_per_kwh === null || data.current_rate?.price_per_kwh === undefined ? '—' : `${money(data.current_rate.price_per_kwh)} / kWh`} detail={data.current_rate ? `${data.current_rate.period ?? 'Current period'} · ${data.current_rate.plan_name}` : 'No published rate'} unavailable={!data.current_rate || data.current_rate.price_per_kwh === null} />}
+      {showSummary && <Card title="Billing Cycle" eyebrow="Main service" className="dashboard-summary-card">
+        {visibleCards.has('energy') && <SummaryMetric icon={<Zap aria-hidden="true" />} label="Current Usage" value={numeric(billingCycle?.saved_usage_kwh === null || billingCycle?.saved_usage_kwh === undefined ? null : Number(billingCycle.saved_usage_kwh), 'kWh')} detail="Saved Main service energy" unavailable={!billingCycle || billingCycle.saved_usage_kwh === null} />}
+        {visibleCards.has('cost') && <SummaryMetric icon={<CalendarDays aria-hidden="true" />} label="Current Tier" value={tierName} detail={billingCycle?.tier_1_remaining_kwh === null || billingCycle?.tier_1_remaining_kwh === undefined ? 'Tier progress unavailable' : `${numeric(Number(billingCycle.tier_1_remaining_kwh), 'kWh')} remaining in Tier 1`} unavailable={!billingCycle || billingCycle.tier_state === 'not_confirmed'} />}
+        {visibleCards.has('cost') && <SummaryMetric icon={<CircleDollarSign aria-hidden="true" />} label="Cost to Date" value={money(billingCycle?.cost_to_date ?? billingCycle?.estimated_total ?? null)} detail="Energy and service charges" unavailable={!billingCycle || (billingCycle.cost_to_date ?? billingCycle.estimated_total) === null} />}
+        {visibleCards.has('cost') && <SummaryMetric icon={<Clock3 aria-hidden="true" />} label="Estimated Monthly Bill" value={projection && ['available', 'ready'].includes(projection.status) ? money(projection.projected_total ?? null) : 'Not available'} detail={projection && ['available', 'ready'].includes(projection.status) ? `${projection.confidence ?? 'Unrated'} confidence` : 'At least 24 hours of reliable readings required'} unavailable={!projection || !['available', 'ready'].includes(projection.status)} />}
+        {billingCycle && (Number(billingCycle.reading_coverage ?? 1) < 1 || Number(billingCycle.unresolved_energy_kwh ?? 0) > 0) && <p className="dashboard-billing-warning">Estimate may be incomplete because some readings were not received.</p>}
       </Card>}
     </section>}
 
@@ -320,7 +302,7 @@ export function HomePage() {
 
     <section className="dashboard-content" aria-label="Saved usage, commands, and alerts">
       {(visibleCards.has('live_power') || visibleCards.has('completeness')) && <Card title={`Power History – ${dashboardRangeLabel}`} eyebrow="Saved sensor readings" action={<span className="select-chip">kW</span>} className="dashboard-chart-card dashboard-power-history">
-        {history24.isLoading ? <Loading label="Loading saved readings" /> : history24.isError ? <ErrorState error={history24.error} /> : history24.data && chartData.length > 0 && hasCommittedPower ? <div className="chart-wrap" data-testid="usage-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart title={`Saved power over ${dashboardRangeLabel.toLowerCase()}`} desc="Saved sensor power. Missing readings render as gaps." data={chartData} margin={{ top: 16, right: 12, bottom: 8, left: -12 }}><defs><linearGradient id="powerFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#65e692" stopOpacity={0.48} /><stop offset="100%" stopColor="#65e692" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" minTickGap={70} interval="preserveStartEnd" tickFormatter={(value: number) => chartTick(value, dashboardDays * 24, history24.data?.timezone ?? 'America/Los_Angeles')} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} width={42} unit=" kW" /><Tooltip content={<UsageTooltip timezone={history24.data.timezone} />} /><Area type="monotone" dataKey="valueKw" stroke="#65e692" strokeWidth={2} fill="url(#powerFill)" connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom saved power History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#151d1a" tickFormatter={() => ''} /></AreaChart></ResponsiveContainer></div> : <EmptyState title="No saved power readings yet" detail={scopedBacklog > 0 ? `${scopedBacklog.toLocaleString()} reading${scopedBacklog === 1 ? ' is' : 's are'} waiting to sync.` : 'Missing readings remain gaps instead of being changed to zero.'} />}
+        {history24.isLoading ? <Loading label="Loading saved readings" /> : history24.isError ? <ErrorState error={history24.error} /> : history24.data && chartData.length > 0 && hasCommittedPower ? <div className="chart-wrap" data-testid="usage-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart title={`Saved power over ${dashboardRangeLabel.toLowerCase()}`} desc="Saved sensor power. Missing readings render as gaps." data={chartData} margin={{ top: 16, right: 12, bottom: 8, left: -12 }}><defs><linearGradient id="powerFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#65e692" stopOpacity={0.48} /><stop offset="100%" stopColor="#65e692" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" minTickGap={70} interval="preserveStartEnd" tickFormatter={(value: number) => chartTick(value, dashboardDays * 24, history24.data?.timezone ?? 'America/Los_Angeles')} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} width={42} unit=" kW" /><Tooltip content={<UsageTooltip timezone={history24.data.timezone} />} /><Area type="monotone" dataKey="valueKw" stroke="#65e692" strokeWidth={2} fill="url(#powerFill)" connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom saved power History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#151d1a" tickFormatter={() => ''} /></AreaChart></ResponsiveContainer></div> : <EmptyState title="No readings were received during this time." detail="Choose another time range or check the sensor connection." />}
         <div className="chart-footer"><Clock3 aria-hidden="true" /><span>{dateTime(new Date(now.getTime() - dashboardDays * 86_400_000).toISOString(), history24.data?.timezone)} – {dateTime(now.toISOString(), history24.data?.timezone)}</span>{history24.data && <span>{percent(history24.data.completeness === null ? null : Number(history24.data.completeness))} reading coverage · {history24.data.missing_ranges.length} gap{history24.data.missing_ranges.length === 1 ? '' : 's'}</span>}</div>
       </Card>}
       {visibleCards.has('energy') && <Card title="Daily Energy (kWh)" eyebrow="Saved service-branch totals" action={<span className="select-chip">{dashboardRangeLabel}</span>} className="dashboard-chart-card dashboard-daily-energy">
@@ -330,10 +312,8 @@ export function HomePage() {
       <aside className="dashboard-side-stack">
         <Card title="Recent Activity / Commands" className="dashboard-command-card">
           <div className="dashboard-command-grid">
-            <PermissionGate permission="sensors.command.reboot"><button type="button" onClick={() => setPendingCommand('reboot')}><RotateCcw aria-hidden="true" /><span><strong>Reboot</strong><small>Safe restart</small></span></button></PermissionGate>
-            <PermissionGate permission="sensors.configure"><button type="button" onClick={() => command.mutate({ type: 'sync_now' })}><RefreshCw aria-hidden="true" /><span><strong>Sync Now</strong><small>Sync readings</small></span></button></PermissionGate>
+            <PermissionGate permission="sensors.command.reboot"><button type="button" onClick={() => setRebootOpen(true)}><RotateCcw aria-hidden="true" /><span><strong>Reboot</strong><small>Restart sensor</small></span></button></PermissionGate>
             <PermissionGate permission="firmware.manage"><a href="/settings?section=firmware"><UploadCloud aria-hidden="true" /><span><strong>Install OTA</strong><small>Update firmware</small></span></a></PermissionGate>
-            <PermissionGate permission="sensors.command.storage_format"><button type="button" className="dashboard-command-warning" onClick={() => setPendingCommand('format_storage_prepare')}><HardDrive aria-hidden="true" /><span><strong>Format SD</strong><small>Prepare first</small></span></button></PermissionGate>
           </div>
         </Card>
         {visibleCards.has('alerts') && <Card className="dashboard-alerts-card">
@@ -349,6 +329,6 @@ export function HomePage() {
     </section>
 
     <SensorDrawer device={selectedDeviceCurrent} open={Boolean(selectedDevice)} onClose={() => setSelectedDevice(undefined)} />
-    <ConfirmDialog open={actionableCommand !== null} title={actionableCommand === 'reboot' ? 'Reboot sensor?' : actionableCommand === 'format_storage_commit' ? 'Commit microSD history format?' : 'Prepare to format microSD history?'} description={<p>{actionableCommand === 'reboot' ? 'Measurement pauses briefly while sequence and storage state are checkpointed.' : actionableCommand === 'format_storage_commit' ? formatImpact : 'The prepare step creates a device-bound confirmation. Enrollment, credentials, network configuration and sequence state remain intact.'}</p>} confirmLabel={actionableCommand === 'format_storage_prepare' ? 'Prepare format' : actionableCommand === 'format_storage_commit' ? 'Format history' : 'Queue command'} {...(actionableCommand === 'format_storage_commit' ? { typedPhrase: 'FORMAT STORAGE' } : {})} busy={command.isPending} onCancel={() => { setPendingCommand(null); setFormatEvidence(null); }} onConfirm={() => { if (!actionableCommand) return; command.mutate(actionableCommand === 'format_storage_commit' && formatEvidence ? { type: actionableCommand, prepare: { commandId: formatEvidence.prepareCommandId, confirmationToken: formatEvidence.token }, typedConfirmation: 'FORMAT STORAGE' } : { type: actionableCommand }); }} />
+    <ConfirmDialog open={rebootOpen} title="Reboot sensor?" description={<p>Measurements pause briefly while the sensor restarts and reconnects.</p>} confirmLabel="Reboot sensor" busy={command.isPending} onCancel={() => setRebootOpen(false)} onConfirm={() => command.mutate()} />
   </div>;
 }

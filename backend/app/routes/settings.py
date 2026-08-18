@@ -19,6 +19,7 @@ from ..models import (
     Device,
     DeviceCredential,
     Home,
+    HomeTelemetrySetting,
     UtilityAccount,
     user_home_scopes,
 )
@@ -31,9 +32,11 @@ from ..schemas.api import (
     HomeUtilityUpdateRequest,
     ServiceBranchCreateRequest,
     ServiceBranchUpdateRequest,
+    TelemetrySettingsUpdateRequest,
     VerifiedAggregateRequest,
 )
 from ..security.auth import CurrentUser, current_user, require_permission
+from ..services.stateless_telemetry import telemetry_settings_for_home
 
 router = APIRouter(prefix="/api/v1", tags=["settings"])
 
@@ -58,11 +61,24 @@ async def _service_branch_response(session: AsyncSession, circuit: Circuit) -> d
         "description": circuit.description,
         "purpose": circuit.purpose,
         "is_home_total": circuit.is_home_total,
+        "is_billing_source": circuit.is_billing_source,
         "aggregate_mode": circuit.aggregate_mode,
         "non_overlapping_confirmed": circuit.non_overlapping_confirmed,
         "device_ids": device_ids,
         "created_at": circuit.created_at,
         "updated_at": circuit.updated_at,
+    }
+
+
+def _telemetry_settings_response(settings: HomeTelemetrySetting) -> dict[str, object]:
+    return {
+        "home_id": settings.home_id,
+        "version": settings.config_version,
+        "config_version": settings.config_version,
+        "telemetry_interval_seconds": settings.telemetry_interval_seconds,
+        "history_interval_seconds": settings.history_interval_seconds,
+        "retention_days": settings.retention_days,
+        "updated_at": settings.updated_at,
     }
 
 
@@ -147,6 +163,7 @@ async def _select_home_total(session: AsyncSession, *, circuit: Circuit) -> str 
     )
     if previous is not None:
         previous.is_home_total = False
+        previous.is_billing_source = False
         previous.purpose = "electrical_section"
         previous.updated_at = datetime.now(UTC)
         previous_members = (
@@ -158,6 +175,7 @@ async def _select_home_total(session: AsyncSession, *, circuit: Circuit) -> str 
         # Persist the old designation removal before selecting its replacement.
         await session.flush()
     circuit.is_home_total = True
+    circuit.is_billing_source = True
     circuit.purpose = "whole_home_total"
     circuit.aggregate_mode = "verified_sum"
     circuit.non_overlapping_confirmed = True
@@ -460,6 +478,75 @@ async def list_circuits(
     return {"circuits": [await _service_branch_response(session, row) for row in rows]}
 
 
+@router.get("/settings/telemetry")
+async def get_telemetry_settings(
+    home_id: str | None = None,
+    user: CurrentUser = Depends(require_permission("sensors.view")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    scoped_home_id = await _resolve_home_id(session, user.id, home_id)
+    settings = await telemetry_settings_for_home(session, scoped_home_id)
+    await session.commit()
+    return _telemetry_settings_response(settings)
+
+
+@router.patch("/settings/telemetry")
+async def update_telemetry_settings(
+    payload: TelemetrySettingsUpdateRequest,
+    request: Request,
+    home_id: str | None = None,
+    user: CurrentUser = Depends(require_permission("sensors.configure")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    scoped_home_id = await _resolve_home_id(session, user.id, home_id)
+    settings = await telemetry_settings_for_home(session, scoped_home_id)
+    before = _telemetry_settings_response(settings)
+    if "retention_days" in payload.model_fields_set:
+        new_retention = payload.retention_days
+        shorter = new_retention is not None and (
+            settings.retention_days is None or new_retention < settings.retention_days
+        )
+        if shorter and payload.retention_confirmation != "DELETE EXPIRED SAVED HISTORY":
+            raise InvalidRequest("shortening History retention requires exact confirmation")
+        settings.retention_days = new_retention
+    if payload.telemetry_interval_seconds is not None:
+        settings.telemetry_interval_seconds = payload.telemetry_interval_seconds
+    if payload.history_interval_seconds is not None:
+        settings.history_interval_seconds = payload.history_interval_seconds
+    settings.config_version += 1
+    settings.updated_at = datetime.now(UTC)
+    settings.updated_by_user_id = user.id
+    after = _telemetry_settings_response(settings)
+    before_audit = {
+        **before,
+        "updated_at": before["updated_at"].isoformat()
+        if isinstance(before["updated_at"], datetime)
+        else before["updated_at"],
+    }
+    after_audit = {
+        **after,
+        "updated_at": after["updated_at"].isoformat()
+        if isinstance(after["updated_at"], datetime)
+        else after["updated_at"],
+    }
+    session.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            event_code="TELEMETRY_SETTINGS_UPDATED",
+            target_type="home",
+            target_id=scoped_home_id,
+            correlation_id=request.state.correlation_id,
+            details={
+                "before": before_audit,
+                "after": after_audit,
+                "retention_shortening_confirmed": payload.retention_confirmation is not None,
+            },
+        )
+    )
+    await session.commit()
+    return after
+
+
 @router.post("/circuits", status_code=201)
 async def create_service_branch(
     payload: ServiceBranchCreateRequest,
@@ -481,6 +568,7 @@ async def create_service_branch(
         description=payload.description,
         purpose=payload.purpose,
         is_home_total=False,
+        is_billing_source=False,
         aggregate_mode="verified_sum",
         non_overlapping_confirmed=True,
     )
@@ -504,6 +592,7 @@ async def create_service_branch(
                 "device_ids": sorted(payload.device_ids),
                 "purpose": circuit.purpose,
                 "is_home_total": circuit.is_home_total,
+                "is_billing_source": circuit.is_billing_source,
                 "non_overlapping_confirmed": True,
                 "previous_home_total_id": previous_home_total_id,
             },
@@ -581,6 +670,10 @@ async def update_service_branch(
         raise IntegrityConflict(
             "select another home-total service branch before removing this designation"
         )
+    if payload.is_billing_source is False and circuit.is_billing_source:
+        raise IntegrityConflict(
+            "select another home-total service branch before removing the billing source"
+        )
     if payload.device_ids is not None:
         prior_ids = set(before_device_ids)
         requested_ids = set(payload.device_ids)
@@ -621,14 +714,24 @@ async def update_service_branch(
         payload.is_home_total if payload.is_home_total is not None else circuit.is_home_total
     )
     effective_purpose = payload.purpose if payload.purpose is not None else circuit.purpose
+    effective_billing_source = (
+        payload.is_billing_source
+        if payload.is_billing_source is not None
+        else circuit.is_billing_source
+    )
     if effective_home_total:
         if payload.purpose not in (None, "whole_home_total"):
             raise InvalidRequest("the home-total service branch requires whole_home_total purpose")
+        if payload.is_billing_source is False:
+            raise InvalidRequest("the home-total service branch is the required billing source")
         await _select_home_total(session, circuit=circuit)
+        effective_billing_source = True
     elif effective_purpose == "whole_home_total":
         raise InvalidRequest("whole_home_total purpose requires home-total designation")
     elif payload.purpose is not None:
         circuit.purpose = payload.purpose
+    if effective_billing_source and not effective_home_total:
+        raise InvalidRequest("the billing source must be the home-total service branch")
     circuit.updated_at = datetime.now(UTC)
 
     after = await _service_branch_response(session, circuit)
@@ -645,6 +748,7 @@ async def update_service_branch(
                 "device_ids": sorted(after_device_ids),
                 "purpose": circuit.purpose,
                 "is_home_total": circuit.is_home_total,
+                "is_billing_source": circuit.is_billing_source,
                 "non_overlapping_confirmed": circuit.non_overlapping_confirmed,
                 "moved_from_branch_ids": sorted(moved_from),
             },

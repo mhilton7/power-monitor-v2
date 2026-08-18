@@ -26,4 +26,8 @@ npm run preview:test
 
 Then open `http://127.0.0.1:4173`. Playwright also builds and exercises this production preview automatically; it does not take screenshots against the development server.
 
-Live cards are sourced from authenticated heartbeat measurements. History, energy, completeness, and cost surfaces are sourced only from committed sensor intervals returned by the central API. Utility PDFs are accepted only through the explicitly labeled rate-source workflow; temporary browser data is cleared when review closes and no usage, readings, bill totals, balances, payments, or customer identifiers are modeled.
+Live cards, History, energy, completeness, and cost surfaces are sourced from
+independently accepted authenticated PZEM telemetry returned by the central
+API. Utility PDFs are accepted only through the explicitly labeled rate-source
+workflow; temporary browser data is cleared when review closes and no usage,
+readings, bill totals, balances, payments, or customer identifiers are modeled.

@@ -21,6 +21,8 @@ def verify_release_artifacts(manifest_path: Path) -> None:
         raise ValueError("unsupported release manifest schema")
     if manifest.get("protocol") != "pm-protocol/1.0.0":
         raise ValueError("protocol mismatch")
+    if manifest.get("telemetry_protocol") != "pm-telemetry/2.0.0":
+        raise ValueError("telemetry protocol mismatch")
     release_status = manifest.get("release_status")
     if release_status not in {
         "candidate_physical_certification_pending",
@@ -87,6 +89,8 @@ def verify_release_artifacts(manifest_path: Path) -> None:
         raise ValueError("release manifest firmware build identifier is invalid")
     if firmware.get("protocol") != manifest["protocol"]:
         raise ValueError("release manifest firmware protocol is incompatible")
+    if firmware.get("telemetry_protocol") != manifest["telemetry_protocol"]:
+        raise ValueError("release manifest firmware telemetry protocol is incompatible")
     if not isinstance(firmware.get("revision"), str) or len(firmware["revision"]) < 40:
         raise ValueError("release manifest firmware revision is invalid")
     image_sha256 = firmware.get("image_sha256")

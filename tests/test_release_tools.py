@@ -34,7 +34,7 @@ DIGEST_C = "sha256:" + "3" * 64
 DIGEST_D = "sha256:" + "4" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
-VERSION = "0.1.0-rc.16"
+VERSION = "0.1.0-rc.18"
 
 
 @pytest.fixture
@@ -69,10 +69,11 @@ def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]
     manifest: dict[str, object] = {
         "schema": "pm-server-release/1.0.0",
         "protocol": "pm-protocol/1.0.0",
+        "telemetry_protocol": "pm-telemetry/2.0.0",
         "version": VERSION,
         "revision": COMMIT,
         "release_status": "candidate_physical_certification_pending",
-        "database": {"expected_migration": "20260817_0016"},
+        "database": {"expected_migration": "20260818_0017"},
         "frontend": {
             "version": VERSION,
             "revision": COMMIT,
@@ -80,15 +81,16 @@ def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]
             "build_time": "2026-08-17T00:00:00Z",
         },
         "firmware_release_url": (
-            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.16"
+            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.18"
         ),
         "firmware": {
             "repository": "https://github.com/mhilton7/power-monitor-sensor-headless",
-            "tag": "v0.1.0-rc.16",
+            "tag": "v0.1.0-rc.18",
             "revision": COMMIT,
-            "build_id": 19,
+            "build_id": 20,
             "image_sha256": IMAGE,
             "protocol": "pm-protocol/1.0.0",
+            "telemetry_protocol": "pm-telemetry/2.0.0",
             "board_profile": "esp32-s3-devkitc-n16r8-reference/1",
         },
         "hardware_certification": {"status": "pending", "physical": False},
@@ -630,7 +632,7 @@ def test_release_template_requires_exact_sentinels_and_real_digests() -> None:
     assert "UNPUBLISHED" not in output
     assert f'PM_RELEASE_VERSION: "{VERSION}"' in output
     assert f'PM_RELEASE_REVISION: "{"0" * 40}"' in output
-    assert 'PM_EXPECTED_DATABASE_REVISION: "20260817_0016"' in output
+    assert 'PM_EXPECTED_DATABASE_REVISION: "20260818_0017"' in output
     validate_compose(load_yaml(output), published=True)
     with pytest.raises(ReleaseError):
         render(

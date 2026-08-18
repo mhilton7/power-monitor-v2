@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HomePage } from '../src/pages/HomePage';
-import { device, home } from './fixtures';
+import { billing, device, home } from './fixtures';
 import { installFetchMock, renderWithProviders } from './render';
 
 describe('Home', () => {
@@ -57,9 +57,10 @@ describe('Home', () => {
     const absentSensor = screen.getByRole('rowheader', { name: /Outdoor AC/ }).closest<HTMLElement>('[role="row"]');
     expect(absentSensor).not.toBeNull();
     expect(within(absentSensor!).getByText('Offline')).toBeInTheDocument();
-    expect(within(absentSensor!).getAllByText('Not available').length).toBeGreaterThanOrEqual(6);
+    expect(within(absentSensor!).getAllByText('Not available').length).toBeGreaterThanOrEqual(5);
     expect(within(absentSensor!).getByText('Absent')).toBeInTheDocument();
-    expect(within(absentSensor!).getByText('Unavailable')).toBeInTheDocument();
+    expect(within(absentSensor!).getByText('Received')).toBeInTheDocument();
+    expect(within(sensorTable).queryByText('microSD')).not.toBeInTheDocument();
     expect(within(absentSensor!).queryByText(/0 W|0 V|0 A/)).not.toBeInTheDocument();
     expect(screen.queryByText('Unable to load this view')).not.toBeInTheDocument();
   });
@@ -76,8 +77,7 @@ describe('Home', () => {
     expect(sensor).not.toBeNull();
     expect(within(sensor!).getByText('0 W')).toBeInTheDocument();
     expect(within(sensor!).getByText('Not available')).toBeInTheDocument();
-    expect(screen.getByText(/Live readings can appear before saved History because stored readings must be accepted by the server first/)).toBeInTheDocument();
-    expect(screen.getByText('$0.17 / kWh')).toBeInTheDocument();
+    expect(screen.getByText(/History may take a moment to show the newest accepted reading/)).toBeInTheDocument();
   });
 
   it('sums only a verified non-overlapping live scope and changes individual sensors to kW at 1000 W', async () => {
@@ -98,23 +98,11 @@ describe('Home', () => {
         body: {
           ...home,
           devices: [indoor, outdoor],
-          summary_scope: {
-            kind: 'verified_aggregate',
-            device_id: null,
-            device_ids: ['device-main', 'device-outdoor'],
-            aggregate: true,
-            circuit_id: 'circuit-aggregate',
-          },
-          aggregate_measurement: {
-            state: 'live',
-            active_power_w: '2000.000',
-            member_device_ids: ['device-main', 'device-outdoor'],
-            voltage_v: null,
-            frequency_hz: null,
-            power_factor: null,
-          },
+          summary_scope: { kind: 'selected_sensor', device_id: 'device-main', aggregate: false },
+          aggregate_measurement: null,
         },
       };
+      if (path.includes('/circuits?')) return { status: 200, body: { circuits: [{ id: 'circuit-aggregate', home_id: device.home_id, name: 'Main service', description: null, purpose: 'whole_home_total', is_home_total: true, is_billing_source: true, aggregate_mode: 'verified_sum', non_overlapping_confirmed: true, device_ids: ['device-main', 'device-outdoor'] }] } };
       if (path.includes('/devices?')) return { status: 200, body: { devices: [device, { ...device, id: 'device-outdoor', friendly_name: 'Outdoor AC' }] } };
       if (path.includes('/history')) {
         historyRequests.push(path);
@@ -144,7 +132,7 @@ describe('Home', () => {
     expect(historyRequests.every((path) => path.includes('aggregate_circuit_id=circuit-aggregate') && !path.includes('device_id='))).toBe(true);
   });
 
-  it('keeps a verified aggregate unavailable when any member reading is missing', async () => {
+  it('shows a clearly labeled partial Main service total when one member reading is missing', async () => {
     const indoor = { ...home.devices[0]!, measurement: { ...home.devices[0]!.measurement, active_power_w: '600.000' } };
     const outdoor = { ...home.devices[0]!, id: 'device-outdoor', friendly_name: 'Outdoor AC', state: 'needs_attention' as const, measurement: { ...home.devices[0]!.measurement, active_power_w: null, pzem_status: 'timeout' } };
     installFetchMock((path) => {
@@ -155,9 +143,9 @@ describe('Home', () => {
 
     renderWithProviders(<HomePage />);
 
-    expect(await screen.findByLabelText('Power gauge unavailable')).toBeInTheDocument();
-    expect(screen.queryByLabelText('600 watts')).not.toBeInTheDocument();
-    expect(screen.getByText('1 Main service sensor is unavailable; partial power is not shown or treated as zero.')).toBeInTheDocument();
+    expect(await screen.findByLabelText('600 watts')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Power gauge unavailable')).not.toBeInTheDocument();
+    expect(screen.getByText('Partial total: 1 of 2 Main service sensors are reporting. Missing sensors are not treated as zero.')).toBeInTheDocument();
   });
 
   it('does not double-count multiple sensors without a verified aggregate scope', async () => {
@@ -173,7 +161,7 @@ describe('Home', () => {
 
     expect(await screen.findByLabelText('10 watts')).toBeInTheDocument();
     expect(screen.queryByLabelText('30 watts')).not.toBeInTheDocument();
-    expect(screen.getByText(/Live readings can appear before saved History because stored readings must be accepted by the server first/)).toBeInTheDocument();
+    expect(screen.getByText(/History may take a moment to show the newest accepted reading/)).toBeInTheDocument();
   });
 
   it('uses the server-selected healthy sensor when the first sensor has no meter reading', async () => {
@@ -210,6 +198,8 @@ describe('Home', () => {
       if (path.includes('/home')) return { status: 200, body: home };
       if (path.includes('/devices?')) return { status: 200, body: { devices: [device] } };
       if (path.includes('/history')) return { status: 200, body: { points: [], energy_kwh: 0, cost: '0', completeness: 1, missing_ranges: [], resolution_seconds: 300, timezone: 'UTC', usage_source: 'authenticated PZEM-004T sensor intervals only' } };
+      if (path.includes('/billing')) return { status: 200, body: billing };
+      if (path.includes('/bill-rate-imports')) return { status: 200, body: { extractions: [] } };
       if (path.endsWith('/alerts')) return { status: 200, body: { alerts: [] } };
       if (path.endsWith('/commands') && method === 'POST') {
         if (typeof body !== 'string') throw new Error('Expected a JSON request body.');
@@ -224,11 +214,13 @@ describe('Home', () => {
     expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
     const summary = container.querySelector<HTMLElement>('.dashboard-summary-card');
     expect(summary).not.toBeNull();
-    expect(within(summary!).getByText('Today Energy')).toBeInTheDocument();
-    expect(within(summary!).getByText('Today Estimated Cost')).toBeInTheDocument();
-    expect(within(summary!).getByText('This Week Cost')).toBeInTheDocument();
-    expect(within(summary!).getByText('Current Rate')).toBeInTheDocument();
+    expect(within(summary!).getByRole('heading', { name: 'Billing Cycle' })).toBeInTheDocument();
+    expect(within(summary!).getByText('Current Usage')).toBeInTheDocument();
+    expect(within(summary!).getByText('Cost to Date')).toBeInTheDocument();
+    expect(within(summary!).getByText('Current Tier')).toBeInTheDocument();
+    expect(within(summary!).getByText('Estimated Monthly Bill')).toBeInTheDocument();
     expect(summary!.querySelectorAll('.dashboard-summary-metric')).toHaveLength(4);
+    expect(await within(summary!).findByText('Estimate may be incomplete because some readings were not received.')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Voltage' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Current' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Frequency' })).not.toBeInTheDocument();
@@ -238,42 +230,24 @@ describe('Home', () => {
     expect(screen.getByRole('heading', { name: 'Daily Energy (kWh)' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Recent Activity / Commands' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Alerts & Notifications' })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /Sync Now/ }));
-    await waitFor(() => expect(commands).toEqual(['sync_now']));
+    await userEvent.click(screen.getByRole('button', { name: /^Reboot/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Reboot sensor' }));
+    await waitFor(() => expect(commands).toEqual(['reboot']));
   });
 
-  it('uses prepare and typed commit for formatting sensor storage', async () => {
-    const calls: Array<{ command_type: string; idempotency_key: string; prepare_command_id?: string; confirmation_token?: string; typed_confirmation?: string }> = [];
-    let formatPrepared = false;
-    installFetchMock((path, method, body) => {
+  it('shows stateless delivery details and only the supported sensor commands', async () => {
+    installFetchMock((path) => {
       if (path.includes('/home')) return { status: 200, body: home };
-      if (path.includes('/devices?')) return { status: 200, body: { devices: [{ ...device, ...(formatPrepared ? { last_command: { id: '00000000-0000-0000-0000-000000000001', type: 'format_storage_prepare', state: 'succeeded', progress_percent: 100, result_code: 'ok', result_evidence: { prepare_command_id: '00000000-0000-0000-0000-000000000001', acknowledged_records_lost: 42, unacknowledged_records_lost: 5, ready: true } } } : {}) }] } };
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [{ ...device, server_delivery_status: 'received', last_server_received_at: '2026-08-13T17:32:10Z', cumulative_energy_kwh: 42.25 }] } };
       if (path.includes('/history')) return { status: 200, body: { points: [], energy_kwh: 0, cost: '0', completeness: 1, missing_ranges: [], resolution_seconds: 300, timezone: 'UTC', usage_source: 'authenticated PZEM-004T sensor intervals only' } };
-      if (path.endsWith('/alerts')) return { status: 200, body: { alerts: [] } };
-      if (path.endsWith('/commands') && method === 'POST') {
-        if (typeof body !== 'string') throw new Error('Expected a JSON request body.');
-        const request = JSON.parse(body) as { command_type: string; idempotency_key: string; prepare_command_id?: string; confirmation_token?: string; typed_confirmation?: string };
-        const type = request.command_type;
-        calls.push(request);
-        if (type === 'format_storage_prepare') formatPrepared = true;
-        return type === 'format_storage_prepare'
-          ? { status: 202, body: { command: { id: '00000000-0000-0000-0000-000000000001', type, state: 'queued' }, confirmation_token: 'bound-token' } }
-          : { status: 202, body: { command: { id: '00000000-0000-0000-0000-000000000002', type, state: 'queued' }, confirmation_token: null } };
-      }
-      return { status: 404, body: {} };
+      return { status: 200, body: { alerts: [] } };
     });
     renderWithProviders(<HomePage />);
     await userEvent.click(await screen.findByRole('button', { name: 'Open Main Panel Sensor sensor details' }));
-    expect(screen.getByText(/GiB total · .* GiB free/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /Format microSD history/ }));
-    await userEvent.click(screen.getByRole('button', { name: 'Queue command' }));
-    expect(await screen.findByRole('heading', { name: 'Commit microSD history format?' })).toBeInTheDocument();
-    await userEvent.type(screen.getByLabelText(/Type FORMAT STORAGE/), 'FORMAT STORAGE');
-    await userEvent.click(screen.getByRole('button', { name: 'Queue command' }));
-    await waitFor(() => expect(calls.map((request) => request.command_type)).toEqual(['format_storage_prepare', 'format_storage_commit']));
-    expect(calls[0]?.idempotency_key).toMatch(/^[0-9a-f-]{36}$/i);
-    expect(calls[1]).toMatchObject({ prepare_command_id: '00000000-0000-0000-0000-000000000001', confirmation_token: 'bound-token', typed_confirmation: 'FORMAT STORAGE' });
-    expect(calls[1]?.idempotency_key).not.toBe(calls[0]?.idempotency_key);
+    expect(screen.getByRole('heading', { name: 'Server delivery' })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: /^Reboot/ })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByRole('link', { name: /Install OTA/ })).toBeInTheDocument();
+    expect(screen.queryByText(/microSD|backlog|sync now|format/i)).not.toBeInTheDocument();
   });
 
   it('applies persisted dashboard range and card visibility preferences', async () => {
@@ -289,7 +263,7 @@ describe('Home', () => {
     expect(await screen.findByRole('heading', { name: 'Daily Energy (kWh)' })).toBeInTheDocument();
     expect(screen.getByText('30 Days')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Live Power Usage' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Current Rate' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Estimated Monthly Bill')).not.toBeInTheDocument();
     await waitFor(() => expect(historyRequests.some((path) => path.includes('metric=energy'))).toBe(true));
   });
 });

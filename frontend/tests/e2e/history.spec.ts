@@ -3,11 +3,13 @@ import { mockApi } from './mocks';
 
 test.beforeEach(async ({ page }) => { await mockApi(page); });
 
-test('History renders committed gaps, cost tooltips and non-overlapping time ticks', async ({ page }) => {
+test('History renders saved gaps, recovered energy, cost tooltips and non-overlapping time ticks', async ({ page }) => {
   await page.goto('/history');
   await expect(page.getByTestId('history-chart')).toBeVisible();
-  await expect(page.getByText(/Showing saved readings for Main service/)).toBeVisible();
+  await expect(page.getByText(/Showing readings for Main service/)).toBeVisible();
   await expect(page.getByText(/measured zero renders at zero/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Connection gap details' })).toBeVisible();
+  await expect(page.getByText(/0.42 kWh recovered/)).toBeVisible();
   const ticks = page.locator('[data-testid="history-chart"] .recharts-xAxis-tick-labels text');
   await expect(ticks).not.toHaveCount(0);
   expect(await ticks.count()).toBeGreaterThanOrEqual(2);

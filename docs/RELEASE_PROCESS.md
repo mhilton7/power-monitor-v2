@@ -8,20 +8,22 @@ Repository visibility is **public**, matching the verified public reference repo
 
 Server tags use semantic `vMAJOR.MINOR.PATCH` (prerelease suffix allowed). Breaking device changes require a coordinated protocol bump in both repositories; otherwise the manifest remains `pm-protocol/1.0.0` and names compatible firmware.
 
-`v0.1.0-rc.13` remains an immutable public server installation authority. The
+`v0.1.0-rc.16` remains an immutable public server installation authority. The
 valid signed server `v0.1.0-rc.4` tag
 is historical failed prepublication evidence, not a Release. Hardware execution
 confirmed that firmware rc.1 through rc.5 crash in the main stack before
-provisioning. Public `v0.1.0-rc.13` delivered protected disposal of working
-artifacts and ordered staged OTA advancement through `20260817_0014`.
-Candidate `v0.1.0-rc.16` retains `pm-protocol/1.0.0` and extends the Alembic
-head to `20260817_0016`. It adds named service branches with one explicitly
-designated Main service/home total, coverage-aware History and billing,
-server-observable synchronization diagnostics, and coordinated build identity.
-Firmware rc.15 remains immutable historical evidence and must not be relabeled.
-The exact firmware rc.16 metadata binding and artifacts must be created,
-published, and independently verified before the server rc.16 tag is created;
-server publication still requires every automated gate to pass.
+provisioning. Public `v0.1.0-rc.16` is installation evidence for the prior
+durable sensor-backlog architecture. Candidate `v0.1.0-rc.18` retains
+`pm-protocol/1.0.0`, adds `pm-telemetry/2.0.0`, and extends the Alembic head to
+`20260818_0017`. It moves current telemetry durability and History ownership to
+PostgreSQL, removes active microSD/backlog behavior from new firmware, preserves
+NVS identity/configuration, and adds Main-service History and exact tiered
+Billing. Firmware and server rc.16 remain immutable and must not be relabeled.
+Firmware rc.17 is immutable failed-candidate evidence because its public
+compatibility record omitted the telemetry protocol binding. The exact
+firmware rc.18 metadata and artifacts must be published and independently
+verified before the server rc.18 tag is created; server
+publication still requires every automated gate to pass.
 Stable publication remains blocked until physical hardware, TLS,
 OTA-install/rollback, and soak certification from the actual marked unit
 passes.
@@ -80,23 +82,24 @@ Compose dependency traversal and recording a fixed allowlisted failure
 assertion. Its generated OpenAPI SHA-256 is
 `66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591`.
 
-Public rc.13 defaults Home live power and History to the unique verified
-aggregate, rejects partial live sums, and explains unacknowledged durable
-interval backlogs. Candidate rc.16 generalizes that aggregate into named
-service branches, migrates the existing verified aggregate to Main service,
-and requires an explicitly confirmed, non-overlapping multi-sensor home total.
-It renders valid partial per-sensor History while keeping an incomplete branch
-total unavailable when any required member is absent. Billing preserves exact
-tier and fixed-charge semantics as late authenticated intervals arrive.
-The generated rc.16 OpenAPI SHA-256 is
-`8c6d3d73f7bfaa4bd34b4451c860b4199426e556cba1f6f9a48374ea22049c24`;
-the shared protocol remains `pm-protocol/1.0.0` and Alembic head is
-`20260817_0016`.
+Public rc.16 carries named service branches and the explicitly designated Main
+service. Candidate rc.18 makes the server the durable owner of independently
+accepted telemetry and active History. Firmware keeps one in-flight and one
+newest pending sample in RAM, and a missing sample never blocks a later sample.
+The UI removes normal storage/backlog controls; History preserves connection
+gaps and cumulative-energy recovery without inventing a power curve. Billing
+uses Main service with exact Decimal tier and fixed-charge semantics.
+The generated rc.18 OpenAPI SHA-256 is
+`c0711c053343a5a95120a6f793cd7cb9f6f3c6e59adc403553fe53767eeb7a61`;
+control remains `pm-protocol/1.0.0`, telemetry is `pm-telemetry/2.0.0`, and the
+Alembic head is `20260818_0017`.
 The checked-in YAML retains `UNPUBLISHED_*` sentinels until its tagged workflow
-supplies exact registry digests. Rc.16 must pass clean
+supplies exact registry digests. Rc.18 must pass clean
 dependency/backend/PostgreSQL gates, security scans, public package
 verification, first-run plus idempotent initializer smoke, checksums, and
-attestations. Its explicit migration chain extends to `20260817_0016`; the
+attestations. Its explicit migration chain extends to `20260818_0017`;
+revision 0017 is additive and its downgrade refuses to delete accepted
+stateless telemetry or cutover evidence. The
 0008 preflight refuses conflicting immutable ingestion evidence without
 deleting or rewriting it. Revision 0011 uses PostgreSQL write locks across its
 preflight and guard installation. It enforces database-backed exact-home manual
@@ -109,7 +112,7 @@ published non-draft same-major public Release other than the current tag, then
 requires that selected tag to be semantically older and to have verified
 signed-tag ancestry. It fails closed if publication-date ordering selects a
 same-major tag that is not older; it does not search past it for a
-`latest lower same-major non-draft public release`. For rc.16, public metadata
+`latest lower same-major non-draft public release`. For rc.18, public metadata
 must select the most recent qualifying immutable public predecessor; failed
 rc.2 and non-released rc.4 are never predecessors. For the historical rc.14
 candidate, the same selector therefore selects public rc.13; that historical
@@ -135,7 +138,12 @@ The tagged workflow uses `GITHUB_TOKEN` with job-minimal permissions to build AP
 
 `scripts/render_truenas_release.py` accepts only semantic version, full revision, and four syntactically valid nonzero digests. It replaces every fail-closed sentinel, verifies exactly eight services, exact initializer host mounts/capabilities/no-network gating, runtime secret-directory isolation, digest pinning, network/port/hardening constraints, and emits `power-monitor-v2-<version>.yaml` plus `release-manifest.json`. `scripts/verify_release_artifacts.py` verifies checksum and invariants.
 
-Release assets include manifest, digest-pinned YAML, SBOMs/attestations, test/security/migration reports, checksums, installation/upgrade/rollback guides, the tracked Windows SMB staging helper, the auditable initializer source embedded in the API image, and release notes. The GitHub Release cross-links the compatible firmware release. The eight-service/no-shell model is already public in rc.6; coordinated rc.8 must publish under a new immutable tag without rewriting rc.6 or any earlier release.
+Release assets include manifest, digest-pinned YAML, SBOMs/attestations,
+test/security/migration reports, checksums, installation/upgrade/rollback
+guides, the tracked Windows SMB staging helper, the auditable initializer
+source embedded in the API image, and release notes. The GitHub Release
+cross-links the compatible firmware release. Coordinated rc.18 publishes under
+a new immutable tag without rewriting rc.16 or any earlier release.
 
 ## Stable prohibition and promotion
 

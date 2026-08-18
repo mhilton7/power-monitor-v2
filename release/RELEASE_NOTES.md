@@ -1,175 +1,115 @@
-# PowerMeter V2 v0.1.0-rc.16
+# PowerMeter V2 v0.1.0-rc.18
 
-PowerMeter V2 is a central, authenticated PZEM-004T monitoring system paired
-with the independent
-[`power-monitor-sensor-headless`](https://github.com/mhilton7/power-monitor-sensor-headless)
-firmware. The shared device contract remains `pm-protocol/1.0.0`.
-Authenticated PZEM evidence remains the only source for live measurements,
-History, energy, reading coverage, forecasts, and usage-based cost. Utility-bill
-PDFs remain rate-source documents only.
+RC18 replaces the sensor microSD backlog architecture with independently
+accepted, stateless current telemetry. It is a release candidate: automated
+software evidence is required, while marked-unit hardware certification and
+physical migration of Indoor-AC and Outdoor-AC remain pending.
 
-This source file is the release-body input for candidate `v0.1.0-rc.16`. This
-source copy alone is not publication evidence. Installation is authorized only
-after the signed tagged workflow publishes the complete checksummed and
-attested asset set, digest-pinned YAML, public multi-architecture images,
-deployment evidence, and its exact coordinated firmware release.
+Firmware RC17 was published as an immutable prerelease, but its generated
+`compatibility.json` omitted the required `pm-telemetry/2.0.0` contract field.
+The server release gate correctly rejected that metadata before server RC17
+could be tagged or published. RC18 adds the missing compatibility binding
+without changing the validated stateless runtime; RC17 is never moved,
+rewritten, or used as the coordinated installation authority.
 
-## Coordinated firmware boundary
+## Stateless sensor telemetry
 
-Firmware `v0.1.0-rc.15` remains immutable historical evidence. It must not be
-overwritten, retagged, or relabeled as RC16. Before a server RC16 tag is
-created, the independent firmware repository must create and publish distinct
-RC16 metadata and artifacts that name server `v0.1.0-rc.16` and bind the exact
-generated server OpenAPI SHA-256:
+- Firmware no longer links, mounts, reads, writes, repairs, verifies, or
+  formats microSD storage. The inserted cards are left untouched.
+- Firmware keeps at most one in-flight reading and one newest pending reading
+  in RAM. A newer unsent reading replaces the older pending reading.
+- Each current reading is posted independently to
+  `POST /api/v1/device/telemetry/v2` using `pm-telemetry/2.0.0`.
+- Authentication, commands, enrollment, recovery, and OTA retain
+  `pm-protocol/1.0.0`, strict TLS hostname/chain verification, directional
+  HMAC, nonce replay protection, signed responses, and immutable OTA digests.
+- A missing sample never blocks a later sample. Wi-Fi and server failures use
+  separate bounded retry paths with jitter and create honest server History
+  gaps rather than a persistent device backlog.
+- Sensor identity, Wi-Fi settings, CA trust, credentials, provisioning, and
+  OTA metadata remain in the existing NVS schema. NVS is never erased and is
+  not written once per telemetry sample.
 
-`8c6d3d73f7bfaa4bd34b4451c860b4199426e556cba1f6f9a48374ea22049c24`
+## Server History and data integrity
 
-The server release workflow requires `COMPATIBLE_FIRMWARE_TAG` to equal the
-server tag, verifies the public firmware tag and release, checks every asset,
-and validates the cross-repository compatibility record. This root/server
-identity pass does not modify the nested firmware repository or claim a
-physical OTA was performed.
+- Additive Alembic revision `20260818_0017` stores immutable telemetry samples
+  under `(sensor_id, boot_id, sample_sequence)`, durable active History
+  buckets, live state, telemetry settings, cutover records, cumulative-energy
+  events, and explicit billing-cycle adjustment evidence.
+- Sensor time is used only when trusted and within the existing skew bound;
+  otherwise server receive time places the sample without rejecting it.
+- History interval and retention are server settings. Shorter retention needs
+  an exact administrator confirmation and deletes only expired derived History
+  in the selected home; immutable samples and cost-linked evidence remain.
+- PZEM cumulative energy can recover total energy across a connection gap
+  without inventing a missing power curve. Counter decreases produce reset
+  evidence and never negative energy. A gap crossing a billing-cycle boundary
+  remains unresolved until reviewed.
+- The migration preserves all existing accepted readings, History, rate plans,
+  users, homes, devices, firmware evidence, and audit records. Its downgrade
+  refuses to remove accepted stateless telemetry or cutover evidence.
 
-## Reliability and synchronization
+## Main service and Billing
 
-- Ingestion remains transactional, per immutable sensor ID, idempotent by
-  `(device_id, sequence)`, and acknowledgement advances only over durable
-  readings or accepted authenticated permanent-loss ranges.
-- Late backlog readings invalidate only mutable selected-cost pointers at and
-  after the late timestamp. The worker rebuilds chronological tier progression
-  while immutable readings, rate versions, cost runs, and cost rows remain
-  unchanged.
-- Settings diagnostics expose the server acknowledgement, SD sequence range,
-  queued count, missing-prefix state, latest accepted reading, permanent-loss
-  evidence, and a clearly labeled heartbeat-derived queue drain rate.
-- Device-only request attempt details that are not present in
-  `pm-protocol/1.0.0` remain explicitly unavailable; the server does not invent
-  batch bytes, HTTP results, or failed attempts.
-- Live browser counters and timelines advance from browser time without adding
-  one API request per second.
+- The explicitly confirmed `Main service` branch contains the two existing
+  non-overlapping sensors, is the whole-home total, and is the billing source.
+  New sensors are never added automatically.
+- Whole-home power and interval energy are additive. Voltage, current,
+  frequency, and power factor remain per-sensor values and are not summed.
+- Dashboard and History default to Main service, show partial live totals
+  explicitly, preserve measured zero, and leave outages as chart gaps.
+- Billing uses exact Decimal arithmetic: Tier 1 `$0.30863/kWh`, Tier 2
+  `$0.40962/kWh`, daily service charge `$0.769/day`, and a summer allowance of
+  `19.3 kWh` per billing day. A 30-day cycle therefore has a `579.0 kWh`
+  Tier 1 threshold; exactly 579.0 remains Tier 1 and Tier 2 starts above it.
+- The canonical 951 kWh fixture splits into 579 kWh Tier 1 and 372 kWh Tier 2:
+  `$178.69677 + $152.37864 + $23.07000 = $354.14541`, displayed as `$354.15`.
+- Full-cycle projection requires at least 24 reliable hours, applies the fixed
+  service charge once, and discloses confidence, missing readings, unresolved
+  counter resets, and unresolved cross-cycle gap energy.
 
-## Service branches and Main service
+## Interface
 
-- The existing verified circuit model is generalized into named service
-  branches with description, purpose, home-total designation,
-  non-overlap confirmation, timestamps, membership management, and audit
-  records.
-- Additive Alembic revision `20260817_0016` designates only an unambiguous
-  existing verified aggregate with at least two active members as
-  `Main service`. It reads existing membership and never hard-codes sensor
-  display names.
-- One home may have only one designated home-total branch. A home total requires
-  at least two active, explicitly confirmed non-overlapping sensors. Cross-home,
-  revoked, duplicate, and protected-member moves fail closed.
-- Moving membership is explicit and audited. The current home-total branch
-  cannot be deleted or silently lose a required member; an unused branch must
-  have no members before deletion.
-- Existing sensor IDs, home relationships, raw readings, normalized intervals,
-  and historical rate evidence are preserved. Revoked branch members remain in
-  historical topology so their absence becomes a visible gap instead of an
-  undercount.
+- Normal sensor UI removes microSD status, capacity, backlog progress,
+  acknowledgement cursors, missing-prefix state, Format SD, and Sync Backlog.
+- Sensor health shows the latest accepted reading, PZEM health, server delivery,
+  and firmware identity. Reboot and signed OTA remain.
+- Settings supports service-branch management plus telemetry cadence, History
+  interval, and retention. History shows connection-gap ranges and recovered
+  energy separately from the power curve.
+- Billing presents Current Rate Plan, Current Billing Cycle, Tier Breakdown,
+  and Cost Summary in plain language on desktop and mobile.
+- Utility-bill PDFs remain rate-source documents only. Their usage, readings,
+  totals, identity, addresses, accounts, meter identifiers, balances, and
+  payments are discarded; original bytes/full OCR text are never persisted.
 
-## History and live totals
+## Release binding
 
-- Dashboard and History default to the designated `Main service` branch while
-  preserving explicit individual-sensor selection.
-- Whole-home power and interval energy sum only explicitly confirmed members.
-  Voltage, current, frequency, and power factor are never summed or averaged
-  into a misleading branch value.
-- A whole-home bucket is complete only when every required member is present.
-  Missing members produce a gap; measured zero remains zero.
-- Valid individual sensor points render even when the surrounding range has low
-  coverage. Durable History continues to use accepted intervals only; live
-  heartbeats are never copied into History.
+- Server and frontend version: `0.1.0-rc.18`.
+- Compatible firmware tag: `v0.1.0-rc.18`, build number `21`.
+- Control protocol: `pm-protocol/1.0.0`.
+- Stateless telemetry protocol: `pm-telemetry/2.0.0`.
+- Alembic head: `20260818_0017`.
+- Generated contract-document SHA-256:
+  `c0711c053343a5a95120a6f793cd7cb9f6f3c6e59adc403553fe53767eeb7a61`.
 
-## Billing and SCE tier behavior
+The tagged server workflow must publish four multi-architecture GHCR indexes,
+their registry digests/SBOMs/attestations/scans, the digest-pinned
+`power-monitor-v2-v0.1.0-rc.18.yaml`, release manifest, migration/security/test
+evidence, and checksums. The firmware prerelease must be published and
+independently verified first, then the server compatibility variable must be
+set to the exact RC18 firmware tag.
 
-- Billing identifies the exact designated service branch used for whole-home
-  usage and returns a plain current-rate-plan and current-billing-cycle summary.
-- SCE DOMESTIC regression values remain exact Decimal evidence: Tier 1
-  `$0.30863/kWh`, Tier 2 `$0.40962/kWh`, daily service charge `$0.769/day`, and
-  summer allowance `19.3 kWh` per billing day.
-- The dynamic Tier 1 thresholds are exactly 540.4 kWh for 28 days, 579.0 kWh
-  for 30 days, and 598.3 kWh for 31 days. Exactly 579.0 kWh remains Tier 1;
-  579.1 kWh assigns only 0.1 kWh to Tier 2.
-- The 951 kWh source-bill regression remains 579 kWh in Tier 1 plus 372 kWh in
-  Tier 2. Energy charges plus 30 daily charges equal `$354.145410`, rounded to
-  `$354.15`.
-- Current tier and tier remaining are not confirmed until the designated
-  branch has 100 percent billing-cycle reading coverage. Saved partial usage is
-  labeled as partial while readings are syncing.
-- Whole-home estimates include the account-level fixed charge once. Individual
-  sensor and non-home service-branch estimates remain energy-charge-only.
-- Published rate versions and their provenance remain immutable. Original PDF
-  bytes are never persisted; disposable extraction working records remain
-  separately deletable under their existing protections.
+## Deployment boundary
 
-## Interface and build identity
+Deploy the server RC18 YAML first while both RC16 sensors continue using the
+legacy authenticated endpoints. Migrate one sensor only during an explicit
+operator maintenance window, preserving NVS and identity, verify v2 acceptance,
+History, reconnect behavior, and OTA, then migrate the second sensor and verify
+the Main service total and Billing. Automated tests do not install firmware on
+physical sensors. No card was formatted and no NVS namespace was erased while
+preparing this release.
 
-- Dashboard, History, Billing, Settings, rate-update, and diagnostics surfaces
-  use plain-language labels such as `Saved sensor readings`, `Reading coverage`,
-  `Current rate plan`, and `Service branch`; internal identifiers remain under
-  administrator technical details.
-- Frontend and backend expose semantic version, revision, build time, image
-  digest, static asset identifier, protocol compatibility, database migration
-  state, and per-sensor firmware identity without exposing secrets.
-- Browser assets remain content-hashed and the deployment manifest binds the
-  frontend, backend, database migration, images, and coordinated firmware
-  release.
-- The additive API remains backward compatible. Existing endpoint and response
-  fields are preserved while service-branch, billing-summary, and diagnostics
-  fields are added.
-
-## Database and data-integrity boundary
-
-Alembic head is `20260817_0016`. Revision 0016 is non-destructive and safe for
-populated installations: it adds service-branch metadata and constraints,
-preserves every existing row, and migrates only one unambiguous safe aggregate
-per home. Ambiguous homes remain undesignated for administrator review.
-
-Earlier frozen migrations and direct-database guards continue to protect raw
-reading immutability, permanent-loss evidence, rate provenance, candidate
-lifecycle, assignment ranges, original-bill non-retention, microSD capacity
-coherence, and OTA deployment history. Do not bypass a guard or delete evidence
-to force an upgrade.
-
-Keep all existing application secrets, database credentials, backup encryption
-key, TLS material, datasets, sensor identities, and accepted readings. Complete
-a verified encrypted backup, isolated restore test, and recursive ZFS snapshot
-before applying RC16.
-
-## Release contents and install authority
-
-A successfully published RC16 candidate includes:
-
-- four immutable multi-architecture GHCR images referenced by registry digest;
-- `power-monitor-v2-v0.1.0-rc.16.yaml` and `release-manifest.json`;
-- checksums, attestations, SBOMs, vulnerability results, dependency and test
-  reports, migration evidence, and deployment-smoke evidence;
-- installation, secrets/TLS, dataset/ACL, backup/restore, upgrade, and rollback
-  instructions; and
-- the exact coordinated public firmware `v0.1.0-rc.16` release whose
-  compatibility record declares OpenAPI SHA-256
-  `8c6d3d73f7bfaa4bd34b4451c860b4199426e556cba1f6f9a48374ea22049c24`.
-
-The checked-in TrueNAS template intentionally contains `UNPUBLISHED_*`
-sentinels and is not installable. Use only the generated YAML attached to the
-signed release and verify `SHA256SUMS` plus attestations before installation.
-Do not use a floating image tag, local Docker image ID, or files from another
-release.
-
-## Upgrade, rollback, and certification
-
-The release migration report proves only a forward upgrade. It does not prove
-older binaries can use a database touched by RC16. Application-only rollback
-is not authorized. Rollback requires a separately validated restore or clone
-of the matching pre-upgrade snapshot or verified backup paired with the exact
-older release assets. GitHub-hosted smoke records rollback as
-`not_exercised_github_hosted_smoke`.
-
-This remains a prerelease candidate. Hardware status is honestly `pending`.
-Marked-unit electrical identity, physical TLS/HMAC behavior, OTA installation
-and rollback, outage/recovery cycling, and a continuous measured soak of at
-least 72 hours must produce schema-valid machine evidence before stable
-promotion can open. Simulation, host tests, CI, or candidate publication cannot
-substitute for those physical results.
+Stable promotion remains blocked on actual marked-unit electrical identity,
+TLS/HMAC, OTA install/rollback, outage/power-cycle/USB recovery, runtime
+stack/heap evidence, and a continuous 72-hour hardware soak.

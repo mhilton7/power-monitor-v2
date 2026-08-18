@@ -34,7 +34,7 @@ describe('Live query refresh', () => {
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     render(<QueryClientProvider client={queryClient}><Harness /></QueryClientProvider>);
 
-    CapturedEventSource.latest?.dispatchEvent(new Event('measurement'));
+    CapturedEventSource.latest?.dispatchEvent(new Event('accepted_reading'));
 
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['history'] }));
   });

@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     frontend_build_time: str = "unknown"
     frontend_image_digest: str = "unknown"
     frontend_static_asset_id: str = "unknown"
-    expected_database_revision: str = "20260817_0016"
+    expected_database_revision: str = "20260818_0017"
     bill_import_timeout_seconds: int = Field(default=30, ge=5, le=60)
     rate_artifact_dir: Path = Path("/data/rate-source-artifacts")
     firmware_dir: Path = Path("/data/firmware")

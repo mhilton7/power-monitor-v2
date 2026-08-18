@@ -9,7 +9,7 @@ one-shot initializer source beside its generated YAML. The no-shell initializer
 model began with the complete signed v0.1.0-rc.5 release asset set; that public
 server release remains installable with its own attached files. Public rc.6 is
 also immutable and installable with its own attached files. The current source
-guide is prepared for coordinated rc.16 and must not be combined with rc.15, rc.6,
+guide is prepared for coordinated rc.18 and must not be combined with rc.17, rc.16, rc.15, rc.6,
 rc.5, rc.3, or any other release. The signed server rc.4 tag has no GitHub
 Release or YAML and is not an installation source.
 
@@ -42,7 +42,9 @@ Required production facts:
 - The certificate SAN contains the exact hostname and every browser/sensor trusts its CA.
 - The only published container port is gateway TCP 8443.
 - Application timezone defaults to `America/Los_Angeles`; storage and logs use UTC.
-- Sensor readings accepted through `pm-protocol/1.0.0` are the sole usage authority.
+- Sensor authentication/control uses `pm-protocol/1.0.0`; independently
+  accepted PZEM readings use `pm-telemetry/2.0.0` and are the sole usage
+  authority.
 - A bill PDF contributes rate facts only; it can create no History or usage
   record, and its original bytes/full OCR text are never persisted, even
   encrypted.
