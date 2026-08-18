@@ -23,6 +23,7 @@ async def _aggregate(
             name="Main service",
             purpose="whole_home_total",
             is_home_total=True,
+            is_billing_source=True,
             aggregate_mode="verified_sum",
             non_overlapping_confirmed=True,
         )

@@ -54,7 +54,7 @@ EXPECTED_INITIALIZER_MOUNTS = {
     )
 }
 EXPECTED_HOST_SOURCES = set(EXPECTED_INITIALIZER_MOUNTS)
-DEFAULT_DATABASE_REVISION = "20260817_0016"
+DEFAULT_DATABASE_REVISION = "20260818_0017"
 DEFAULT_BUILD_TIME = "1970-01-01T00:00:00Z"
 
 
@@ -294,7 +294,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--compatible-firmware",
-        default="PowerMeter V2 firmware using pm-protocol/1.0.0; see linked firmware release",
+        default=(
+            "PowerMeter V2 firmware using pm-protocol/1.0.0 and "
+            "pm-telemetry/2.0.0; see linked firmware release"
+        ),
     )
     parser.add_argument("--firmware-release-url", required=True)
     parser.add_argument("--firmware-tag", required=True)
@@ -376,6 +379,7 @@ def main() -> int:
         "schema": "pm-server-release/1.0.0",
         "product": "PowerMeter V2",
         "protocol": "pm-protocol/1.0.0",
+        "telemetry_protocol": "pm-telemetry/2.0.0",
         "version": version,
         "revision": args.revision.lower(),
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -409,6 +413,7 @@ def main() -> int:
             "build_id": int(args.firmware_build_id),
             "image_sha256": args.firmware_image_sha256,
             "protocol": "pm-protocol/1.0.0",
+            "telemetry_protocol": "pm-telemetry/2.0.0",
             "board_profile": "esp32-s3-devkitc-n16r8-reference/1",
         },
         "hardware_certification": {

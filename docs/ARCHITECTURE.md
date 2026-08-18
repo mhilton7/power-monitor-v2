@@ -1,55 +1,80 @@
 # Architecture
 
-PowerMeter V2 separates measurement authority, transport, presentation, rate sources, and cost calculation so no utility document can become electrical evidence.
+PowerMeter V2 separates measurement authority, transport, presentation, rate
+sources, and cost calculation so no utility document can become electrical
+evidence.
 
 ```text
-PZEM-004T → headless ESP32-S3 → microSD immutable journal
-                       │ outbound authenticated HTTPS
-                       ▼
-                  Caddy → FastAPI → PostgreSQL
-                              └──→ worker
-                       ▼ same-origin HTTPS/SSE
-                    React browser
+PZEM-004T -> headless ESP32-S3 -- authenticated outbound HTTPS --> Caddy
+                                                                   |
+                                                                   v
+                                                    FastAPI -> PostgreSQL
+                                                        |          ^
+                                                        v          |
+                                                      worker ------+
+                                                        |
+                                                        v
+                                              same-origin React browser
 
 Official SCE source or uploaded SCE bill PDF
-                       │ allowlisted reusable prices/rules only
-                       ▼
-              reviewed immutable rate version
-                       │
-Authenticated sensor intervals + rate version → estimated cost
+                 | reusable prices/rules only
+                 v
+       reviewed immutable rate version
+                 |
+Authenticated server-owned telemetry + rate version -> estimated cost
 ```
 
 ## Trust boundaries
 
-- The PZEM sensor, device identity, HMAC request, monotonic sequence, and server commit establish measurement evidence. Raw readings are immutable and unique by `(device_id, sequence)`.
-- The sensor makes normal outbound HTTPS requests only. It has no normal runtime web server. Browser code never sees device credentials and never connects to a sensor.
-- Caddy is the only LAN listener. It terminates verified HTTPS, sets browser security headers, routes API/SSE/device traffic, and serves the frontend through an internal network.
-- API routes authenticate browser sessions or device HMAC independently. Server permissions and home/device scope apply even when a UI control is hidden.
-- PostgreSQL is the only database and is not exposed to the LAN. Database transactions define acknowledgment and idempotency boundaries. The empty-cluster bootstrap role becomes `NOLOGIN`; schema migration, API, worker, read-only backup, and isolated restore tests each use a distinct role and file secret. Runtime roles have DML but no schema-creation privilege, and the restore role cannot connect to production.
-- The worker owns scheduled rollups, cost runs, official-source checks, alert evaluation, and other leased jobs through PostgreSQL advisory locks.
-- Bill-rate extraction is a closed module within the existing API service, not an additional service. Untrusted PDF bytes are read only after a bundled launcher applies Landlock filesystem confinement, seccomp network/system-call denial, rlimits, a cleared environment, closed descriptors, and a private tmpfs work directory. Its frozen parser-only runtime cannot read `/app`, `/data`, `/run/secrets`, or DB sockets. Its capped stdout can contain only a versioned closed rate-draft schema and cannot import ingestion, History, gap repair, calibration, rollup, or forecasting code. The API releases the original bytes and full OCR text after the bounded parse; neither can enter persistent storage, even encrypted. Publication is a separate permissioned action.
+- PZEM evidence, device identity, TLS, directional HMAC, a boot UUID, a
+  boot-local sample number, and the server commit establish measurement
+  evidence. New telemetry is immutable and unique by
+  `(sensor_id, boot_id, sample_sequence)`.
+- The sensor makes outbound HTTPS requests only. It has no runtime web server.
+  Browser code never receives device credentials or connects to a sensor.
+- `pm-protocol/1.0.0` remains the authentication, command, enrollment,
+  recovery, and OTA protocol. Stateless readings use the additive
+  `pm-telemetry/2.0.0` body contract.
+- Caddy is the only LAN listener. PostgreSQL is the durable owner of telemetry,
+  History, energy events, billing evidence, rates, commands, and audit data.
+- PDF extraction is a confined rate-only workflow. Original PDF bytes and full
+  OCR text are released after parsing and never enter persistent storage.
 
-## Time, missing data, and money
+## Stateless sensor behavior
 
-UTC is authoritative for storage and device timestamps. `America/Los_Angeles` is the default IANA timezone for SCE schedule evaluation. Local TOU, season, rate-version, midnight, billing-cycle, and DST boundaries split intervals; the fall-back hour remains two distinct UTC intervals and spring-forward energy is never fabricated.
+Firmware measures at the configured cadence and keeps only one request in
+flight plus the newest pending sample in RAM. A newer unsent sample replaces
+the older pending sample. Missing delivery therefore creates an explicit
+server History gap but never blocks a later reading.
 
-Missing measurement values remain null; a measured zero remains zero. Live cards use fresh authenticated heartbeat evidence. History and cost use only committed durable intervals. One-CT devices default to `energy_only`; no implicit whole-home aggregate or solar export is produced.
+Firmware neither mounts nor accesses microSD. Existing cards are left
+untouched. Enrollment identity, Wi-Fi, CA trust, directional credentials, and
+OTA state remain in the existing NVS schema; NVS is not erased and is not
+written once per telemetry sample.
 
-Money is `Decimal`/PostgreSQL `NUMERIC` and rounds only at defined presentation boundaries. Every cost run records the sensor interval evidence, immutable rate-plan version, algorithm version, completeness, and scope.
+## Time, missing data, aggregation, and money
 
-## Reliability
+UTC is authoritative for storage. The configured IANA timezone controls SCE
+schedule and billing boundaries. Trusted sensor time is used only within the
+accepted skew; otherwise server receipt time places the sample.
 
-The firmware measurement and storage loops are independent of network availability. The server accepts idempotent retries and advances a cursor only after commit. Commands are durable, expiring, idempotent, and delivered through authenticated outbound heartbeats/polls. Destructive commands use prepare/commit.
+Missing values remain null and measured zero remains zero. Main service can
+sum only explicitly verified, non-overlapping branch members. Power and energy
+are additive; voltage, current, frequency, and power factor are per-sensor and
+are never summed. One-CT devices default to `energy_only`.
 
-The server is horizontally conservative: a single PostgreSQL database coordinates scheduled job ownership; no Redis or second database is required. Containers are bounded by health checks, memory/CPU/PID limits, read-only roots, dropped capabilities, and graceful stops. See `docs/TRUE_NAS_DEPLOYMENT.md`.
+Money uses `Decimal`/PostgreSQL `NUMERIC` and rounds only at presentation
+boundaries. Every estimate retains its immutable rate version and measurement
+evidence.
 
-## Data stores
+## Reliability and release boundary
 
-- PostgreSQL: accounts, permissions, devices, immutable readings, derived intervals/rollups/costs, rates, commands, alerts, audit metadata, and backup/restore evidence references.
-- Firmware dataset: administrator-approved OTA artifacts and compatibility metadata.
-- Rate-source dataset: immutable official-source artifacts and hashes.
-- Backup dataset: encrypted logical dumps, hashes, manifests, and machine-readable restore-test evidence.
-- Logs dataset: structured JSON with typed event codes and redaction.
+The server accepts each current sample independently and idempotently. Wi-Fi
+and server failures use separate bounded backoff with jitter. Commands remain
+durable and signed; OTA still verifies exact compatibility, image size, and
+SHA-256 before boot selection.
 
-There is no bill-original dataset or original-document retention mode. Secrets
-are mounted as files and excluded from ordinary backups, diagnostics, and logs.
+Release candidates may be automated and published while physical evidence is
+pending, but stable promotion requires marked-unit electrical, TLS/HMAC, OTA,
+recovery, resource, and 72-hour soak evidence. Automated tests never install
+firmware on physical sensors.

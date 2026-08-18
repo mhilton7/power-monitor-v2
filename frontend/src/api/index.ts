@@ -26,6 +26,7 @@ import {
   roleSchema,
   sessionSchema,
   systemHealthSchema,
+  telemetrySettingsSchema,
   userSchema,
 } from './schemas';
 
@@ -129,6 +130,8 @@ export const api = {
   backups: () => apiRequest('/backups/status', backupStatusSchema),
   homeUtility: (homeId: string) => apiRequest(homePath('/settings/home-utility', homeId), homeUtilitySchema),
   updateHomeUtility: (homeId: string, payload: Record<string, unknown>) => apiRequest(homePath('/settings/home-utility', homeId), homeUtilitySchema, { method: 'PATCH', body: jsonBody(payload) }),
+  telemetrySettings: (homeId: string) => apiRequest(homePath('/settings/telemetry', homeId), telemetrySettingsSchema),
+  updateTelemetrySettings: (homeId: string, payload: { telemetry_interval_seconds: 2 | 5 | 10 | 15 | 30 | 60; history_interval_seconds: 15 | 30 | 60 | 300 | 900; retention_days: 30 | 90 | 180 | 365 | null; retention_confirmation?: 'DELETE EXPIRED SAVED HISTORY' }) => apiRequest(homePath('/settings/telemetry', homeId), telemetrySettingsSchema, { method: 'PATCH', body: jsonBody(payload) }),
   updateDevice: (id: string, payload: { friendly_name?: string; location?: string | null; notes?: string | null; display_order?: number; include_in_aggregate?: boolean; show_on_dashboard?: boolean; monitoring_enabled?: boolean; measurement_scope?: string; measurement_scope_confirmation?: string }) => apiRequest(`/devices/${encodeURIComponent(id)}`, z.object({ id: z.string(), friendly_name: z.string(), measurement_scope: z.string() }).passthrough(), { method: 'PATCH', body: jsonBody(payload) }),
   revokeDevice: (id: string) => apiRequest(`/devices/${encodeURIComponent(id)}/revoke`, z.undefined(), { method: 'POST', body: jsonBody({ confirmation: 'REVOKE SENSOR' }) }),
   rotateDeviceCredential: (id: string) => apiRequest(`/devices/${encodeURIComponent(id)}/credentials/rotate`, z.object({ rotation: deviceRotationSchema }), { method: 'POST', body: jsonBody({ idempotency_key: idempotencyKey(), typed_confirmation: 'ROTATE SENSOR CREDENTIALS' }) }),
@@ -136,8 +139,8 @@ export const api = {
   createEnrollmentToken: (payload: { home_id: string; friendly_name: string; ct_rating_a: string; pzem_variant: 'pzem004t-v4-classic-candidate'; expires_minutes: number }) => apiRequest('/enrollment-tokens', z.object({ token: z.string(), expires_at: z.string().datetime({ offset: true }) }), { method: 'POST', body: jsonBody(payload) }),
   circuits: (homeId: string) => apiRequest(homePath('/circuits', homeId), z.object({ circuits: z.array(circuitSchema) })),
   createVerifiedAggregate: (payload: { home_id: string; name: string; device_ids: string[]; confirmation: 'I VERIFIED THESE NON-OVERLAPPING METERS' }) => apiRequest('/circuits/verified-aggregates', z.object({ id: z.string(), name: z.string(), device_ids: z.array(z.string()) }), { method: 'POST', body: jsonBody(payload) }),
-  createCircuit: (payload: { home_id: string; name: string; description?: string | null; purpose: 'electrical_section' | 'whole_home_total'; is_home_total: boolean; device_ids: string[]; confirmation: 'I VERIFIED THESE NON-OVERLAPPING METERS' }) => apiRequest('/circuits', circuitSchema, { method: 'POST', body: jsonBody(payload) }),
-  updateCircuit: (id: string, payload: { name?: string; description?: string | null; purpose?: 'electrical_section' | 'whole_home_total'; is_home_total?: boolean; device_ids?: string[]; confirmation?: 'I VERIFIED THESE NON-OVERLAPPING METERS' }) => apiRequest(`/circuits/${encodeURIComponent(id)}`, circuitSchema, { method: 'PATCH', body: jsonBody(payload) }),
+  createCircuit: (payload: { home_id: string; name: string; description?: string | null; purpose: 'electrical_section' | 'whole_home_total'; is_home_total: boolean; is_billing_source?: boolean; device_ids: string[]; confirmation: 'I VERIFIED THESE NON-OVERLAPPING METERS' }) => apiRequest('/circuits', circuitSchema, { method: 'POST', body: jsonBody(payload) }),
+  updateCircuit: (id: string, payload: { name?: string; description?: string | null; purpose?: 'electrical_section' | 'whole_home_total'; is_home_total?: boolean; is_billing_source?: boolean; device_ids?: string[]; confirmation?: 'I VERIFIED THESE NON-OVERLAPPING METERS' }) => apiRequest(`/circuits/${encodeURIComponent(id)}`, circuitSchema, { method: 'PATCH', body: jsonBody(payload) }),
   deleteCircuit: (id: string) => apiRequest(`/circuits/${encodeURIComponent(id)}`, z.undefined(), { method: 'DELETE' }),
   acknowledgeAlert: (id: string) => apiRequest(`/alerts/${encodeURIComponent(id)}/acknowledge`, z.object({ id: z.string(), state: z.string() }), { method: 'POST', body: '{}' }),
   silenceAlert: (id: string, until: string) => apiRequest(`/alerts/${encodeURIComponent(id)}/silence`, z.object({ id: z.string(), silenced_until: z.string().datetime({ offset: true }) }), { method: 'POST', body: jsonBody({ until }) }),

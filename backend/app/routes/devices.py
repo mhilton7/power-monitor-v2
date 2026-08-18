@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import orjson
 from fastapi import APIRouter, Depends, Request, Response
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +43,10 @@ from ..schemas.device import (
     HeartbeatRequest,
     PermanentLossRequest,
     ReadingBatchRequest,
+    StatelessTelemetryConfiguration,
+    StatelessTelemetryRequest,
+    StatelessTelemetryResponse,
+    StatelessTelemetrySampleIdentity,
 )
 from ..security.auth import CurrentUser, require_permission, token_hash
 from ..security.crypto import encrypt_secret, secret_fingerprint
@@ -62,6 +66,7 @@ from ..services.commands import (
 )
 from ..services.firmware_deployments import reconcile_firmware_version_heartbeat
 from ..services.ingestion import find_gaps, ingest_batch, record_permanent_loss
+from ..services.stateless_telemetry import ingest_stateless_sample
 
 router = APIRouter(prefix="/api/v1", tags=["devices"])
 
@@ -77,14 +82,14 @@ async def _require_home_scope(session: AsyncSession, user_id: str, home_id: str)
         raise NotFound("home does not exist")
 
 
-def _device_response_body(payload: DeviceResponse | dict[str, object]) -> bytes:
-    value = payload.model_dump(mode="json") if isinstance(payload, DeviceResponse) else payload
+def _device_response_body(payload: BaseModel | dict[str, object]) -> bytes:
+    value = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else payload
     return orjson.dumps(value, option=orjson.OPT_SORT_KEYS)
 
 
 def _signed_device_response(
     *,
-    payload: DeviceResponse | dict[str, object],
+    payload: BaseModel | dict[str, object],
     request: Request,
     device_id: str,
     device_secret: bytes,
@@ -428,13 +433,18 @@ async def _validated_device_payload(
     request: Request,
     session: AsyncSession,
     settings: Settings,
-    schema: type[HeartbeatRequest] | type[ReadingBatchRequest] | type[PermanentLossRequest],
+    schema: (
+        type[HeartbeatRequest]
+        | type[ReadingBatchRequest]
+        | type[PermanentLossRequest]
+        | type[StatelessTelemetryRequest]
+    ),
     max_bytes: int,
 ) -> tuple[
     Device,
     DeviceCredential,
     bytes,
-    HeartbeatRequest | ReadingBatchRequest | PermanentLossRequest,
+    HeartbeatRequest | ReadingBatchRequest | PermanentLossRequest | StatelessTelemetryRequest,
     bytes,
 ]:
     body_buffer = bytearray()
@@ -565,6 +575,92 @@ async def heartbeat(
     await session.commit()
     return _signed_device_response(
         payload=response, request=request, device_id=device.id, device_secret=secret
+    )
+
+
+@router.post(
+    "/device/telemetry/v2",
+    response_model=StatelessTelemetryResponse,
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {"schema": StatelessTelemetryRequest.model_json_schema()}
+            },
+        }
+    },
+)
+async def stateless_telemetry(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    device, credential, secret, generic_payload, _body = await _validated_device_payload(
+        request,
+        session,
+        settings,
+        StatelessTelemetryRequest,
+        MAX_HEARTBEAT_BODY_BYTES,
+    )
+    payload = generic_payload
+    assert isinstance(payload, StatelessTelemetryRequest)
+    await apply_command_results(
+        session,
+        device.id,
+        payload.command_results,
+        authenticated_credential_id=credential.id,
+    )
+    result = await ingest_stateless_sample(session, device.id, payload)
+    if result.advances_live_state:
+        await reconcile_firmware_version_heartbeat(
+            session,
+            device_id=device.id,
+            firmware_version=payload.firmware_version,
+            now=result.received_at,
+        )
+    identity = StatelessTelemetrySampleIdentity(
+        sensor_id=device.id,
+        boot_id=payload.boot_id,
+        sample_sequence=payload.sample_sequence,
+    )
+    configuration = StatelessTelemetryConfiguration(
+        version=result.config_version,
+        telemetry_interval_seconds=result.telemetry_interval_seconds,
+    )
+    empty = StatelessTelemetryResponse(
+        status=result.status,
+        server_received_at=result.received_at,
+        sample=identity,
+        timestamp_source=result.timestamp_source,
+        configuration=configuration,
+        commands=[],
+    )
+    empty_size = len(_device_response_body(empty))
+    if empty_size > MAX_DEVICE_RESPONSE_BYTES:
+        raise IntegrityConflict("device response exceeds the protocol byte limit")
+    commands = await deliver_commands(
+        session,
+        device.id,
+        settings=settings,
+        response_byte_budget=MAX_DEVICE_RESPONSE_BYTES - empty_size,
+        maximum_single_envelope_bytes=MAX_DEVICE_RESPONSE_BYTES - empty_size,
+    )
+    response = StatelessTelemetryResponse(
+        status=result.status,
+        server_received_at=result.received_at,
+        sample=identity,
+        timestamp_source=result.timestamp_source,
+        configuration=configuration,
+        commands=commands,
+    )
+    if len(_device_response_body(response)) > MAX_DEVICE_RESPONSE_BYTES:
+        raise IntegrityConflict("device response exceeds the protocol byte limit")
+    await session.commit()
+    return _signed_device_response(
+        payload=response,
+        request=request,
+        device_id=device.id,
+        device_secret=secret,
     )
 
 

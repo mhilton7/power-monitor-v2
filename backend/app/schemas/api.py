@@ -590,6 +590,7 @@ class ServiceBranchCreateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     purpose: Literal["electrical_section", "whole_home_total"] = "electrical_section"
     is_home_total: bool = False
+    is_billing_source: bool = False
     device_ids: list[str] = Field(min_length=1, max_length=32)
     confirmation: Literal["I VERIFIED THESE NON-OVERLAPPING METERS"]
 
@@ -611,6 +612,8 @@ class ServiceBranchCreateRequest(BaseModel):
             raise ValueError("the home-total service branch requires whole_home_total purpose")
         if not self.is_home_total and self.purpose == "whole_home_total":
             raise ValueError("whole_home_total purpose requires home-total designation")
+        if self.is_billing_source and not self.is_home_total:
+            raise ValueError("the billing source must be the home-total service branch")
         return self
 
 
@@ -620,6 +623,7 @@ class ServiceBranchUpdateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     purpose: Literal["electrical_section", "whole_home_total"] | None = None
     is_home_total: bool | None = None
+    is_billing_source: bool | None = None
     device_ids: list[str] | None = Field(default=None, max_length=32)
     confirmation: Literal["I VERIFIED THESE NON-OVERLAPPING METERS"] | None = None
 
@@ -638,10 +642,53 @@ class ServiceBranchUpdateRequest(BaseModel):
         if self.device_ids is not None and len(self.device_ids) != len(set(self.device_ids)):
             raise ValueError("service branch device IDs must be unique")
         if (
-            self.device_ids is not None or self.is_home_total is not None
+            self.device_ids is not None
+            or self.is_home_total is not None
+            or self.is_billing_source is not None
         ) and self.confirmation != "I VERIFIED THESE NON-OVERLAPPING METERS":
             raise ValueError("membership or home-total changes require non-overlap confirmation")
         return self
+
+
+class TelemetrySettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    telemetry_interval_seconds: Literal[2, 5, 10, 15, 30, 60] | None = None
+    history_interval_seconds: Literal[15, 30, 60, 300, 900] | None = None
+    retention_days: Literal[30, 90, 180, 365] | None = None
+    retention_confirmation: Literal["DELETE EXPIRED SAVED HISTORY"] | None = None
+
+    @model_validator(mode="after")
+    def contains_setting(self) -> TelemetrySettingsUpdateRequest:
+        if not (
+            {"telemetry_interval_seconds", "history_interval_seconds", "retention_days"}
+            & self.model_fields_set
+        ):
+            raise ValueError("at least one telemetry setting is required")
+        return self
+
+
+class BillingCycleAdjustmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    utility_account_id: str = Field(min_length=36, max_length=36)
+    cycle_start_utc: datetime
+    through_utc: datetime
+    energy_kwh: Decimal = Field(ge=Decimal("0"), max_digits=15, decimal_places=6)
+    evidence_note: str = Field(min_length=1, max_length=300)
+    confirmation: Literal["I VERIFIED THIS CYCLE TO DATE ENERGY"]
+
+    @field_validator("cycle_start_utc")
+    @classmethod
+    def aware_cycle_start(cls, value: datetime) -> datetime:
+        if value.utcoffset() is None:
+            raise ValueError("cycle start must include a UTC offset")
+        return value
+
+    @field_validator("through_utc")
+    @classmethod
+    def aware_through(cls, value: datetime) -> datetime:
+        if value.utcoffset() is None:
+            raise ValueError("adjustment through timestamp must include a UTC offset")
+        return value
 
 
 class DeviceRevokeRequest(BaseModel):

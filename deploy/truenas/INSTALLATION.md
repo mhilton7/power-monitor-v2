@@ -5,8 +5,8 @@ authenticated SMB share, and the TrueNAS web UI. It does **not** require SSH,
 the TrueNAS shell, a container console, or a host-side preparation command.
 
 > **Release boundary:** this source guide is prepared for the complete signed
-> v0.1.0-rc.16 release asset set. Earlier public releases remain installable only
-> with its own attached rc.11 guide and assets. The immutable rc.3 assets use
+> v0.1.0-rc.17 release asset set. Earlier public releases remain installable only
+> with their own attached guides and assets. The immutable rc.3 assets use
 > their attached rc.3 instructions and do not contain this initializer/staging
 > helper. The signed server rc.4 tag has no GitHub Release or YAML. Never
 > combine files from releases.
@@ -16,8 +16,10 @@ staged inputs, installs the image-embedded Caddy/PostgreSQL configuration, and
 repairs/verifies the exact runtime permissions. It exits successfully before
 `postgres`, `migrate`, or any long-running service can start. `migrate` is the
 second one-shot service; the other six services remain running.
-Compatible sensors use `pm-protocol/1.0.0`; live/history/usage evidence remains
-authenticated PZEM-004T readings only.
+Compatible sensors use `pm-protocol/1.0.0` for authenticated control and
+`pm-telemetry/2.0.0` for independently accepted current readings. Live,
+History, energy, and usage evidence remain authenticated PZEM-004T readings
+only; missed readings remain visible gaps and never block newer samples.
 Bill uploads contribute closed-schema reusable rate facts only. Original PDF
 bytes and full OCR text are released after the bounded parse and are never
 stored, encrypted or otherwise; this release intentionally has no bill-original
@@ -30,7 +32,7 @@ the exact coordinated release tag. A unique directory below Windows `%TEMP%`
 prevents an earlier partial download from contaminating this asset set:
 
 ```powershell
-$Tag = 'v0.1.0-rc.16'
+$Tag = 'v0.1.0-rc.17'
 $TempRoot = [IO.Path]::GetFullPath($env:TEMP)
 $Release = Join-Path $TempRoot ("powermeter-{0}-{1}" -f $Tag, [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $Release -ErrorAction Stop | Out-Null

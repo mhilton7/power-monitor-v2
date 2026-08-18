@@ -779,7 +779,8 @@ def test_service_branch_revision_designates_only_unambiguous_populated_aggregate
                 designated = connection.execute(
                     sa.text(
                         "SELECT id, name, purpose, is_home_total, aggregate_mode, "
-                        "non_overlapping_confirmed FROM circuits WHERE home_id = :home_id"
+                        "non_overlapping_confirmed, is_billing_source FROM circuits "
+                        "WHERE home_id = :home_id"
                     ),
                     {"home_id": home_ids[0]},
                 ).one()
@@ -789,6 +790,7 @@ def test_service_branch_revision_designates_only_unambiguous_populated_aggregate
                     "whole_home_total",
                     True,
                     "verified_sum",
+                    True,
                     True,
                 )
                 ambiguous = connection.execute(
@@ -829,7 +831,17 @@ def test_service_branch_revision_designates_only_unambiguous_populated_aggregate
                     "non_overlapping_confirmed",
                     "created_at",
                     "updated_at",
+                    "is_billing_source",
                 }.issubset(circuit_columns)
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT count(*) FROM home_telemetry_settings WHERE home_id = :home_id"
+                        ),
+                        {"home_id": home_ids[0]},
+                    )
+                    == 1
+                )
         finally:
             engine.dispose()
 
@@ -843,6 +855,93 @@ def test_service_branch_revision_designates_only_unambiguous_populated_aggregate
                 assert "is_home_total" not in circuit_columns
                 assert connection.scalar(sa.text("SELECT count(*) FROM devices")) == 6
                 assert connection.scalar(sa.text("SELECT count(*) FROM circuits")) == 3
+        finally:
+            engine.dispose()
+    finally:
+        get_settings.cache_clear()
+        database.unlink(missing_ok=True)
+
+
+def test_stateless_revision_refuses_lossy_downgrade_after_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = ROOT / ".test-runtime" / f"stateless-downgrade-{uuid.uuid4().hex}.sqlite3"
+    async_url = _sqlite_url(database, async_driver=True)
+    sync_url = _sqlite_url(database, async_driver=False)
+    monkeypatch.setenv("PM_ENV", "test")
+    monkeypatch.setenv("PM_DATABASE_URL", async_url)
+    get_settings.cache_clear()
+    config = _config()
+    home_id = str(uuid.uuid4())
+    device_id = str(uuid.uuid4())
+    sample_id = str(uuid.uuid4())
+    try:
+        command.upgrade(config, "20260817_0016")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO homes (id, name, timezone, created_at) VALUES "
+                        "(:id, 'Stateless migration home', 'America/Los_Angeles', "
+                        "CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": home_id},
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO devices "
+                        "(id, home_id, friendly_name, protocol_id, pzem_variant, ct_rating_a, "
+                        "measurement_scope, state, contiguous_ack, maximum_sequence, "
+                        "reset_generation, include_in_aggregate, created_at) VALUES "
+                        "(:id, :home_id, 'Stateless sensor', 'pm-protocol/1.0.0', "
+                        "'pzem004t-v4-classic-candidate', 100, 'energy_only', 'online', "
+                        "0, 0, 0, false, CURRENT_TIMESTAMP)"
+                    ),
+                    {"id": device_id, "home_id": home_id},
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(config, "20260818_0017")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO stateless_telemetry_samples "
+                        "(id, device_id, boot_id, sample_sequence, telemetry_protocol, "
+                        "sampled_at, received_at, effective_at, sensor_time_trusted, uptime_ms, "
+                        "voltage_v, current_a, active_power_w, frequency_hz, power_factor, "
+                        "pzem_energy_wh, pzem_status, firmware_version, firmware_build_id, "
+                        "time_status, wifi_rssi, payload_sha256) VALUES "
+                        "(:id, :device_id, :boot_id, 1, 'pm-telemetry/2.0.0', "
+                        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, true, 1000, "
+                        "240, 1, 200, 60, 0.9, 1000, 'ok', '0.1.0-rc.17', 'elf-sha', "
+                        "'trusted', -50, :digest)"
+                    ),
+                    {
+                        "id": sample_id,
+                        "device_id": device_id,
+                        "boot_id": str(uuid.uuid4()),
+                        "digest": "f" * 64,
+                    },
+                )
+        finally:
+            engine.dispose()
+
+        with pytest.raises(RuntimeError, match="refusing downgrade"):
+            command.downgrade(config, "20260817_0016")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == (
+                    "20260818_0017"
+                )
+                assert (
+                    connection.scalar(sa.text("SELECT count(*) FROM stateless_telemetry_samples"))
+                    == 1
+                )
         finally:
             engine.dispose()
     finally:

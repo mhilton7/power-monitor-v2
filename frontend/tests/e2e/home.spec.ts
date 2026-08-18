@@ -5,17 +5,19 @@ import { mockApi } from './mocks';
 
 test.beforeEach(async ({ page }) => { await mockApi(page); });
 
-test('Home shows live readings, committed summaries and sensor evidence', async ({ page }) => {
+test('Home shows live readings, a compact billing-cycle summary, and sensor evidence', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   await expect(page.locator('.dashboard-live-reading').getByText('2.48', { exact: true })).toBeVisible();
-  await expect(page.getByText(/Live readings can appear before saved History because stored readings must be accepted by the server first/)).toBeVisible();
+  await expect(page.getByText(/History may take a moment to show the newest accepted reading/)).toBeVisible();
   const summary = page.locator('.dashboard-summary-card');
-  await expect(summary.getByText('18.74 kWh')).toBeVisible();
-  await expect(summary.getByText('$3.21')).toBeVisible();
-  await expect(summary.getByText('Today Estimated Cost')).toBeVisible();
-  await expect(summary.getByText('This Week Cost')).toBeVisible();
-  await expect(summary.getByText('Current Rate')).toBeVisible();
+  await expect(summary.getByRole('heading', { name: 'Billing Cycle' })).toBeVisible();
+  await expect(summary.getByText('0.17 kWh')).toBeVisible();
+  await expect(summary.getByText('Current Usage')).toBeVisible();
+  await expect(summary.getByText('Cost to Date')).toBeVisible();
+  await expect(summary.getByText('Current Tier')).toBeVisible();
+  await expect(summary.getByText('Estimated Monthly Bill')).toBeVisible();
+  await expect(summary.getByText('Estimate may be incomplete because some readings were not received.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Sensor health' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Voltage' })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Current' })).toHaveCount(0);
@@ -75,11 +77,11 @@ test('Home navigation stays limited to the four approved routes', async ({ page 
 test('multiple sensors share one health surface without inventing unavailable values', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   const unavailableMeasurement = { voltage_v: null, current_a: null, active_power_w: null, frequency_hz: null, power_factor: null, measured_at: null, pzem_status: 'absent' };
-  const outdoor = { ...home.devices[0]!, id: 'device-outdoor', friendly_name: 'Outdoor AC', state: 'offline', measurement: unavailableMeasurement, heartbeat_at: '2026-08-13T16:20:00Z', last_committed_at: null, storage_status: 'unavailable' };
+  const outdoor = { ...home.devices[0]!, id: 'device-outdoor', friendly_name: 'Outdoor AC', state: 'offline', measurement: unavailableMeasurement, heartbeat_at: '2026-08-13T16:20:00Z', last_committed_at: null, server_delivery_status: 'unavailable', last_server_received_at: null };
   await page.unrouteAll({ behavior: 'wait' });
   await mockApi(page, {
     homeOverride: { ...home, devices: [home.devices[0]!, outdoor] },
-    devicesOverride: [device, { ...device, id: 'device-outdoor', friendly_name: 'Outdoor AC', location: 'Outdoor unit', pzem_status: 'absent', storage_status: 'unavailable' }],
+    devicesOverride: [device, { ...device, id: 'device-outdoor', friendly_name: 'Outdoor AC', location: 'Outdoor unit', pzem_status: 'absent', server_delivery_status: 'unavailable', last_server_received_at: null }],
   });
   await page.goto('/');
   const health = page.getByRole('table', { name: 'Sensor health and live electrical measurements' });
@@ -88,39 +90,32 @@ test('multiple sensors share one health surface without inventing unavailable va
   await expect(outdoorRow.getByText('Offline')).toBeVisible();
   await expect(outdoorRow.getByText('Absent')).toBeVisible();
   await expect(outdoorRow.getByText('Unavailable')).toBeVisible();
-  await expect(outdoorRow.getByText('Not available')).toHaveCount(6);
+  await expect(outdoorRow.getByText('Not available')).toHaveCount(5);
   await expect(outdoorRow.getByText(/0 W|0 V|0 A/)).toHaveCount(0);
   await expect(page).toHaveScreenshot('home-multiple-sensors-unavailable-1280x720.png', { fullPage: false, maxDiffPixelRatio: 0.03 });
 });
 
-test('current rate stays calm when no published rate exists', async ({ page }) => {
+test('monthly projection stays calm when there is not enough data', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.unrouteAll({ behavior: 'wait' });
   await mockApi(page, { homeOverride: { ...home, current_rate: null } });
   await page.goto('/');
-  const rate = page.locator('.dashboard-summary-metric').filter({ hasText: 'Current Rate' });
-  await expect(rate.getByText('—')).toBeVisible();
-  await expect(rate.getByText('No published rate')).toBeVisible();
+  const projection = page.locator('.dashboard-summary-metric').filter({ hasText: 'Estimated Monthly Bill' });
+  await expect(projection.getByText('Not available')).toBeVisible();
+  await expect(projection.getByText(/24 hours/)).toBeVisible();
   await expect(page).toHaveScreenshot('home-no-published-rate-1024x768.png', { fullPage: false, maxDiffPixelRatio: 0.03 });
 });
 
-test('sensor reboot, maintenance sleep and format use guarded command flows', async ({ page }) => {
+test('sensor drawer exposes only reboot and signed OTA commands', async ({ page }) => {
   const commands = await mockApi(page);
   await page.goto('/');
   await page.getByRole('button', { name: /Main Panel Sensor/ }).click();
   await page.getByRole('button', { name: /Reboot/ }).last().click();
-  await expect(page.getByText('Measurement pauses briefly')).toBeVisible();
-  await page.getByRole('button', { name: 'Queue command' }).click();
+  await expect(page.getByText(/Measurements pause briefly/)).toBeVisible();
+  await page.getByRole('button', { name: 'Reboot sensor' }).click();
   await expect.poll(() => commands).toContain('reboot');
-  await page.getByRole('button', { name: /Maintenance sleep/ }).click();
-  await expect(page.getByText(/does not disconnect mains power/)).toBeVisible();
-  await page.getByRole('button', { name: 'Cancel' }).click();
-  await page.getByRole('button', { name: /Format microSD history/ }).click();
-  await page.getByRole('button', { name: 'Queue command' }).click();
-  await expect(page.getByRole('heading', { name: 'Commit microSD history format?' })).toBeVisible();
-  await page.getByLabel(/Type FORMAT STORAGE/).fill('FORMAT STORAGE');
-  await page.getByRole('button', { name: 'Queue command' }).click();
-  await expect.poll(() => commands).toEqual(expect.arrayContaining(['format_storage_prepare', 'format_storage_commit']));
+  await expect(page.getByRole('link', { name: /Install OTA/ })).toBeVisible();
+  await expect(page.getByText(/microSD|backlog|sync now|format storage/i)).toHaveCount(0);
 });
 
 test('unreported OTA state stays unavailable and commands can be forbidden by the server', async ({ page }) => {
@@ -133,7 +128,7 @@ test('unreported OTA state stays unavailable and commands can be forbidden by th
   await page.reload();
   await page.getByRole('button', { name: /Main Panel Sensor/ }).click();
   await page.getByRole('button', { name: /Reboot/ }).last().click();
-  await page.getByRole('button', { name: 'Queue command' }).click();
+  await page.getByRole('button', { name: 'Reboot sensor' }).click();
   await expect(page.getByText('The server refused this command.')).toBeVisible();
 });
 
@@ -154,13 +149,13 @@ test('alert acknowledgement and silence retain evidence and call scoped routes',
   const alertDialog = page.getByRole('dialog', { name: 'Alerts & notifications' });
   await expect(alertDialog.getByRole('heading', { name: 'Alerts & notifications' })).toBeVisible();
   await expect(alertDialog).toContainText('Alerts span all homes this account can access.');
-  await expect(page.getByText('backlog', { exact: true })).toBeVisible();
-  const acknowledgeRequest = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/alerts/alert-backlog/acknowledge'));
-  await page.getByRole('button', { name: 'Acknowledge reading backlog' }).click();
+  await expect(alertDialog.getByRole('heading', { name: 'sensor delivery delayed' })).toBeVisible();
+  const acknowledgeRequest = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/alerts/alert-delivery/acknowledge'));
+  await page.getByRole('button', { name: 'Acknowledge sensor delivery delayed' }).click();
   await acknowledgeRequest;
-  await page.getByRole('button', { name: 'Silence reading backlog for 24 hours' }).click();
+  await page.getByRole('button', { name: 'Silence sensor delivery delayed for 24 hours' }).click();
   await expect(page.getByText(/underlying evidence and alert remain recorded/)).toBeVisible();
-  const silenceRequest = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/alerts/alert-backlog/silence'));
+  const silenceRequest = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/alerts/alert-delivery/silence'));
   await page.getByRole('button', { name: 'Silence 24 hours' }).click();
   await silenceRequest;
 });

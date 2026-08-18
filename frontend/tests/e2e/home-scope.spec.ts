@@ -81,7 +81,8 @@ test('removes the prior home immediately while a newly selected home is loading'
   const selector = page.getByLabel('Active home');
   await selector.selectOption(firstHomeId);
   await expect(page.getByText('First home sensor', { exact: true }).first()).toBeVisible();
-  await page.getByRole('button', { name: /Sync Now/ }).click();
+  await page.getByRole('button', { name: /^Reboot/ }).first().click();
+  await page.getByRole('button', { name: 'Reboot sensor', exact: true }).click();
   await expect(page.getByText(/Command .* is queued/)).toBeVisible();
 
   await selector.selectOption(secondHomeId);

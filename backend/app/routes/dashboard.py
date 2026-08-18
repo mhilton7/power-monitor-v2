@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
@@ -28,6 +28,7 @@ from ..models import (
     DeviceCommand,
     DeviceCredential,
     DeviceHeartbeat,
+    DeviceTelemetryState,
     Home,
     IntervalCost,
     IntervalCostSelection,
@@ -38,6 +39,8 @@ from ..models import (
     RatePlan,
     RatePlanVersion,
     RawReading,
+    StatelessTelemetrySample,
+    TelemetryEnergyEvent,
     UtilityAccount,
     aware_utc,
     user_home_scopes,
@@ -189,23 +192,37 @@ async def _summary(
 ) -> dict[str, object]:
     if not device_ids:
         return {"energy_kwh": None, "cost": None, "completeness": 0, "missing_intervals": 0}
-    energy, completeness_sum, count = (
-        await session.execute(
-            select(
-                func.sum(NormalizedInterval.energy_mwh),
-                func.sum(NormalizedInterval.completeness),
-                func.count(NormalizedInterval.id),
-            )
-            .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+    intervals = (
+        await session.scalars(
+            select(NormalizedInterval)
+            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
             .join(Device, Device.id == NormalizedInterval.device_id)
             .where(
                 NormalizedInterval.device_id.in_(device_ids),
-                RawReading.reset_generation == Device.reset_generation,
+                or_(
+                    NormalizedInterval.source_kind == "stateless_v2",
+                    RawReading.reset_generation == Device.reset_generation,
+                ),
                 NormalizedInterval.start_utc >= start,
                 NormalizedInterval.end_utc <= end,
             )
         )
-    ).one()
+    ).all()
+    available_energy = [
+        int(interval.energy_mwh) for interval in intervals if interval.energy_mwh is not None
+    ]
+    energy = sum(available_energy) if available_energy else None
+    count = len(intervals)
+    expected_seconds = Decimal(str((end - start).total_seconds())) * Decimal(len(device_ids))
+    quality_seconds = sum(
+        Decimal(str((interval.end_utc - interval.start_utc).total_seconds()))
+        * interval.completeness
+        for interval in intervals
+    )
+    coverage = min(
+        Decimal("1"),
+        quality_seconds / expected_seconds if expected_seconds else Decimal("0"),
+    )
     cost, priced_count = (
         await session.execute(
             select(
@@ -220,26 +237,61 @@ async def _summary(
                 NormalizedInterval,
                 NormalizedInterval.id == IntervalCostSelection.normalized_interval_id,
             )
-            .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
             .join(Device, Device.id == NormalizedInterval.device_id)
             .where(
                 NormalizedInterval.device_id.in_(device_ids),
-                RawReading.reset_generation == Device.reset_generation,
+                or_(
+                    NormalizedInterval.source_kind == "stateless_v2",
+                    RawReading.reset_generation == Device.reset_generation,
+                ),
                 NormalizedInterval.start_utc >= start,
                 NormalizedInterval.end_utc <= end,
             )
         )
     ).one()
-    expected = max(1, int((end - start).total_seconds() // 60) * len(device_ids))
+    recovered_gap_mwh = int(
+        await session.scalar(
+            select(func.sum(TelemetryEnergyEvent.recovered_energy_mwh)).where(
+                TelemetryEnergyEvent.device_id.in_(device_ids),
+                TelemetryEnergyEvent.billing_status == "included",
+                TelemetryEnergyEvent.gap_end_utc > start,
+                TelemetryEnergyEvent.gap_end_utc <= end,
+            )
+        )
+        or 0
+    )
+    unresolved_gap_count = int(
+        await session.scalar(
+            select(func.count(TelemetryEnergyEvent.id)).where(
+                TelemetryEnergyEvent.device_id.in_(device_ids),
+                TelemetryEnergyEvent.billing_status == "unresolved",
+                TelemetryEnergyEvent.gap_end_utc > start,
+                TelemetryEnergyEvent.gap_start_utc < end,
+            )
+        )
+        or 0
+    )
+    missing_minutes = max(
+        0,
+        int((expected_seconds - min(expected_seconds, quality_seconds)) / Decimal(60)),
+    )
+    total_energy_mwh = (int(energy) if energy is not None else 0) + recovered_gap_mwh
     return {
-        "energy_kwh": Decimal(energy or 0) / Decimal(1_000_000) if energy is not None else None,
-        "cost": (
-            Decimal(cost) / Decimal(1_000_000)
-            if cost is not None and int(priced_count or 0) == int(count or 0)
+        "energy_kwh": (
+            Decimal(total_energy_mwh) / Decimal(1_000_000)
+            if energy is not None or recovered_gap_mwh
             else None
         ),
-        "completeness": min(Decimal(1), Decimal(completeness_sum or 0) / Decimal(expected)),
-        "missing_intervals": max(0, expected - int(count or 0)),
+        "recovered_gap_energy_kwh": Decimal(recovered_gap_mwh) / Decimal(1_000_000),
+        "unresolved_connection_gap_count": unresolved_gap_count,
+        "cost": (
+            Decimal(cost) / Decimal(1_000_000)
+            if cost is not None and int(priced_count or 0) == count
+            else None
+        ),
+        "completeness": coverage,
+        "missing_intervals": missing_minutes,
     }
 
 
@@ -284,11 +336,14 @@ async def _current_rate(
     cumulative_mwh = int(
         await session.scalar(
             select(func.sum(NormalizedInterval.energy_mwh))
-            .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
             .join(Device, Device.id == NormalizedInterval.device_id)
             .where(
                 NormalizedInterval.device_id.in_(device_ids),
-                RawReading.reset_generation == Device.reset_generation,
+                or_(
+                    NormalizedInterval.source_kind == "stateless_v2",
+                    RawReading.reset_generation == Device.reset_generation,
+                ),
                 NormalizedInterval.start_utc >= cycle_start,
                 NormalizedInterval.end_utc <= now,
                 NormalizedInterval.source_authenticated.is_(True),
@@ -432,6 +487,12 @@ async def home_dashboard(
     output_devices: list[dict[str, object]] = []
     device_items: dict[str, dict[str, object]] = {}
     for device in devices:
+        telemetry_state = await session.get(DeviceTelemetryState, device.id)
+        telemetry_sample = (
+            await session.get(StatelessTelemetrySample, telemetry_state.latest_sample_id)
+            if telemetry_state is not None
+            else None
+        )
         heartbeat = await session.scalar(
             select(DeviceHeartbeat)
             .where(DeviceHeartbeat.device_id == device.id)
@@ -440,20 +501,41 @@ async def home_dashboard(
         )
         last_committed = await session.scalar(
             select(func.max(NormalizedInterval.end_utc))
-            .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
             .where(
                 NormalizedInterval.device_id == device.id,
-                RawReading.reset_generation == device.reset_generation,
+                or_(
+                    NormalizedInterval.source_kind == "stateless_v2",
+                    RawReading.reset_generation == device.reset_generation,
+                ),
             )
         )
-        age = (now - aware_utc(heartbeat.received_at)).total_seconds() if heartbeat else None
+        latest_received_at = (
+            telemetry_state.latest_server_received_at
+            if telemetry_state is not None
+            else heartbeat.received_at
+            if heartbeat is not None
+            else None
+        )
+        pzem_status = (
+            telemetry_sample.pzem_status
+            if telemetry_sample is not None
+            else heartbeat.pzem_status
+            if heartbeat is not None
+            else None
+        )
+        age = (
+            (now - aware_utc(latest_received_at)).total_seconds()
+            if latest_received_at is not None
+            else None
+        )
         state = (
             "monitoring_disabled"
             if not device.monitoring_enabled
             else "waiting"
-            if heartbeat is None
+            if latest_received_at is None
             else "live"
-            if age is not None and age <= 30 and heartbeat.pzem_status == "ok"
+            if age is not None and age <= 30 and pzem_status == "ok"
             else "needs_attention"
             if age is not None and age <= 30
             else "stale"
@@ -461,7 +543,19 @@ async def home_dashboard(
             else "offline"
         )
         measurement = None
-        if heartbeat is not None:
+        if telemetry_sample is not None:
+            measurement = {
+                "voltage_v": telemetry_sample.voltage_v,
+                "current_a": telemetry_sample.current_a,
+                "active_power_w": telemetry_sample.active_power_w,
+                "frequency_hz": telemetry_sample.frequency_hz,
+                "power_factor": telemetry_sample.power_factor,
+                "measured_at": telemetry_sample.sampled_at,
+                "server_received_at": telemetry_sample.received_at,
+                "sensor_time_trusted": telemetry_sample.sensor_time_trusted,
+                "pzem_status": telemetry_sample.pzem_status,
+            }
+        elif heartbeat is not None:
             measurement = {
                 "voltage_v": heartbeat.voltage_v,
                 "current_a": heartbeat.current_a,
@@ -480,11 +574,44 @@ async def home_dashboard(
             "state": state,
             "measurement_scope": device.measurement_scope,
             "measurement": measurement,
-            "heartbeat_at": heartbeat.received_at if heartbeat else None,
+            "heartbeat_at": latest_received_at,
             "last_committed_at": last_committed,
-            "backlog": heartbeat.backlog if heartbeat else None,
-            "storage_status": heartbeat.storage_status if heartbeat else "unavailable",
+            "backlog": heartbeat.backlog if heartbeat and telemetry_state is None else None,
+            "storage_status": (
+                heartbeat.storage_status if heartbeat and telemetry_state is None else None
+            ),
             "firmware_version": device.firmware_version,
+            "firmware_build_id": (
+                telemetry_state.firmware_build_id if telemetry_state is not None else None
+            ),
+            "telemetry_protocol": (
+                telemetry_state.telemetry_protocol if telemetry_state is not None else None
+            ),
+            "server_delivery_status": (
+                "accepted"
+                if telemetry_state is not None and age is not None and age <= 30
+                else "delayed"
+                if telemetry_state is not None and age is not None and age <= 120
+                else "offline"
+                if telemetry_state is not None
+                else "legacy_backlog_protocol"
+                if heartbeat is not None
+                else "waiting"
+            ),
+            "last_server_received_at": (
+                telemetry_state.latest_server_received_at if telemetry_state is not None else None
+            ),
+            "last_sensor_sampled_at": (
+                telemetry_state.latest_sensor_sampled_at if telemetry_state is not None else None
+            ),
+            "sensor_time_trusted": (
+                telemetry_state.sensor_time_trusted if telemetry_state is not None else None
+            ),
+            "cumulative_energy_kwh": (
+                Decimal(telemetry_sample.pzem_energy_wh) / Decimal(1000)
+                if telemetry_sample is not None and telemetry_sample.pzem_energy_wh is not None
+                else None
+            ),
         }
         device_items[device.id] = device_item
         if device.show_on_dashboard:
@@ -645,11 +772,22 @@ async def home_dashboard(
             power = item_measurement.get("active_power_w")
             if power is not None:
                 powers.append(Decimal(str(power)))
+        missing_member_ids = tuple(
+            member_id
+            for member_id, aggregate_item in zip(ids, aggregate_members, strict=True)
+            if aggregate_item is None or aggregate_item["state"] != "live"
+        )
+        complete = len(powers) == len(aggregate_members)
         aggregate_measurement = {
-            "state": "live" if len(powers) == len(aggregate_members) else "unavailable",
+            "state": "live" if complete else "partial" if powers else "unavailable",
             "active_power_w": sum(powers) if len(powers) == len(aggregate_members) else None,
             "member_device_ids": ids,
+            "partial": not complete,
+            "available_member_count": len(powers),
+            "required_member_count": len(aggregate_members),
+            "missing_member_device_ids": missing_member_ids,
             "voltage_v": None,
+            "current_a": None,
             "frequency_hz": None,
             "power_factor": None,
         }
@@ -828,11 +966,14 @@ async def history(
     rows = (
         await session.execute(
             select(NormalizedInterval, RawReading)
-            .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
             .join(Device, Device.id == NormalizedInterval.device_id)
             .where(
                 NormalizedInterval.device_id.in_(device_ids),
-                RawReading.reset_generation == Device.reset_generation,
+                or_(
+                    NormalizedInterval.source_kind == "stateless_v2",
+                    RawReading.reset_generation == Device.reset_generation,
+                ),
                 NormalizedInterval.start_utc >= start,
                 NormalizedInterval.end_utc <= end,
             )
@@ -853,11 +994,14 @@ async def history(
                 NormalizedInterval,
                 NormalizedInterval.id == IntervalCostSelection.normalized_interval_id,
             )
-            .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
             .join(Device, Device.id == NormalizedInterval.device_id)
             .where(
                 NormalizedInterval.device_id.in_(device_ids),
-                RawReading.reset_generation == Device.reset_generation,
+                or_(
+                    NormalizedInterval.source_kind == "stateless_v2",
+                    RawReading.reset_generation == Device.reset_generation,
+                ),
                 NormalizedInterval.start_utc >= start,
                 NormalizedInterval.end_utc <= end,
             )
@@ -871,7 +1015,7 @@ async def history(
     bucket_count = math.ceil((end - bucket_origin).total_seconds() / bucket)
     if bucket_count > 20_000:
         raise InvalidRequest("History resolution would exceed the 20,000-point response limit")
-    buckets: dict[int, dict[str, list[tuple[NormalizedInterval, RawReading]]]] = defaultdict(
+    buckets: dict[int, dict[str, list[tuple[NormalizedInterval, RawReading | None]]]] = defaultdict(
         lambda: defaultdict(list)
     )
     for interval, raw in rows:
@@ -884,6 +1028,12 @@ async def history(
         "frequency": "frequency_mhz",
         "power_factor": "power_factor_milli",
     }.get(metric)
+    interval_field_name = {
+        "voltage": "ending_voltage_mv",
+        "current": "ending_current_ma",
+        "frequency": "average_frequency_mhz",
+        "power_factor": "average_power_factor_milli",
+    }.get(metric)
     divisors = {"voltage": 1000, "current": 1000, "frequency": 1000, "power_factor": 1000}
     all_membership_complete = True
     total_quality_seconds = Decimal(0)
@@ -894,8 +1044,7 @@ async def history(
         visible_start = max(start, bucket_start)
         visible_end = min(end, bucket_end)
         visible_seconds = max(0.0, (visible_end - visible_start).total_seconds())
-        expected_intervals = max(1, math.ceil(visible_seconds / 60))
-        expected_seconds = Decimal(expected_intervals * 60)
+        expected_seconds = Decimal(str(visible_seconds))
         by_device = buckets.get(bucket_index, {})
         device_coverage: dict[str, Decimal] = {}
         device_quality: dict[str, Decimal] = {}
@@ -925,7 +1074,11 @@ async def history(
         )
         all_membership_complete = all_membership_complete and membership_complete
         values = [item for intervals in by_device.values() for item in intervals]
-        energy_mwh = sum(interval.energy_mwh for interval, _raw in values)
+        energy_values = [
+            int(interval.energy_mwh) for interval, _raw in values if interval.energy_mwh is not None
+        ]
+        energy_mwh = sum(energy_values)
+        energy_available = bool(energy_values) and len(energy_values) == len(values)
         costs_complete = (
             (membership_complete or not aggregate)
             and bool(values)
@@ -962,20 +1115,28 @@ async def history(
                 if len(device_means) == len(device_ids):
                     value = sum(device_means, Decimal(0)) / Decimal(1_000_000)
             elif metric == "energy":
-                value = Decimal(energy_mwh) / Decimal(1_000_000)
+                value = Decimal(energy_mwh) / Decimal(1_000_000) if energy_available else None
             elif metric == "cost":
                 value = Decimal(cost_micro) / Decimal(1_000_000) if costs_complete else None
             elif not aggregate:
-                assert field_name is not None
+                assert field_name is not None and interval_field_name is not None
                 device_means = []
                 for selected_device_id in device_ids:
                     intervals = by_device[selected_device_id]
-                    if any(getattr(raw, field_name) is None for _interval, raw in intervals):
+                    metric_values = [
+                        getattr(raw, field_name)
+                        if raw is not None
+                        else getattr(interval, interval_field_name)
+                        for interval, raw in intervals
+                    ]
+                    if any(item is None for item in metric_values):
                         device_means = []
                         break
                     weighted = Decimal(0)
                     duration = Decimal(0)
-                    for interval, raw in intervals:
+                    for (interval, _raw), metric_value in zip(
+                        intervals, metric_values, strict=True
+                    ):
                         seconds = Decimal(
                             str(
                                 (
@@ -983,7 +1144,7 @@ async def history(
                                 ).total_seconds()
                             )
                         )
-                        weighted += Decimal(getattr(raw, field_name)) * seconds
+                        weighted += Decimal(int(metric_value or 0)) * seconds
                         duration += seconds
                     if duration <= 0:
                         device_means = []
@@ -1024,17 +1185,43 @@ async def history(
             prior = max(prior, interval_end)
         if end > prior:
             missing_ranges.append({"device_id": selected_device_id, "start": prior, "end": end})
-    energy_total = sum(interval.energy_mwh for interval, _raw in rows)
+    available_energy = [
+        int(interval.energy_mwh) for interval, _raw in rows if interval.energy_mwh is not None
+    ]
+    energy_total = sum(available_energy)
     all_costs_complete = bool(rows) and all(
         interval.id in cost_by_interval for interval, _raw in rows
     )
     cost_total = (
         sum(cost_by_interval[interval.id] for interval, _raw in rows) if all_costs_complete else 0
     )
+    connection_gap_rows = (
+        await session.scalars(
+            select(TelemetryEnergyEvent)
+            .where(
+                TelemetryEnergyEvent.device_id.in_(device_ids),
+                TelemetryEnergyEvent.event_type.in_(
+                    ("connection_gap_recovered", "connection_gap_unresolved")
+                ),
+                TelemetryEnergyEvent.gap_end_utc > start,
+                TelemetryEnergyEvent.gap_start_utc < end,
+            )
+            .order_by(TelemetryEnergyEvent.gap_start_utc)
+        )
+    ).all()
+    recovered_gap_energy_mwh = sum(
+        int(item.recovered_energy_mwh or 0)
+        for item in connection_gap_rows
+        if item.billing_status == "included"
+    )
     overall_complete = all_membership_complete or not aggregate
     return {
         "points": points,
-        "energy_kwh": Decimal(energy_total) / Decimal(1_000_000) if overall_complete else None,
+        "energy_kwh": (
+            Decimal(energy_total) / Decimal(1_000_000)
+            if overall_complete and available_energy
+            else None
+        ),
         "cost": (
             Decimal(cost_total) / Decimal(1_000_000)
             if all_costs_complete and overall_complete
@@ -1046,6 +1233,25 @@ async def history(
             else Decimal(0)
         ),
         "missing_ranges": missing_ranges,
+        "connection_gaps": [
+            {
+                "device_id": item.device_id,
+                "start_utc": item.gap_start_utc,
+                "end_utc": item.gap_end_utc,
+                "recovered_energy_kwh": (
+                    Decimal(item.recovered_energy_mwh) / Decimal(1_000_000)
+                    if item.recovered_energy_mwh is not None
+                    else None
+                ),
+                "status": ("recovered" if item.billing_status == "included" else "unresolved"),
+                "crosses_billing_cycle": bool(
+                    isinstance(item.evidence, dict)
+                    and item.evidence.get("crosses_billing_cycle") is True
+                ),
+            }
+            for item in connection_gap_rows
+        ],
+        "recovered_gap_energy_kwh": Decimal(recovered_gap_energy_mwh) / Decimal(1_000_000),
         "resolution_seconds": bucket,
         "timezone": "UTC",
         "usage_source": "authenticated PZEM-004T sensor intervals only",
@@ -1079,11 +1285,14 @@ async def history_csv(
     rows = (
         await session.execute(
             select(NormalizedInterval, RawReading)
-            .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
             .join(Device, Device.id == NormalizedInterval.device_id)
             .where(
                 Device.home_id == scoped_home_id,
-                RawReading.reset_generation == Device.reset_generation,
+                or_(
+                    NormalizedInterval.source_kind == "stateless_v2",
+                    RawReading.reset_generation == Device.reset_generation,
+                ),
                 NormalizedInterval.start_utc >= from_utc.astimezone(UTC),
                 NormalizedInterval.end_utc <= to_utc.astimezone(UTC),
             )
@@ -1099,12 +1308,20 @@ async def history_csv(
         writer.writerow(
             (
                 interval.device_id,
-                raw.sequence,
+                raw.sequence if raw is not None else "",
                 interval.start_utc.isoformat(),
                 interval.end_utc.isoformat(),
-                str(Decimal(interval.energy_mwh) / Decimal(1_000_000)),
+                (
+                    str(Decimal(interval.energy_mwh) / Decimal(1_000_000))
+                    if interval.energy_mwh is not None
+                    else ""
+                ),
                 str(interval.completeness),
-                "authenticated_pzem",
+                (
+                    "authenticated_pzem_stateless"
+                    if interval.source_kind == "stateless_v2"
+                    else "authenticated_pzem_legacy"
+                ),
             )
         )
     return Response(
@@ -1146,6 +1363,12 @@ async def list_devices(
         ).all()
         heartbeat = heartbeats[0] if heartbeats else None
         prior_heartbeat = heartbeats[1] if len(heartbeats) > 1 else None
+        telemetry_state = await session.get(DeviceTelemetryState, device.id)
+        latest_sample = (
+            await session.get(StatelessTelemetrySample, telemetry_state.latest_sample_id)
+            if telemetry_state is not None
+            else None
+        )
         last_command = await session.scalar(
             select(DeviceCommand)
             .where(DeviceCommand.device_id == device.id)
@@ -1171,7 +1394,7 @@ async def list_devices(
             .order_by(DeviceCredential.key_version.desc())
         )
         queue_drain_rate = None
-        if heartbeat is not None and prior_heartbeat is not None:
+        if telemetry_state is None and heartbeat is not None and prior_heartbeat is not None:
             elapsed_minutes = (
                 aware_utc(heartbeat.received_at) - aware_utc(prior_heartbeat.received_at)
             ).total_seconds() / 60
@@ -1180,7 +1403,11 @@ async def list_devices(
                     str(elapsed_minutes)
                 )
         missing_prefix_status = "unavailable"
-        if heartbeat is not None and heartbeat.oldest_sequence is not None:
+        if (
+            telemetry_state is None
+            and heartbeat is not None
+            and heartbeat.oldest_sequence is not None
+        ):
             missing_prefix_status = (
                 "detected" if device.contiguous_ack + 1 < heartbeat.oldest_sequence else "none"
             )
@@ -1190,7 +1417,7 @@ async def list_devices(
                 for flag in heartbeat.health_flags
                 if flag.startswith(("BACKLOG_", "MISSING_PREFIX_", "SYNC_"))
             ]
-            if heartbeat is not None
+            if telemetry_state is None and heartbeat is not None
             else []
         )
         result.append(
@@ -1224,32 +1451,102 @@ async def list_devices(
                 if rotation
                 else None,
                 "firmware_version": device.firmware_version,
-                "protocol": device.protocol_id,
+                "firmware_build_id": telemetry_state.firmware_build_id if telemetry_state else None,
+                "protocol": telemetry_state.telemetry_protocol
+                if telemetry_state
+                else device.protocol_id,
                 "pzem_variant": device.pzem_variant,
                 "ct_rating_a": device.ct_rating_a,
                 "measurement_scope": device.measurement_scope,
-                "heartbeat_at": heartbeat.received_at if heartbeat else None,
-                "wifi_rssi": heartbeat.wifi_rssi if heartbeat else None,
+                "heartbeat_at": (
+                    telemetry_state.latest_server_received_at
+                    if telemetry_state
+                    else heartbeat.received_at
+                    if heartbeat
+                    else None
+                ),
+                "wifi_rssi": latest_sample.wifi_rssi
+                if latest_sample
+                else heartbeat.wifi_rssi
+                if heartbeat
+                else None,
                 "ip_address": heartbeat.ip_address if heartbeat else None,
                 "pzem_status": (
                     "monitoring_disabled"
                     if not device.monitoring_enabled
+                    else latest_sample.pzem_status
+                    if latest_sample
                     else heartbeat.pzem_status
                     if heartbeat
                     else "unavailable"
                 ),
-                "storage_status": heartbeat.storage_status if heartbeat else "unavailable",
-                "storage_bytes_total": heartbeat.storage_bytes_total if heartbeat else None,
-                "storage_bytes_free": heartbeat.storage_bytes_free if heartbeat else None,
-                "oldest_sequence": heartbeat.oldest_sequence if heartbeat else None,
-                "newest_sequence": heartbeat.newest_sequence if heartbeat else None,
-                "acknowledgement": device.contiguous_ack,
-                "backlog": heartbeat.backlog if heartbeat else None,
+                "storage_status": "not_applicable_stateless"
+                if telemetry_state
+                else heartbeat.storage_status
+                if heartbeat
+                else "unavailable",
+                "storage_bytes_total": None
+                if telemetry_state
+                else heartbeat.storage_bytes_total
+                if heartbeat
+                else None,
+                "storage_bytes_free": None
+                if telemetry_state
+                else heartbeat.storage_bytes_free
+                if heartbeat
+                else None,
+                "oldest_sequence": None
+                if telemetry_state
+                else heartbeat.oldest_sequence
+                if heartbeat
+                else None,
+                "newest_sequence": latest_sample.sample_sequence
+                if latest_sample
+                else heartbeat.newest_sequence
+                if heartbeat
+                else None,
+                "acknowledgement": None if telemetry_state else device.contiguous_ack,
+                "backlog": None if telemetry_state else heartbeat.backlog if heartbeat else None,
                 "synchronization": {
-                    "server_contiguous_acknowledgement": device.contiguous_ack,
-                    "earliest_sd_sequence": heartbeat.oldest_sequence if heartbeat else None,
-                    "latest_sd_sequence": heartbeat.newest_sequence if heartbeat else None,
-                    "queued_records": heartbeat.backlog if heartbeat else None,
+                    "mode": "stateless_delivery" if telemetry_state else "legacy_backlog",
+                    "server_delivery_status": (
+                        "accepted"
+                        if telemetry_state
+                        and (
+                            datetime.now(UTC) - aware_utc(telemetry_state.latest_server_received_at)
+                        ).total_seconds()
+                        <= 30
+                        else "delayed"
+                        if telemetry_state
+                        else "legacy_backlog_protocol"
+                    ),
+                    "last_server_received_at": telemetry_state.latest_server_received_at
+                    if telemetry_state
+                    else None,
+                    "last_sensor_sampled_at": telemetry_state.latest_sensor_sampled_at
+                    if telemetry_state
+                    else None,
+                    "sensor_time_trusted": telemetry_state.sensor_time_trusted
+                    if telemetry_state
+                    else None,
+                    "server_contiguous_acknowledgement": (
+                        None if telemetry_state else device.contiguous_ack
+                    ),
+                    "earliest_sd_sequence": None
+                    if telemetry_state
+                    else heartbeat.oldest_sequence
+                    if heartbeat
+                    else None,
+                    "latest_sd_sequence": None
+                    if telemetry_state
+                    else heartbeat.newest_sequence
+                    if heartbeat
+                    else None,
+                    "queued_records": None
+                    if telemetry_state
+                    else heartbeat.backlog
+                    if heartbeat
+                    else None,
                     "last_attempted_batch_start": None,
                     "last_attempted_batch_end": None,
                     "last_batch_start": None,
@@ -1258,8 +1555,12 @@ async def list_devices(
                     "measured_serialized_bytes": None,
                     "serialized_bytes": None,
                     "http_result": None,
-                    "last_accepted_sequence": device.contiguous_ack,
-                    "missing_prefix_status": missing_prefix_status,
+                    "last_accepted_sequence": latest_sample.sample_sequence
+                    if latest_sample
+                    else device.contiguous_ack,
+                    "missing_prefix_status": "not_applicable_stateless"
+                    if telemetry_state
+                    else missing_prefix_status,
                     "last_synchronization_error": synchronization_errors[0]
                     if synchronization_errors
                     else None,
@@ -1267,14 +1568,28 @@ async def list_devices(
                     "queue_drain_rate_per_minute": queue_drain_rate,
                     "queue_drain_rate": queue_drain_rate,
                     "unavailable_fields_reason": (
-                        "not reported by pm-protocol/1.0.0"
+                        "stateless telemetry has no sensor queue or acknowledgement"
+                        if telemetry_state is not None
+                        else "not reported by pm-protocol/1.0.0"
                         if heartbeat is not None
                         else "no authenticated heartbeat"
                     ),
                 },
-                "free_internal_heap": heartbeat.free_internal_heap if heartbeat else None,
-                "largest_internal_block": heartbeat.largest_internal_block if heartbeat else None,
-                "last_reboot_reason": heartbeat.reboot_reason if heartbeat else None,
+                "free_internal_heap": None
+                if telemetry_state
+                else heartbeat.free_internal_heap
+                if heartbeat
+                else None,
+                "largest_internal_block": None
+                if telemetry_state
+                else heartbeat.largest_internal_block
+                if heartbeat
+                else None,
+                "last_reboot_reason": None
+                if telemetry_state
+                else heartbeat.reboot_reason
+                if heartbeat
+                else None,
                 "last_command": {
                     "id": last_command.id,
                     "type": last_command.command_type,

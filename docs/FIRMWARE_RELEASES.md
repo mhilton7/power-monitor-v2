@@ -1,6 +1,9 @@
 # Firmware releases
 
-Firmware is built and released from the independent `power-monitor-sensor-headless` repository, not from this server repository. Compatibility is coordinated through `pm-protocol/1.0.0`, project/target/board/config/storage versions, and cross-linked release manifests.
+Firmware is built and released from the independent
+`power-monitor-sensor-headless` repository. Compatibility is coordinated
+through `pm-protocol/1.0.0`, the additive `pm-telemetry/2.0.0` contract,
+project/target/board/config versions, and cross-linked release manifests.
 
 The server stores immutable firmware release metadata: semantic version/build, project, target chip, board profile, minimum boot/config/protocol versions, image size/SHA-256, release notes, signed provenance/SBOM/checksums, hardware-certification status, and source release URL. It never treats a filename or version string as sufficient evidence.
 
@@ -10,11 +13,18 @@ For staged rollouts, target order is preserved. Exactly one sensor is queued at 
 
 An administrator with `firmware.manage` selects compatible devices or a staged rollout. Each device receives a per-device signed/HMAC-authenticated manifest through its outbound heartbeat, downloads through authenticated HTTPS with bounded resume/restart, writes only the inactive OTA slot, verifies all compatibility metadata and SHA-256, reads back boot selection, and reboots. The server completes deployment only after a healthy version heartbeat and subsequent reading evidence.
 
-Interrupted/partial/hash-mismatched/incompatible images never boot. Post-boot validation checks project/target/config/scheduler/watchdog while allowing temporary server, Wi-Fi, PZEM, SD, or SCE unavailability. Boot-loop/crash evidence triggers rollback and reports the original deployment/command ID.
+Interrupted, partial, hash-mismatched, or incompatible images never boot.
+Post-boot validation checks project, target, configuration, scheduler, watchdog,
+and stateless telemetry runtime while allowing temporary server, Wi-Fi, PZEM,
+or SCE unavailability. Boot-loop/crash evidence triggers rollback and reports
+the original deployment/command ID.
 
 Required firmware release assets include firmware/merged-flash/bootloader/partition/ELF/map binaries, flash arguments, manifest, SHA256SUMS, SBOM, provenance, memory/stack/test reports, release/migration notes, hardware certification, and PowerShell flash/provision tools. The server rejects a purported production release without required metadata.
 
-Until machine-readable results from the actual marked ESP32-S3/PZEM/SD unit pass the hardware-in-loop suite and 72-hour soak, firmware and coordinated server releases remain prerelease candidates. Simulation is not physical certification.
+Until machine-readable results from the actual marked ESP32-S3/PZEM unit pass
+the hardware-in-loop suite and 72-hour soak, firmware and coordinated server
+releases remain prerelease candidates. Simulation is not physical
+certification.
 
 ## Historical published v0.1.0-rc.1 evidence
 
@@ -88,12 +98,16 @@ trusted-time synchronization without changing measurement cadence, and binds
 the public server rc.13 contract. Firmware rc.14 and rc.15 remain immutable
 historical releases and must not be moved, rewritten, or relabeled.
 
-Coordinated firmware rc.16 must name server `v0.1.0-rc.16`, retain
-`pm-protocol/1.0.0`, and declare generated OpenAPI SHA-256
-`8c6d3d73f7bfaa4bd34b4451c860b4199426e556cba1f6f9a48374ea22049c24`.
-Its metadata binding and artifacts must be created, signed, published, and
-independently verified before the server rc.16 tag is created. This server
-identity preparation does not itself publish or mutate the firmware repository.
+Public firmware/server rc.16 remain immutable historical installation
+evidence. Coordinated firmware rc.17 must name server `v0.1.0-rc.17`, retain
+`pm-protocol/1.0.0`, declare `pm-telemetry/2.0.0`, and bind generated OpenAPI
+SHA-256
+`c2aaa98fc0d31402eac7bd38495838ce830cd21242bc1b32a2929ed7da712e41`.
+RC17 firmware removes the microSD journal and active backlog protocol from the
+runtime, keeps only one in-flight and one newest pending sample in RAM, and
+preserves existing NVS identity/configuration through the schema-v1 layout.
+Its build number is 20. Its metadata and artifacts must be created, signed,
+published, and independently verified before the server rc.17 tag is created.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

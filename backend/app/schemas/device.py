@@ -198,6 +198,52 @@ class CommandResult(BaseModel):
     evidence: dict[str, str | int | bool | None] = Field(default_factory=dict)
 
 
+class StatelessTelemetryRequest(BaseModel):
+    """One independently acceptable, latest-value telemetry sample."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    telemetry_protocol: Literal["pm-telemetry/2.0.0"]
+    sensor_id: str = Field(min_length=36, max_length=36)
+    boot_id: str = Field(min_length=36, max_length=36)
+    sample_sequence: int = Field(gt=0)
+    sampled_at: datetime | None
+    uptime_ms: int = Field(ge=0)
+    voltage_v: StrictDecimal | None = Field(default=None, ge=0, le=300)
+    current_a: StrictDecimal | None = Field(default=None, ge=0, le=1000)
+    active_power_w: StrictDecimal | None = Field(default=None, ge=0, le=300_000)
+    frequency_hz: StrictDecimal | None = Field(default=None, ge=40, le=70)
+    power_factor: StrictDecimal | None = Field(default=None, ge=0, le=1)
+    pzem_energy_wh: int | None = Field(default=None, ge=0)
+    pzem_status: Literal[
+        "ok", "timeout", "bad_crc", "short_frame", "wrong_address", "invalid", "absent"
+    ]
+    firmware_version: str = Field(min_length=1, max_length=80)
+    firmware_build_id: str = Field(min_length=1, max_length=128)
+    time_status: Literal["trusted", "untrusted", "stepped", "disputed"]
+    wifi_rssi: int | None = Field(default=None, ge=-127, le=0)
+    command_results: list[CommandResult] = Field(default_factory=list, max_length=16)
+
+    @model_validator(mode="after")
+    def coherent_sample(self) -> StatelessTelemetryRequest:
+        if self.sampled_at is not None and self.sampled_at.utcoffset() is None:
+            raise ValueError("sample timestamp must include a UTC offset")
+        electrical = (
+            self.voltage_v,
+            self.current_a,
+            self.active_power_w,
+            self.frequency_hz,
+            self.power_factor,
+        )
+        if self.pzem_status == "ok" and any(value is None for value in electrical):
+            raise ValueError("an ok PZEM sample requires all instantaneous electrical values")
+        if self.pzem_status != "ok" and (
+            any(value is not None for value in electrical) or self.pzem_energy_wh is not None
+        ):
+            raise ValueError("invalid PZEM samples must not carry electrical values")
+        return self
+
+
 class CommandEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -221,4 +267,30 @@ class DeviceResponse(BaseModel):
     commands: list[CommandEnvelope]
 
 
+class StatelessTelemetrySampleIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sensor_id: str
+    boot_id: str
+    sample_sequence: int = Field(gt=0)
+
+
+class StatelessTelemetryConfiguration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(gt=0)
+    telemetry_interval_seconds: Literal[2, 5, 10, 15, 30, 60]
+
+
+class StatelessTelemetryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    protocol_id: Literal["pm-protocol/1.0.0"] = "pm-protocol/1.0.0"
+    telemetry_protocol: Literal["pm-telemetry/2.0.0"] = "pm-telemetry/2.0.0"
+    status: Literal["accepted", "duplicate"]
+    server_received_at: datetime
+    sample: StatelessTelemetrySampleIdentity
+    timestamp_source: Literal["sensor", "server"]
+    configuration: StatelessTelemetryConfiguration
+    commands: list[CommandEnvelope]
+
+
 HeartbeatRequest.model_rebuild()
+StatelessTelemetryRequest.model_rebuild()

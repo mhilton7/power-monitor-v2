@@ -25,6 +25,7 @@ from backend.app.models import (
     DeviceEvent,
     DeviceHeartbeat,
     DeviceNonce,
+    DeviceTelemetryState,
     FirmwareDeployment,
     FirmwareRelease,
     Home,
@@ -41,6 +42,7 @@ from backend.app.models import (
     RateSyncRun,
     RawReading,
     Rollup,
+    StatelessTelemetrySample,
     UtilityAccount,
     aware_utc,
 )
@@ -53,6 +55,10 @@ from backend.app.services.cost_engine import (
     price_sensor_interval,
 )
 from backend.app.services.rate_sync import sync_due_rate_sources
+from backend.app.services.stateless_telemetry import (
+    apply_stateless_history_retention,
+    finalize_stateless_history,
+)
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -186,6 +192,7 @@ async def _rate_for_interval(
             select(Circuit).where(
                 Circuit.home_id == account.home_id,
                 Circuit.is_home_total.is_(True),
+                Circuit.is_billing_source.is_(True),
                 Circuit.aggregate_mode == "verified_sum",
                 Circuit.non_overlapping_confirmed.is_(True),
             )
@@ -274,6 +281,7 @@ async def _billing_scope_groups(
             select(Circuit).where(
                 Circuit.home_id == account.home_id,
                 Circuit.is_home_total.is_(True),
+                Circuit.is_billing_source.is_(True),
                 Circuit.aggregate_mode == "verified_sum",
                 Circuit.non_overlapping_confirmed.is_(True),
             )
@@ -360,11 +368,14 @@ async def _cost_context(
     prior_mwh = int(
         await session.scalar(
             select(func.sum(NormalizedInterval.energy_mwh))
-            .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
             .join(Device, Device.id == NormalizedInterval.device_id)
             .where(
                 NormalizedInterval.device_id.in_(member_ids),
-                RawReading.reset_generation == Device.reset_generation,
+                or_(
+                    NormalizedInterval.source_kind == "stateless_v2",
+                    RawReading.reset_generation == Device.reset_generation,
+                ),
                 NormalizedInterval.start_utc >= cycle_start,
                 NormalizedInterval.end_utc <= interval.start_utc,
                 NormalizedInterval.source_authenticated.is_(True),
@@ -404,10 +415,15 @@ async def calculate_pending_costs(session: AsyncSession, limit: int = 1000) -> i
     intervals = (
         await session.scalars(
             select(NormalizedInterval)
-            .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
             .join(Device, Device.id == NormalizedInterval.device_id)
             .where(
-                RawReading.reset_generation == Device.reset_generation,
+                or_(
+                    NormalizedInterval.source_kind == "stateless_v2",
+                    RawReading.reset_generation == Device.reset_generation,
+                ),
+                NormalizedInterval.finalized.is_(True),
+                NormalizedInterval.energy_mwh.is_not(None),
                 ~select(IntervalCostSelection.normalized_interval_id)
                 .where(IntervalCostSelection.normalized_interval_id == NormalizedInterval.id)
                 .exists(),
@@ -431,11 +447,16 @@ async def calculate_pending_costs(session: AsyncSession, limit: int = 1000) -> i
                 (
                     await session.scalars(
                         select(NormalizedInterval)
-                        .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+                        .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
                         .join(Device, Device.id == NormalizedInterval.device_id)
                         .where(
                             NormalizedInterval.device_id.in_(member_ids),
-                            RawReading.reset_generation == Device.reset_generation,
+                            or_(
+                                NormalizedInterval.source_kind == "stateless_v2",
+                                RawReading.reset_generation == Device.reset_generation,
+                            ),
+                            NormalizedInterval.finalized.is_(True),
+                            NormalizedInterval.energy_mwh.is_not(None),
                             NormalizedInterval.start_utc == interval.start_utc,
                             NormalizedInterval.end_utc == interval.end_utc,
                             NormalizedInterval.source_authenticated.is_(True),
@@ -461,7 +482,7 @@ async def calculate_pending_costs(session: AsyncSession, limit: int = 1000) -> i
             if already_selected:
                 continue
         context = await _cost_context(session, interval, account, rate, member_ids, effective_scope)
-        combined_energy = sum(item.energy_mwh for item in group)
+        combined_energy = sum(int(item.energy_mwh or 0) for item in group)
         result = price_sensor_interval(
             start_utc=aware_utc(interval.start_utc),
             end_utc=aware_utc(interval.end_utc),
@@ -479,7 +500,7 @@ async def calculate_pending_costs(session: AsyncSession, limit: int = 1000) -> i
         )
         session.add(run)
         await session.flush()
-        weights = [item.energy_mwh for item in group]
+        weights = [int(item.energy_mwh or 0) for item in group]
         costs = _allocate_integer_total(result.energy_cost_microdollars, weights)
         credits = _allocate_integer_total(result.credit_microdollars, weights)
         period_name = ",".join(dict.fromkeys(item.period_name for item in result.slices))
@@ -488,7 +509,7 @@ async def calculate_pending_costs(session: AsyncSession, limit: int = 1000) -> i
                 normalized_interval_id=member.id,
                 cost_run_id=run.id,
                 rate_plan_version_id=rate.id,
-                energy_mwh=member.energy_mwh,
+                energy_mwh=int(member.energy_mwh or 0),
                 energy_cost_microdollars=costs[index],
                 credit_microdollars=credits[index],
                 period_name=period_name,
@@ -591,7 +612,7 @@ async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | 
             cost_rows = (
                 await session.execute(
                     select(NormalizedInterval, IntervalCost)
-                    .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+                    .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
                     .join(Device, Device.id == NormalizedInterval.device_id)
                     .join(
                         IntervalCostSelection,
@@ -603,14 +624,19 @@ async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | 
                     )
                     .where(
                         NormalizedInterval.device_id.in_(member_ids),
-                        RawReading.reset_generation == Device.reset_generation,
+                        or_(
+                            NormalizedInterval.source_kind == "stateless_v2",
+                            RawReading.reset_generation == Device.reset_generation,
+                        ),
+                        NormalizedInterval.finalized.is_(True),
+                        NormalizedInterval.energy_mwh.is_not(None),
                         NormalizedInterval.start_utc >= cycle_start,
                         NormalizedInterval.end_utc <= scope_end,
                     )
                     .order_by(NormalizedInterval.start_utc, NormalizedInterval.device_id)
                 )
             ).all()
-            energy_mwh = sum(interval.energy_mwh for interval, _cost in cost_rows)
+            energy_mwh = sum(int(interval.energy_mwh or 0) for interval, _cost in cost_rows)
             energy_cost = sum(cost.energy_cost_microdollars for _interval, cost in cost_rows)
             credits = sum(cost.credit_microdollars for _interval, cost in cost_rows)
             expected = max(
@@ -708,11 +734,16 @@ async def update_rollups(session: AsyncSession) -> int:
     rows = (
         await session.scalars(
             select(NormalizedInterval)
-            .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
             .join(Device, Device.id == NormalizedInterval.device_id)
             .where(
                 NormalizedInterval.start_utc >= since,
-                RawReading.reset_generation == Device.reset_generation,
+                or_(
+                    NormalizedInterval.source_kind == "stateless_v2",
+                    RawReading.reset_generation == Device.reset_generation,
+                ),
+                NormalizedInterval.finalized.is_(True),
+                NormalizedInterval.energy_mwh.is_not(None),
             )
         )
     ).all()
@@ -738,7 +769,7 @@ async def update_rollups(session: AsyncSession) -> int:
                 Rollup.start_utc == start,
             )
         )
-        energy = sum(value.energy_mwh for value in values)
+        energy = sum(int(value.energy_mwh or 0) for value in values)
         completeness = sum((value.completeness for value in values), Decimal("0")) / Decimal(60)
         if existing is None:
             session.add(
@@ -921,24 +952,44 @@ async def _apply_alert_observation(
 def _heartbeat_observations(
     device: Device,
     heartbeat: DeviceHeartbeat | None,
+    telemetry_state: DeviceTelemetryState | None,
+    telemetry_sample: StatelessTelemetrySample | None,
     deployment: FirmwareDeployment | None,
     recent_event_codes: set[str],
     now: datetime,
 ) -> dict[str, AlertObservation]:
+    stateless = telemetry_state is not None and telemetry_sample is not None
     age_seconds = (
-        (now - aware_utc(heartbeat.received_at)).total_seconds()
+        (now - aware_utc(telemetry_state.latest_server_received_at)).total_seconds()
+        if stateless and telemetry_state is not None
+        else (now - aware_utc(heartbeat.received_at)).total_seconds()
         if heartbeat is not None
         else (now - aware_utc(device.created_at)).total_seconds()
     )
-    fresh = heartbeat is not None and age_seconds <= 30
+    fresh = (stateless or heartbeat is not None) and age_seconds <= 30
     heartbeat_key = (
-        heartbeat.id if heartbeat is not None else f"missing:{int(now.timestamp()) // 15}"
+        telemetry_sample.id
+        if stateless and telemetry_sample is not None
+        else heartbeat.id
+        if heartbeat is not None
+        else f"missing:{int(now.timestamp()) // 15}"
     )
-    flags = {str(flag).strip().lower() for flag in (heartbeat.health_flags if heartbeat else [])}
+    flags = {
+        str(flag).strip().lower()
+        for flag in (heartbeat.health_flags if heartbeat and not stateless else [])
+    }
     heartbeat_evidence: dict[str, Any] = {
-        "heartbeat_id": heartbeat.id if heartbeat else None,
-        "heartbeat_at": aware_utc(heartbeat.received_at).isoformat() if heartbeat else None,
+        "heartbeat_id": heartbeat.id if heartbeat and not stateless else None,
+        "telemetry_sample_id": telemetry_sample.id if stateless and telemetry_sample else None,
+        "heartbeat_at": (
+            aware_utc(telemetry_state.latest_server_received_at).isoformat()
+            if stateless and telemetry_state is not None
+            else aware_utc(heartbeat.received_at).isoformat()
+            if heartbeat
+            else None
+        ),
         "heartbeat_age_seconds": round(age_seconds, 3),
+        "telemetry_protocol": "pm-telemetry/2.0.0" if stateless else "legacy",
     }
 
     tls_active = bool(
@@ -962,7 +1013,21 @@ def _heartbeat_observations(
             or recent_event_codes & {"WIFI_REPEATED_FAILURE", "WIFI_ASSOCIATION_FAILED"}
         )
     )
-    storage = heartbeat.storage_status if heartbeat is not None else None
+    storage = heartbeat.storage_status if heartbeat is not None and not stateless else None
+    pzem_status = (
+        telemetry_sample.pzem_status
+        if stateless and telemetry_sample is not None
+        else heartbeat.pzem_status
+        if heartbeat is not None
+        else None
+    )
+    time_status = (
+        telemetry_sample.time_status
+        if stateless and telemetry_sample is not None
+        else heartbeat.time_status
+        if heartbeat is not None
+        else None
+    )
 
     def fresh_observation(*, active: bool, evidence: dict[str, Any]) -> AlertObservation:
         return AlertObservation(
@@ -990,34 +1055,40 @@ def _heartbeat_observations(
             observation_key=f"age:{int(now.timestamp()) // 15}",
         ),
         "reading_backlog": fresh_observation(
-            active=bool(fresh and heartbeat and heartbeat.backlog >= 10),
-            evidence={**heartbeat_evidence, "backlog": heartbeat.backlog if heartbeat else None},
-        ),
-        "pzem_unavailable": fresh_observation(
-            active=bool(fresh and heartbeat and heartbeat.pzem_status != "ok"),
+            active=bool(not stateless and fresh and heartbeat and heartbeat.backlog >= 10),
             evidence={
                 **heartbeat_evidence,
-                "pzem_status": heartbeat.pzem_status if heartbeat else None,
+                "backlog": heartbeat.backlog if heartbeat and not stateless else None,
+                "legacy_only": True,
+            },
+        ),
+        "pzem_unavailable": fresh_observation(
+            active=bool(fresh and pzem_status != "ok"),
+            evidence={
+                **heartbeat_evidence,
+                "pzem_status": pzem_status,
             },
         ),
         "microsd_missing": fresh_observation(
-            active=bool(fresh and storage == "missing"),
+            active=bool(not stateless and fresh and storage == "missing"),
             evidence={**heartbeat_evidence, "storage_status": storage},
         ),
         "microsd_read_only": fresh_observation(
-            active=bool(fresh and storage == "read_only"),
+            active=bool(not stateless and fresh and storage == "read_only"),
             evidence={**heartbeat_evidence, "storage_status": storage},
         ),
         "microsd_nearly_full": fresh_observation(
             active=bool(
-                fresh
+                not stateless
+                and fresh
                 and (storage == "full" or flags & {"microsd_nearly_full", "storage_nearly_full"})
             ),
             evidence={**heartbeat_evidence, "storage_status": storage},
         ),
         "microsd_corrupt_segment": fresh_observation(
             active=bool(
-                fresh
+                not stateless
+                and fresh
                 and (
                     storage == "corrupt"
                     or flags & {"microsd_corrupt_segment", "storage_segment_corrupt"}
@@ -1027,10 +1098,10 @@ def _heartbeat_observations(
             evidence={**heartbeat_evidence, "storage_status": storage},
         ),
         "time_untrusted": fresh_observation(
-            active=bool(fresh and heartbeat and heartbeat.time_status != "trusted"),
+            active=bool(fresh and time_status != "trusted"),
             evidence={
                 **heartbeat_evidence,
-                "time_status": heartbeat.time_status if heartbeat else None,
+                "time_status": time_status,
             },
         ),
         "tls_validation_failure": fresh_observation(
@@ -1063,6 +1134,12 @@ async def evaluate_sensor_alerts(session: AsyncSession, now: datetime | None = N
     devices = (await session.scalars(select(Device).where(Device.revoked_at.is_(None)))).all()
     changed = 0
     for device in devices:
+        telemetry_state = await session.get(DeviceTelemetryState, device.id)
+        telemetry_sample = (
+            await session.get(StatelessTelemetrySample, telemetry_state.latest_sample_id)
+            if telemetry_state is not None
+            else None
+        )
         heartbeat = await session.scalar(
             select(DeviceHeartbeat)
             .where(DeviceHeartbeat.device_id == device.id)
@@ -1086,7 +1163,13 @@ async def evaluate_sensor_alerts(session: AsyncSession, now: datetime | None = N
             ).all()
         )
         observations = _heartbeat_observations(
-            device, heartbeat, deployment, recent_events, evaluated_at
+            device,
+            heartbeat,
+            telemetry_state,
+            telemetry_sample,
+            deployment,
+            recent_events,
+            evaluated_at,
         )
         for alert_type, observation in observations.items():
             changed += await _apply_alert_observation(
@@ -1334,11 +1417,13 @@ async def run_jobs(
     if not await acquire_worker_lease(session):
         return {"lease_busy": 1}
     rate_sync = await sync_due_rate_sources(session, settings or get_settings())
+    stateless_finalized = await finalize_stateless_history(session)
     result = {
         "rate_sources_checked": rate_sync["checked"],
         "rate_sources_failed": rate_sync["failed"],
         "rate_sources_review_required": rate_sync["review_required"],
         "rate_sources_unchanged": rate_sync["unchanged"],
+        "stateless_history_finalized": stateless_finalized,
         "costs": await calculate_pending_costs(session),
         "billing_estimates": await calculate_billing_estimates(session),
         "rollups": await update_rollups(session),
@@ -1351,6 +1436,7 @@ async def run_jobs(
         "prepare_tokens_expired": await expire_prepare_tokens(session),
         "nonces_removed": await cleanup_nonces(session),
     }
+    result["stateless_history_retained_cleanup"] = await apply_stateless_history_retention(session)
     home_ids = (await session.scalars(select(Home.id))).all()
     for home_id in home_ids:
         session.add(

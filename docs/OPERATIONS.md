@@ -31,11 +31,10 @@ Review structured logs by typed event and correlation ID. Normal retention is 90
 
 | Alert | Verify | Safe response |
 |---|---|---|
-| Sensor offline/heartbeat delayed | last signed receipt, Wi-Fi reason, TLS/DNS evidence | restore LAN/DNS/TLS; do not erase or reboot-loop; microSD should backfill |
-| Reading backlog | oldest/newest/ack/gaps and heartbeat cadence | fix reachability/capacity; preserve unsynchronized data; request `sync_now` only after health |
+| Sensor offline/telemetry delayed | last signed receipt, Wi-Fi reason, TLS/DNS evidence | restore LAN/DNS/TLS; do not erase NVS or reboot-loop; later stateless samples resume independently |
+| Telemetry delivery failed | latest accepted sample, boot ID/sequence, HTTP result, bounded Wi-Fi/server retry | repair reachability; do not invent or backfill readings; confirm a newer sample is accepted and the outage remains a History gap |
 | PZEM unavailable | typed CRC/timeout/range evidence | arrange de-energized qualified inspection; never substitute bill or fabricated data |
-| SD missing/read-only/full/corrupt | card UUID, valid ranges, unacknowledged count | run diagnostics; reclaim only acknowledged segments; format only explicit prepare/commit after loss review |
-| Time untrusted | persisted checkpoint, SNTP/server disagreement | correct time/DNS; preserve untrusted sequences as diagnostics, never invent UTC History |
+| Time untrusted | sensor/server disagreement and timestamp-source evidence | correct time/DNS; server receipt time may place accepted samples, but never invent sensor UTC |
 | TLS validation failure | chain, SAN, time, CA fingerprint | repair DNS/certificate/time; never disable chain or hostname verification |
 | OTA failed/rolled back | manifest/version/hash/stage/boot evidence | keep previous valid image; stop rollout; preserve command/deployment ID |
 | Rate source changed/sync failed | source hash/validators/parser/diff | manual review; do not guess/auto-overwrite immutable versions |
@@ -56,10 +55,16 @@ publish directly. The normal 168-hour schedule resumes from the recorded attempt
 
 - Before upgrade: verified backup plus isolated restore, release/attestation validation, V2 ZFS snapshots, previous digests, protocol/firmware compatibility.
 - After upgrade/restart: migrations, all health checks, authentication, signed heartbeat/SSE, committed History, duplicate idempotency, cost fixture, commands, backup/restore.
-- Capacity: alert before database/log/backup/rate/firmware datasets fill. Never delete unacknowledged sensor records or the only good backup.
+- Capacity: alert before database/log/backup/rate/firmware datasets fill. Sensor
+  firmware has no persistent telemetry queue; never delete immutable server
+  evidence or the only good backup.
 - Certificates: renew before expiry, preserve hostname/SAN and CA distribution, validate devices in a staged cohort.
 - Keys: rotate through documented overlap; retain old backup keys until archives expire; revoke compromised device/session credentials immediately.
 
 ## Recovery principles
 
-Never overwrite the only production database, force a sequence/ack backward, copy legacy application code/data wholesale, import bill usage, disable security verification, or erase a sensor to solve ordinary network failure. Restore into an isolated target and cut over only after evidence. See `deploy/truenas/ROLLBACK.md` and `docs/BACKUPS_AND_RESTORE.md`.
+Never overwrite the only production database, rewrite accepted telemetry, copy
+legacy application code/data wholesale, import bill usage, disable security
+verification, or erase sensor NVS to solve ordinary network failure. Restore
+into an isolated target and cut over only after evidence. See
+`deploy/truenas/ROLLBACK.md` and `docs/BACKUPS_AND_RESTORE.md`.

@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,12 +20,15 @@ from ..constants import MAX_PDF_BYTES
 from ..db import get_session
 from ..errors import BillRateImportError, InvalidRequest, NotFound, RateWorkflowConflict
 from ..models import (
+    Alert,
     AuditEvent,
+    BillingCycleAdjustment,
     BillingEstimate,
     BillingEstimateSelection,
     Circuit,
     Device,
     DeviceHeartbeat,
+    DeviceTelemetryState,
     IntervalCostSelection,
     NormalizedInterval,
     RateAssignment,
@@ -38,6 +41,7 @@ from ..models import (
     RateSourceRevision,
     RateSyncRun,
     RawReading,
+    TelemetryEnergyEvent,
     UtilityAccount,
     UtilityBillRateCorrection,
     UtilityBillRateExtraction,
@@ -45,6 +49,7 @@ from ..models import (
     user_home_scopes,
 )
 from ..schemas.api import (
+    BillingCycleAdjustmentRequest,
     ManualRateCandidateRequest,
     RateCandidateActivationRequest,
     RateCandidateReviewRequest,
@@ -68,6 +73,7 @@ from ..services.rate_workflow import (
     review_rate_candidate,
     safe_review,
 )
+from ..services.tiered_billing import billing_projection, tiered_cost
 
 router = APIRouter(prefix="/api/v1", tags=["billing"])
 # Compatibility seam for existing API tests that replace the parser with a sanitized
@@ -768,6 +774,85 @@ async def delete_bill_rate_import(
     await session.commit()
 
 
+@router.post("/billing/cycle-adjustments", status_code=201)
+async def create_billing_cycle_adjustment(
+    payload: BillingCycleAdjustmentRequest,
+    request: Request,
+    home_id: str | None = None,
+    user: CurrentUser = Depends(require_permission("billing.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    scoped_home_id = await _resolve_user_home(session, user.id, home_id)
+    account = await session.scalar(
+        select(UtilityAccount)
+        .where(
+            UtilityAccount.id == payload.utility_account_id,
+            UtilityAccount.home_id == scoped_home_id,
+        )
+        .with_for_update()
+    )
+    if account is None:
+        raise NotFound("utility account does not exist")
+    now = datetime.now(UTC)
+    cycle_start, _cycle_end = _current_billing_cycle_bounds(account, now)
+    if payload.cycle_start_utc.astimezone(UTC) != cycle_start:
+        raise InvalidRequest("cycle adjustment must target the current billing cycle start")
+    through_utc = payload.through_utc.astimezone(UTC)
+    if through_utc < cycle_start or through_utc > now:
+        raise InvalidRequest("adjustment through timestamp must be within the current cycle")
+    existing = await session.scalar(
+        select(BillingCycleAdjustment.id).where(
+            BillingCycleAdjustment.utility_account_id == account.id,
+            BillingCycleAdjustment.cycle_start_utc == cycle_start,
+            BillingCycleAdjustment.reason == "verified_cycle_to_date_seed",
+        )
+    )
+    if existing is not None:
+        raise RateWorkflowConflict("this billing cycle already has a verified energy seed")
+    adjustment = BillingCycleAdjustment(
+        utility_account_id=account.id,
+        cycle_start_utc=cycle_start,
+        energy_mwh=int(payload.energy_kwh * Decimal(1_000_000)),
+        reason="verified_cycle_to_date_seed",
+        evidence={
+            "source": "administrator_verified_cycle_to_date",
+            "note": payload.evidence_note,
+            "through_utc": through_utc.isoformat(),
+            "written_to_sensor_history": False,
+        },
+        created_by_user_id=user.id,
+    )
+    session.add(adjustment)
+    await session.flush()
+    session.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            event_code="BILLING_CYCLE_ADJUSTMENT_CREATED",
+            target_type="billing_cycle_adjustment",
+            target_id=adjustment.id,
+            correlation_id=request.state.correlation_id,
+            details={
+                "utility_account_id": account.id,
+                "cycle_start_utc": cycle_start.isoformat(),
+                "energy_mwh": adjustment.energy_mwh,
+                "through_utc": through_utc.isoformat(),
+                "raw_history_modified": False,
+            },
+        )
+    )
+    await session.commit()
+    return {
+        "id": adjustment.id,
+        "utility_account_id": adjustment.utility_account_id,
+        "cycle_start_utc": adjustment.cycle_start_utc,
+        "through_utc": through_utc,
+        "energy_kwh": Decimal(adjustment.energy_mwh) / Decimal(1_000_000),
+        "reason": adjustment.reason,
+        "created_at": adjustment.created_at,
+        "raw_history_modified": False,
+    }
+
+
 @router.get("/billing")
 async def billing_overview(
     home_id: str | None = None,
@@ -825,6 +910,7 @@ async def billing_overview(
             select(Circuit).where(
                 Circuit.home_id == scoped_home_id,
                 Circuit.is_home_total.is_(True),
+                Circuit.is_billing_source.is_(True),
                 Circuit.aggregate_mode == "verified_sum",
                 Circuit.non_overlapping_confirmed.is_(True),
             )
@@ -847,31 +933,105 @@ async def billing_overview(
         saved_energy_mwh = 0
         reading_coverage = Decimal("0")
         readings_waiting = 0
+        reliable_elapsed_hours = Decimal("0")
+        recovered_gap_mwh = 0
+        billing_adjustment_mwh = 0
+        unresolved_connection_gap_count = 0
+        unresolved_counter_reset_count = 0
+        adjustment = await session.scalar(
+            select(BillingCycleAdjustment).where(
+                BillingCycleAdjustment.utility_account_id == account.id,
+                BillingCycleAdjustment.cycle_start_utc == cycle_start,
+                BillingCycleAdjustment.reason == "verified_cycle_to_date_seed",
+            )
+        )
+        automatic_start = cycle_start
+        if adjustment is not None:
+            billing_adjustment_mwh = adjustment.energy_mwh
+            through_value = adjustment.evidence.get("through_utc")
+            if isinstance(through_value, str):
+                parsed_through = datetime.fromisoformat(through_value.replace("Z", "+00:00"))
+                if parsed_through.utcoffset() is not None:
+                    automatic_start = max(cycle_start, parsed_through.astimezone(UTC))
         if member_ids and scope_end > cycle_start:
-            energy, completeness_sum = (
-                await session.execute(
-                    select(
-                        func.sum(NormalizedInterval.energy_mwh),
-                        func.sum(NormalizedInterval.completeness),
-                    )
-                    .join(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+            cycle_intervals = (
+                await session.scalars(
+                    select(NormalizedInterval)
+                    .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
                     .join(Device, Device.id == NormalizedInterval.device_id)
                     .where(
                         NormalizedInterval.device_id.in_(member_ids),
-                        RawReading.reset_generation == Device.reset_generation,
+                        or_(
+                            NormalizedInterval.source_kind == "stateless_v2",
+                            RawReading.reset_generation == Device.reset_generation,
+                        ),
                         NormalizedInterval.source_authenticated.is_(True),
-                        NormalizedInterval.start_utc >= cycle_start,
+                        NormalizedInterval.start_utc >= automatic_start,
                         NormalizedInterval.end_utc <= scope_end,
                     )
                 )
-            ).one()
-            saved_energy_mwh = int(energy or 0)
-            expected = max(
-                1,
-                int((scope_end - cycle_start).total_seconds() // 60) * len(member_ids),
+            ).all()
+            saved_energy_mwh = sum(
+                int(interval.energy_mwh)
+                for interval in cycle_intervals
+                if interval.energy_mwh is not None
             )
-            reading_coverage = min(Decimal("1"), Decimal(completeness_sum or 0) / Decimal(expected))
+            reliable_seconds = sum(
+                Decimal(str((interval.end_utc - interval.start_utc).total_seconds()))
+                * interval.completeness
+                for interval in cycle_intervals
+            )
+            if adjustment is not None:
+                reliable_seconds += Decimal(
+                    str((automatic_start - cycle_start).total_seconds())
+                ) * Decimal(len(member_ids))
+            expected_seconds = Decimal(str((scope_end - cycle_start).total_seconds())) * Decimal(
+                len(member_ids)
+            )
+            reading_coverage = min(
+                Decimal("1"),
+                reliable_seconds / expected_seconds if expected_seconds else Decimal("0"),
+            )
+            # Whole-home reliable time requires simultaneous evidence from every
+            # designated non-overlapping member, so member-seconds are divided here.
+            reliable_elapsed_hours = reliable_seconds / Decimal(len(member_ids)) / Decimal(3600)
+            recovered_gap_mwh = int(
+                await session.scalar(
+                    select(func.sum(TelemetryEnergyEvent.recovered_energy_mwh)).where(
+                        TelemetryEnergyEvent.device_id.in_(member_ids),
+                        TelemetryEnergyEvent.billing_status == "included",
+                        TelemetryEnergyEvent.gap_end_utc > automatic_start,
+                        TelemetryEnergyEvent.gap_end_utc <= scope_end,
+                    )
+                )
+                or 0
+            )
+            unresolved_connection_gap_count = int(
+                await session.scalar(
+                    select(func.count(TelemetryEnergyEvent.id)).where(
+                        TelemetryEnergyEvent.device_id.in_(member_ids),
+                        TelemetryEnergyEvent.billing_status == "unresolved",
+                        TelemetryEnergyEvent.gap_end_utc > automatic_start,
+                        TelemetryEnergyEvent.gap_start_utc < scope_end,
+                    )
+                )
+                or 0
+            )
+            unresolved_counter_reset_count = int(
+                await session.scalar(
+                    select(func.count(Alert.id)).where(
+                        Alert.device_id.in_(member_ids),
+                        Alert.alert_type == "pzem_energy_counter_reset",
+                        Alert.state == "open",
+                        Alert.opened_at >= automatic_start,
+                        Alert.opened_at < scope_end,
+                    )
+                )
+                or 0
+            )
             for member_id in member_ids:
+                if await session.get(DeviceTelemetryState, member_id) is not None:
+                    continue
                 latest_heartbeat = await session.scalar(
                     select(DeviceHeartbeat)
                     .where(DeviceHeartbeat.device_id == member_id)
@@ -920,10 +1080,80 @@ async def billing_overview(
             and version.tier_threshold_season in (season, "all")
             else None
         )
-        saved_usage_kwh = Decimal(saved_energy_mwh) / Decimal(1_000_000)
+        saved_usage_kwh = Decimal(
+            saved_energy_mwh + recovered_gap_mwh + billing_adjustment_mwh
+        ) / Decimal(1_000_000)
         tier_state = "not_confirmed"
-        if reading_coverage >= Decimal("1") and tier_1_allowance is not None:
+        cycle_energy_resolved = (
+            unresolved_connection_gap_count == 0 and unresolved_counter_reset_count == 0
+        )
+        if (
+            reading_coverage >= Decimal("1")
+            and tier_1_allowance is not None
+            and cycle_energy_resolved
+        ):
             tier_state = "tier_1" if saved_usage_kwh <= tier_1_allowance else "tier_2"
+        local_cycle_start = cycle_start.astimezone(ZoneInfo(account.timezone)).date()
+        local_scope_end = scope_end.astimezone(ZoneInfo(account.timezone)).date()
+        elapsed_cycle_days = min(cycle_days, max(0, (local_scope_end - local_cycle_start).days))
+        tier_breakdown: dict[str, object] | None = None
+        projection: dict[str, object] = {
+            "status": "insufficient_data",
+            "confidence": None,
+            "confidence_reasons": ["published_tier_schedule_unavailable"],
+            "projected_usage_kwh": None,
+            "projected_tier_1_usage_kwh": None,
+            "projected_tier_2_usage_kwh": None,
+            "projected_tier_1_cost": None,
+            "projected_tier_2_cost": None,
+            "projected_service_charge": None,
+            "projected_total": None,
+        }
+        if (
+            tier_1_allowance is not None
+            and tier_1_period is not None
+            and tier_2_period is not None
+            and version is not None
+        ):
+            known = tiered_cost(
+                usage_kwh=saved_usage_kwh,
+                threshold_kwh=tier_1_allowance,
+                tier_1_rate=tier_1_period.price_per_kwh,
+                tier_2_rate=tier_2_period.price_per_kwh,
+                service_days=Decimal(elapsed_cycle_days),
+                daily_service_charge=version.daily_fixed_charge,
+            )
+            tier_breakdown = {
+                "tier_1": {
+                    "usage_kwh": known.tier_1_usage_kwh,
+                    "allowance_kwh": known.threshold_kwh,
+                    "remaining_kwh": max(
+                        Decimal("0"), known.threshold_kwh - known.tier_1_usage_kwh
+                    ),
+                    "rate_per_kwh": tier_1_period.price_per_kwh,
+                    "cost": known.tier_1_cost,
+                },
+                "tier_2": {
+                    "usage_kwh": known.tier_2_usage_kwh,
+                    "starts_above_kwh": known.threshold_kwh,
+                    "rate_per_kwh": tier_2_period.price_per_kwh,
+                    "cost": known.tier_2_cost,
+                },
+                "service_charge_to_date": known.service_charge,
+                "total_to_date": known.total,
+            }
+            projection = billing_projection(
+                reliable_usage_kwh=saved_usage_kwh,
+                reliable_elapsed_hours=reliable_elapsed_hours,
+                total_cycle_days=cycle_days,
+                threshold_kwh=tier_1_allowance,
+                tier_1_rate=tier_1_period.price_per_kwh,
+                tier_2_rate=tier_2_period.price_per_kwh,
+                daily_service_charge=version.daily_fixed_charge,
+                reading_coverage=reading_coverage,
+                unresolved_counter_resets=unresolved_counter_reset_count,
+                unresolved_connection_gaps=unresolved_connection_gap_count,
+            )
         home_estimate = next(
             (
                 estimate
@@ -966,6 +1196,10 @@ async def billing_overview(
             "saved_usage_kwh": saved_usage_kwh if member_ids else None,
             "reading_coverage": reading_coverage if member_ids else None,
             "readings_waiting_to_sync": readings_waiting if member_ids else None,
+            "recovered_gap_energy_kwh": Decimal(recovered_gap_mwh) / Decimal(1_000_000),
+            "billing_adjustment_kwh": Decimal(billing_adjustment_mwh) / Decimal(1_000_000),
+            "unresolved_connection_gap_count": unresolved_connection_gap_count,
+            "unresolved_counter_reset_count": unresolved_counter_reset_count,
             "tier_state": tier_state,
             "tier_confirmation_rule": "requires_100_percent_reading_coverage",
             "tier_1_allowance_kwh": tier_1_allowance,
@@ -986,6 +1220,8 @@ async def billing_overview(
             "estimated_total": Decimal(home_estimate.total_microdollars) / Decimal(1_000_000)
             if estimate_is_current and home_estimate is not None
             else None,
+            "tier_breakdown": tier_breakdown,
+            "projection": projection,
         }
         plans.append(
             {

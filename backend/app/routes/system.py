@@ -16,7 +16,7 @@ from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings, get_settings
-from ..constants import PROTOCOL_ID, VERSION
+from ..constants import PROTOCOL_ID, TELEMETRY_PROTOCOL_ID, VERSION
 from ..db import get_session
 from ..models import (
     Alert,
@@ -24,10 +24,12 @@ from ..models import (
     Device,
     DeviceCommand,
     DeviceHeartbeat,
+    DeviceTelemetryState,
     FirmwareDeployment,
     FirmwareRelease,
     RateSyncRun,
     RawReading,
+    StatelessTelemetrySample,
     UnavailableSequenceRange,
     aware_utc,
     user_home_scopes,
@@ -240,7 +242,24 @@ async def system_health(
         ).all()
         heartbeat = heartbeats[0] if heartbeats else None
         prior_heartbeat = heartbeats[1] if len(heartbeats) > 1 else None
-        age = (now - aware_utc(heartbeat.received_at)).total_seconds() if heartbeat else None
+        telemetry_state = await session.get(DeviceTelemetryState, device.id)
+        latest_sample = (
+            await session.get(StatelessTelemetrySample, telemetry_state.latest_sample_id)
+            if telemetry_state is not None
+            else None
+        )
+        latest_server_received_at = (
+            telemetry_state.latest_server_received_at
+            if telemetry_state is not None
+            else heartbeat.received_at
+            if heartbeat is not None
+            else None
+        )
+        age = (
+            (now - aware_utc(latest_server_received_at)).total_seconds()
+            if latest_server_received_at is not None
+            else None
+        )
         last_reading = await session.scalar(
             select(RawReading)
             .where(RawReading.device_id == device.id)
@@ -254,14 +273,18 @@ async def system_health(
             .limit(1)
         )
         drain_rate = None
-        if heartbeat is not None and prior_heartbeat is not None:
+        if telemetry_state is None and heartbeat is not None and prior_heartbeat is not None:
             elapsed_minutes = (
                 aware_utc(heartbeat.received_at) - aware_utc(prior_heartbeat.received_at)
             ).total_seconds() / 60
             if elapsed_minutes > 0:
                 drain_rate = (prior_heartbeat.backlog - heartbeat.backlog) / elapsed_minutes
         missing_prefix_status = "unavailable"
-        if heartbeat is not None and heartbeat.oldest_sequence is not None:
+        if (
+            telemetry_state is None
+            and heartbeat is not None
+            and heartbeat.oldest_sequence is not None
+        ):
             missing_prefix_status = (
                 "detected" if device.contiguous_ack + 1 < heartbeat.oldest_sequence else "none"
             )
@@ -271,7 +294,7 @@ async def system_health(
                 for flag in heartbeat.health_flags
                 if flag.startswith(("BACKLOG_", "MISSING_PREFIX_", "SYNC_"))
             ]
-            if heartbeat is not None
+            if telemetry_state is None and heartbeat is not None
             else []
         )
         last_error = synchronization_errors[0] if synchronization_errors else None
@@ -281,33 +304,126 @@ async def system_health(
                 "device_name": device.friendly_name,
                 "state": "online" if age is not None and age <= 30 else "offline",
                 "heartbeat_age_seconds": age,
-                "pzem_status": heartbeat.pzem_status if heartbeat else "unavailable",
-                "storage_status": heartbeat.storage_status if heartbeat else "unavailable",
-                "backlog": heartbeat.backlog if heartbeat else None,
+                "pzem_status": (
+                    latest_sample.pzem_status
+                    if latest_sample is not None
+                    else heartbeat.pzem_status
+                    if heartbeat is not None
+                    else "unavailable"
+                ),
+                "storage_status": (
+                    "not_applicable_stateless"
+                    if telemetry_state is not None
+                    else heartbeat.storage_status
+                    if heartbeat is not None
+                    else "unavailable"
+                ),
+                "backlog": (
+                    None
+                    if telemetry_state is not None
+                    else heartbeat.backlog
+                    if heartbeat is not None
+                    else None
+                ),
                 "firmware_version": device.firmware_version,
-                "firmware_build_id": installed_release.build_number if installed_release else None,
+                "firmware_build_id": (
+                    telemetry_state.firmware_build_id
+                    if telemetry_state is not None
+                    else installed_release.build_number
+                    if installed_release
+                    else None
+                ),
                 "firmware_digest": installed_release.sha256 if installed_release else None,
-                "protocol": device.protocol_id,
+                "protocol": (
+                    TELEMETRY_PROTOCOL_ID if telemetry_state is not None else device.protocol_id
+                ),
                 "boot_partition": None,
                 "last_successful_ota": last_successful_ota.completed_at
                 if last_successful_ota
                 else None,
-                "acknowledgement": device.contiguous_ack,
-                "oldest_sequence": heartbeat.oldest_sequence if heartbeat else None,
-                "newest_sequence": heartbeat.newest_sequence if heartbeat else None,
+                "acknowledgement": None if telemetry_state is not None else device.contiguous_ack,
+                "oldest_sequence": (
+                    None
+                    if telemetry_state is not None
+                    else heartbeat.oldest_sequence
+                    if heartbeat
+                    else None
+                ),
+                "newest_sequence": (
+                    latest_sample.sample_sequence
+                    if latest_sample is not None
+                    else heartbeat.newest_sequence
+                    if heartbeat
+                    else None
+                ),
                 "synchronization": {
-                    "server_contiguous_acknowledgement": device.contiguous_ack,
-                    "earliest_sd_sequence": heartbeat.oldest_sequence if heartbeat else None,
-                    "latest_sd_sequence": heartbeat.newest_sequence if heartbeat else None,
-                    "queued_records": heartbeat.backlog if heartbeat else None,
+                    "mode": (
+                        "stateless_delivery" if telemetry_state is not None else "legacy_backlog"
+                    ),
+                    "server_delivery_status": (
+                        "accepted"
+                        if telemetry_state is not None and age is not None and age <= 30
+                        else "delayed"
+                        if telemetry_state is not None and age is not None
+                        else "legacy_backlog_protocol"
+                    ),
+                    "last_server_received_at": latest_server_received_at,
+                    "last_sensor_sampled_at": (
+                        telemetry_state.latest_sensor_sampled_at
+                        if telemetry_state is not None
+                        else None
+                    ),
+                    "sensor_time_trusted": (
+                        telemetry_state.sensor_time_trusted if telemetry_state is not None else None
+                    ),
+                    "server_contiguous_acknowledgement": (
+                        None if telemetry_state is not None else device.contiguous_ack
+                    ),
+                    "earliest_sd_sequence": (
+                        None
+                        if telemetry_state is not None
+                        else heartbeat.oldest_sequence
+                        if heartbeat
+                        else None
+                    ),
+                    "latest_sd_sequence": (
+                        None
+                        if telemetry_state is not None
+                        else heartbeat.newest_sequence
+                        if heartbeat
+                        else None
+                    ),
+                    "queued_records": (
+                        None
+                        if telemetry_state is not None
+                        else heartbeat.backlog
+                        if heartbeat
+                        else None
+                    ),
                     "queue_drain_rate_per_minute": drain_rate,
                     "queue_drain_rate": drain_rate,
                     "queue_drain_rate_basis": (
                         "difference between the two latest authenticated heartbeats"
                     ),
-                    "missing_prefix_status": missing_prefix_status,
-                    "last_accepted_sequence": last_reading.sequence if last_reading else None,
-                    "last_accepted_at": last_reading.received_at if last_reading else None,
+                    "missing_prefix_status": (
+                        "not_applicable_stateless"
+                        if telemetry_state is not None
+                        else missing_prefix_status
+                    ),
+                    "last_accepted_sequence": (
+                        latest_sample.sample_sequence
+                        if latest_sample is not None
+                        else last_reading.sequence
+                        if last_reading
+                        else None
+                    ),
+                    "last_accepted_at": (
+                        latest_sample.received_at
+                        if latest_sample is not None
+                        else last_reading.received_at
+                        if last_reading
+                        else None
+                    ),
                     "last_successful_batch_start": None,
                     "last_successful_batch_end": None,
                     "last_successful_batch_record_count": None,
@@ -331,8 +447,13 @@ async def system_health(
                     if last_loss
                     else None,
                     "unavailable_fields_reason": (
-                        "pm-protocol/1.0.0 does not report device-side failed HTTP attempts; "
-                        "server request batch boundaries and body bytes are not persisted"
+                        "pm-telemetry/2.0.0 accepts independent samples and has no sensor "
+                        "queue or acknowledgement fields; device-side failed HTTP attempts "
+                        "are not reported"
+                        if telemetry_state is not None
+                        else "pm-protocol/1.0.0 does not report device-side failed HTTP "
+                        "attempts; server request batch boundaries and body bytes are not "
+                        "persisted"
                     ),
                 },
             }

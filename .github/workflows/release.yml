@@ -106,7 +106,7 @@ jobs:
             firmware-assets/manifest.json >/dev/null
           jq -e --arg tag "$FIRMWARE_TAG" --arg revision "$FIRMWARE_REVISION" \
             --arg image_sha256 "$image_sha256" --arg server_tag "$GITHUB_REF_NAME" \
-            '.schema == "pm-release-compatibility/1.0.0" and .firmware.repository == "https://github.com/mhilton7/power-monitor-sensor-headless" and .firmware.tag == $tag and .firmware.commit == $revision and .firmware.image_sha256 == $image_sha256 and .firmware.project_name == "power-monitor-sensor-headless" and .firmware.target == "esp32s3" and .firmware.board_profile == "esp32-s3-devkitc-n16r8-reference/1" and .server.repository == "https://github.com/mhilton7/power-monitor-v2" and .server.tag == $server_tag and .contracts.device_protocol == "pm-protocol/1.0.0" and .contracts.com_protocol == "pm-com/1.0.0" and .contracts.config_schema == 1' \
+            '.schema == "pm-release-compatibility/1.0.0" and .firmware.repository == "https://github.com/mhilton7/power-monitor-sensor-headless" and .firmware.tag == $tag and .firmware.commit == $revision and .firmware.image_sha256 == $image_sha256 and .firmware.project_name == "power-monitor-sensor-headless" and .firmware.target == "esp32s3" and .firmware.board_profile == "esp32-s3-devkitc-n16r8-reference/1" and .server.repository == "https://github.com/mhilton7/power-monitor-v2" and .server.tag == $server_tag and .contracts.device_protocol == "pm-protocol/1.0.0" and .contracts.telemetry_protocol == "pm-telemetry/2.0.0" and .contracts.com_protocol == "pm-com/1.0.0" and .contracts.config_schema == 1' \
             firmware-assets/compatibility.json >/dev/null
           jq -e '.schema == "pm-test-report/1.0.0" and .host.unit_tests > 0 and .host.unit_failures == 0 and .host.unit_errors == 0 and .host.subprocess_failures == 0 and .hardware == "pending"' \
             firmware-assets/test-report.json >/dev/null
@@ -316,7 +316,7 @@ jobs:
           --build-time "$(git show -s --format=%cI "$GITHUB_SHA")"
           --frontend-version "${GITHUB_REF_NAME#v}"
           --frontend-asset-id "${GITHUB_REF_NAME#v}-${GITHUB_SHA:0:16}"
-          --database-revision 20260817_0016
+          --database-revision 20260818_0017
           --firmware-release-url "$(jq -er '.firmware_release_url' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
           --firmware-tag "$(jq -er '.firmware_tag' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
           --firmware-revision "$(jq -er '.firmware_revision' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
@@ -447,7 +447,7 @@ jobs:
           --build-time "$(git show -s --format=%cI "$GITHUB_SHA")"
           --frontend-version "${GITHUB_REF_NAME#v}"
           --frontend-asset-id "${GITHUB_REF_NAME#v}-${GITHUB_SHA:0:16}"
-          --database-revision 20260817_0016
+          --database-revision 20260818_0017
           --firmware-release-url "$(jq -er '.firmware_release_url' release/assets/firmware-compatibility-report.json)"
           --firmware-tag "$(jq -er '.firmware_tag' release/assets/firmware-compatibility-report.json)"
           --firmware-revision "$(jq -er '.firmware_revision' release/assets/firmware-compatibility-report.json)"

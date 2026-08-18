@@ -558,6 +558,23 @@ html[data-density="compact"] .page { gap: 11px; }
   .gap-list > div { flex-direction: column; gap: 4px; }
 }
 
+.tier-progress { margin-top: 18px; }
+.tier-progress-track {
+  position: relative;
+  height: 16px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-soft);
+}
+.tier-progress-track > span { position: absolute; inset-block: 0; }
+.tier-progress-tier-one { left: 0; background: rgb(82 204 129 / .2); }
+.tier-progress-tier-two { right: 0; background: rgb(245 176 65 / .14); }
+.tier-progress-used { left: 0; background: var(--accent); opacity: .72; }
+.tier-progress-threshold { width: 2px; background: var(--text); transform: translateX(-1px); }
+.tier-progress > div:last-child { display: flex; justify-content: space-between; gap: 12px; margin-top: 7px; color: var(--muted); font-size: .72rem; }
+.tier-progress > div:last-child strong { color: var(--text); text-align: center; }
+
 @media (max-width: 410px) {
   .topbar-actions { gap: 4px; }
   .topbar { gap: 8px; }

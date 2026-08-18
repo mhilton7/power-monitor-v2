@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { api } from '../src/api';
 import { rateDraftSchema } from '../src/api/schemas';
 import { BillingPage } from '../src/pages/BillingPage';
-import { apiResponse, homeScopes } from './fixtures';
+import { apiResponse, billing, homeScopes } from './fixtures';
 import { installFetchMock, renderWithProviders } from './render';
 
 describe('Billing rate-source boundary', () => {
@@ -23,18 +23,21 @@ describe('Billing rate-source boundary', () => {
     installFetchMock();
     renderWithProviders(<BillingPage />);
 
-    expect(await screen.findByRole('heading', { name: 'Rate currently used' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Current billing cycle' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Current Rate Plan' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Current Billing Cycle' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Tier Breakdown' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Cost Summary' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'SCE rate update' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Imported bill rates' })).toBeInTheDocument();
     expect(screen.getByText('SCE Domestic')).toBeInTheDocument();
-    expect(screen.getByText('$0.30863/kWh')).toBeInTheDocument();
-    expect(screen.getByText('$0.40962/kWh')).toBeInTheDocument();
+    expect(screen.getAllByText('$0.30863/kWh')).toHaveLength(2);
+    expect(screen.getAllByText('$0.40962/kWh')).toHaveLength(2);
     expect(screen.getByText('$0.769/day')).toBeInTheDocument();
     expect(screen.getByText('19.3 kWh per billing day')).toBeInTheDocument();
-    expect(screen.getByText('Whole-home branch used: Main service')).toBeInTheDocument();
+    expect(screen.getByText('Billing source: Main service')).toBeInTheDocument();
     expect(screen.getAllByText('Tier not confirmed').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/Tier confirmation requires 100% reading coverage/)).toBeInTheDocument();
+    expect(screen.getByText(/Complete reading coverage is required/)).toBeInTheDocument();
+    expect(screen.getByText('Not enough data to estimate the full bill yet.')).toBeInTheDocument();
   });
 
   it('labels PDF upload as rate-only and has no historical bill comparison surface', async () => {
@@ -51,6 +54,47 @@ describe('Billing rate-source boundary', () => {
       const path = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
       return path.includes(`/bill-rate-imports?home_id=${homeScopes[0]!.id}`);
     })).toBe(true);
+  });
+
+  it('renders exact Tier 1, Tier 2, service-charge and 24-hour projection evidence', async () => {
+    const cycle = {
+      ...billing.accounts[0]!.current_billing_cycle,
+      saved_usage_kwh: '951', reading_coverage: '1', tier_state: 'tier_2', tier_1_allowance_kwh: '579', tier_1_remaining_kwh: '0', amount_above_tier_1_kwh: '372',
+      tier_1_usage_kwh: '579', tier_2_usage_kwh: '372', tier_1_cost: '178.69677', tier_2_cost: '152.37864', service_charge: '23.07', cost_to_date: '354.14541', estimated_energy_charges: '331.07541', estimated_fixed_charges: '23.07', estimated_total: '354.14541',
+      tier_breakdown: { tier_1: { usage_kwh: '579', allowance_kwh: '579', remaining_kwh: '0', rate_per_kwh: '0.30863', cost: '178.69677' }, tier_2: { usage_kwh: '372', starts_above_kwh: '579', rate_per_kwh: '0.40962', cost: '152.37864' }, service_charge_to_date: '23.07', total_to_date: '354.14541' },
+      projection: { status: 'available', projected_usage_kwh: '951', projected_tier_1_usage_kwh: '579', projected_tier_2_usage_kwh: '372', projected_tier_1_cost: '178.69677', projected_tier_2_cost: '152.37864', projected_service_charge: '23.07', projected_total: '354.14541', confidence: 'high', confidence_reasons: ['More than 24 hours of complete Main service readings.'] },
+    };
+    installFetchMock((path, method) => new URL(path, 'http://frontend.test').pathname.endsWith('/billing')
+      ? { status: 200, body: { ...billing, accounts: [{ ...billing.accounts[0]!, current_billing_cycle: cycle }] } }
+      : apiResponse(path, method));
+    renderWithProviders(<BillingPage />);
+    const tierCard = (await screen.findByRole('heading', { name: 'Tier Breakdown' })).closest('.card');
+    const costCard = screen.getByRole('heading', { name: 'Cost Summary' }).closest('.card');
+    expect(tierCard).not.toBeNull();
+    expect(costCard).not.toBeNull();
+    expect(screen.getAllByText('Tier 2').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('579.0 kWh for this billing cycle')).toBeInTheDocument();
+    expect(screen.getAllByText('579 kWh').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('372 kWh').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('$354.15').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('High confidence')).toBeInTheDocument();
+    expect(screen.getByText('Projected total for the current billing cycle')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Billing-cycle tier usage' })).toHaveAttribute('aria-valuenow', '951');
+  });
+
+  it('shows numeric Tier 2 zero before the threshold instead of unavailable', async () => {
+    const current = billing.accounts[0]!.current_billing_cycle;
+    const cycle = { ...current, saved_usage_kwh: '420', reading_coverage: '1', tier_state: 'tier_1', tier_breakdown: { tier_1: { usage_kwh: '420', allowance_kwh: '579', remaining_kwh: '159', rate_per_kwh: '0.30863', cost: '129.6246' }, tier_2: { usage_kwh: '0', starts_above_kwh: '579', rate_per_kwh: '0.40962', cost: '0' }, service_charge_to_date: '12.304', total_to_date: '141.9286' } };
+    installFetchMock((path, method) => new URL(path, 'http://frontend.test').pathname.endsWith('/billing')
+      ? { status: 200, body: { ...billing, accounts: [{ ...billing.accounts[0]!, current_billing_cycle: cycle }] } }
+      : apiResponse(path, method));
+    renderWithProviders(<BillingPage />);
+    const tierCard = (await screen.findByRole('heading', { name: 'Tier Breakdown' })).closest('.card');
+    expect(tierCard).not.toBeNull();
+    expect(tierCard!.textContent).toContain('Tier 2 usage');
+    expect(tierCard!.textContent).toContain('0.0 kWh');
+    expect(tierCard!.textContent).toContain('Tier 2 cost');
+    expect(tierCard!.textContent).toContain('$0.00');
   });
 
   it('binds a rate-source PDF upload to the exact selected home UUID', async () => {

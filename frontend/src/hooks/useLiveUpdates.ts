@@ -13,10 +13,13 @@ export function useLiveUpdates(): void {
     const refresh = () => {
       for (const key of LIVE_QUERY_KEYS) void queryClient.invalidateQueries({ queryKey: key });
     };
-    source.addEventListener('measurement', () => {
+    const acceptedMeasurement = () => {
       refresh();
       window.dispatchEvent(new Event('powermeter:measurement'));
-    });
+    };
+    source.addEventListener('measurement', acceptedMeasurement);
+    source.addEventListener('measurement_accepted', acceptedMeasurement);
+    source.addEventListener('accepted_reading', acceptedMeasurement);
     source.addEventListener('heartbeat', refresh);
     source.addEventListener('alert', refresh);
     source.addEventListener('command', refresh);

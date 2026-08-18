@@ -18,6 +18,7 @@ const server = createServer((request, response) => {
   if (path.endsWith('/auth/logout')) { response.writeHead(204); response.end(); return; }
   if (path.endsWith('/home-scopes')) return json(response, 200, { home_scopes: homeScopes });
   if (path.endsWith('/settings/home-utility')) return json(response, 200, homeUtility);
+  if (path.endsWith('/settings/telemetry')) return json(response, 200, { config_version: 1, telemetry_interval_seconds: 5, history_interval_seconds: 60, retention_days: 365 });
   if (path.endsWith('/home')) return json(response, 200, home);
   if (path.endsWith('/enrollment-tokens') && request.method === 'POST') return json(response, 201, { token: 'single-use-enrollment-token-value-000000000000', expires_at: '2026-08-13T17:47:00Z' });
   if (path.endsWith('/credentials/rotate') && path.includes('/devices/') && request.method === 'POST') return json(response, 202, { rotation: { rotation_id: '00000000-0000-0000-0000-000000000050', credential_fingerprint: 'b'.repeat(64), state: 'pending', overlap_expires_at: '2026-08-13T17:42:10Z', prepare_command_id: '00000000-0000-0000-0000-000000000051', commit_command_id: null, cancel_command_id: null } });
@@ -28,8 +29,8 @@ const server = createServer((request, response) => {
   if (path.endsWith('/revoke') && path.includes('/devices/') && request.method === 'POST') { response.writeHead(204); response.end(); return; }
   if (path.includes('/devices/') && request.method === 'PATCH') return json(response, 200, { id: device.id, friendly_name: device.friendly_name, measurement_scope: 'energy_only' });
   if (path.endsWith('/alerts')) return json(response, 200, alerts);
-  if (path.endsWith('/acknowledge')) return json(response, 200, { id: 'alert-backlog', state: 'acknowledged' });
-  if (path.endsWith('/silence')) return json(response, 200, { id: 'alert-backlog', silenced_until: '2026-08-14T17:32:00Z' });
+  if (path.endsWith('/acknowledge')) return json(response, 200, { id: 'alert-delivery', state: 'acknowledged' });
+  if (path.endsWith('/silence')) return json(response, 200, { id: 'alert-delivery', silenced_until: '2026-08-14T17:32:00Z' });
   if (path.endsWith('/history/export.csv')) { response.writeHead(200, { 'Content-Type': 'text/csv' }); response.end('timestamp,value\n2026-08-13T10:00:00Z,0\n'); return; }
   if (path.endsWith('/history')) return json(response, 200, url.searchParams.get('resolution_seconds') === '86400' ? dailyHistory : history);
   if (path.endsWith('/billing')) return json(response, 200, billing);
@@ -48,7 +49,6 @@ const server = createServer((request, response) => {
   if (path.includes('/firmware/deployment-batches/') && path.endsWith('/cancel')) return json(response, 200, { batch_id: 'deployment-batch-1', state: 'cancelled' });
   if (path.endsWith('/commands')) return collectJson(request, (body) => {
     const command = body as { command_type?: string };
-    if (command.command_type === 'format_storage_prepare') return json(response, 202, { command: { id: 'prepare-command-00000000-0000-0000-0000-000000000001', type: command.command_type, state: 'queued' }, confirmation_token: 'bound-token' });
     return json(response, 202, { command: { id: 'command-00000000-0000-0000-0000-000000000001', type: command.command_type ?? 'unknown', state: 'queued' }, confirmation_token: null });
   });
   const fallback = apiResponse(path, request.method ?? 'GET');

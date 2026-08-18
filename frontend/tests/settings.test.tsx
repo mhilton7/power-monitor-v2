@@ -137,7 +137,7 @@ describe('Settings', () => {
     }));
   });
 
-  it('updates and deletes a service branch without changing sensor records', async () => {
+  it('updates a service branch and protects the current Main service from deletion', async () => {
     let branchUpdate: Record<string, unknown> | undefined;
     let deletedBranch = '';
     installFetchMock((path, method, body) => {
@@ -165,10 +165,30 @@ describe('Settings', () => {
     }));
 
     await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    expect(screen.getByRole('dialog', { name: 'Delete Main service?' })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Delete service branch' }));
-    await waitFor(() => expect(deletedBranch).toContain('/circuits/circuit-main-service'));
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled();
+    expect(screen.getByText(/Choose and save a replacement Main service billing source before deleting/)).toBeInTheDocument();
+    expect(deletedBranch).toBe('');
+  });
+
+  it('requires the exact confirmation before shortening server History retention', async () => {
+    let telemetryUpdate: Record<string, unknown> | undefined;
+    installFetchMock((path, method, body) => {
+      if (path.includes('/settings/telemetry') && method === 'PATCH') {
+        if (typeof body !== 'string') throw new Error('Expected JSON telemetry settings body.');
+        telemetryUpdate = JSON.parse(body) as Record<string, unknown>;
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<SettingsPage />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Sensors' }));
+    await userEvent.selectOptions(await screen.findByLabelText('History retention'), '90');
+    await userEvent.click(screen.getByRole('button', { name: 'Save reading settings' }));
+    const dialog = screen.getByRole('dialog', { name: 'Shorten saved History retention?' });
+    expect(within(dialog).getByRole('button', { name: 'Shorten retention' })).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText('Type DELETE EXPIRED SAVED HISTORY'), 'DELETE EXPIRED SAVED HISTORY');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Shorten retention' }));
+    await waitFor(() => expect(telemetryUpdate).toMatchObject({ retention_days: 90, retention_confirmation: 'DELETE EXPIRED SAVED HISTORY' }));
+    expect(telemetryUpdate).not.toHaveProperty('config_version');
   });
 
   it('saves server-persisted per-user display preferences', async () => {
@@ -217,7 +237,8 @@ describe('Settings', () => {
     renderWithProviders(<SettingsPage />);
     await userEvent.click(await screen.findByRole('button', { name: 'Diagnostics' }));
     expect(screen.getByText('reachable')).toBeInTheDocument();
-    expect(screen.getByText(/3 readings waiting to sync/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Sensor delivery' })).toBeInTheDocument();
+    expect(screen.getByText('received')).toBeInTheDocument();
     const diagnostics = screen.getByRole('heading', { name: 'Diagnostics' }).closest('.card');
     expect(diagnostics).not.toBeNull();
     expect(within(diagnostics as HTMLElement).getByText('Frontend')).toBeInTheDocument();

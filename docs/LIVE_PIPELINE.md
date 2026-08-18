@@ -1,20 +1,33 @@
 # Live pipeline
 
-Home's live value and History are deliberately separate evidence paths.
+Home, History, energy, and Billing now use one server-owned telemetry path.
 
-1. The PZEM driver measures at the firmware's one-second default and validates transport/ranges.
-2. A signed heartbeat carries the latest measurement plus measurement and receipt timestamps.
-3. The API verifies HMAC, replay, time, body limits, device scope, and ranges before updating the bounded latest-heartbeat view.
-4. The API emits a same-origin SSE update. The browser uses bounded polling only when SSE cannot be maintained.
-5. Freshness resolves to `live`, `waiting`, `stale`, `offline`, `unavailable`, `invalid`, or `needs_attention`. A future timestamp or invalid range never becomes live.
+1. The PZEM driver samples and validates CRC, address, function, and ranges.
+2. Firmware retains one in-flight request and only the newest pending sample.
+3. It posts a signed `pm-telemetry/2.0.0` body to
+   `POST /api/v1/device/telemetry/v2` over verified HTTPS.
+4. The API verifies `pm-protocol/1.0.0` authentication, replay, size, device
+   scope, timestamps, and values, then atomically records the immutable sample
+   under `(sensor_id, boot_id, sample_sequence)`.
+5. The server updates live state, active History buckets, energy/reset/gap
+   evidence, and emits a same-origin SSE update.
+6. The browser uses SSE with bounded query refresh fallback. It never connects
+   directly to a sensor.
 
-Separately, the firmware aggregates a durable interval, appends it to microSD, and uploads it with a monotonic sequence. After the server commits the immutable raw record and derived interval transaction, it acknowledges the sequence and History becomes queryable. A live heartbeat alone never creates History or energy.
+Each sample is accepted independently. An outage may lose the older pending
+sample, but cannot stop a later sample from being accepted. History displays
+that time as a gap; it is never silently interpolated.
 
 Outage behavior:
 
-- Wi-Fi/server outage: one-second measurement and durable microSD logging continue; signed heartbeats resume automatically; bounded batches backfill between heartbeat deadlines.
-- PZEM outage: heartbeat and storage diagnostics continue, values are missing, and no energy is fabricated.
-- microSD outage/full: live measurement and heartbeat continue; History gaps are explicitly reported; unsynchronized data is never deleted for space.
-- Browser disconnect: server ingestion continues; reconnection obtains current live state and committed History.
+- Wi-Fi or server outage: measurements continue; retry paths are separately
+  bounded and the newest pending sample replaces an older unsent sample.
+- PZEM outage: signed status continues with null electrical values; no energy
+  or zero reading is fabricated.
+- Power loss: the next boot uses a new boot UUID and restarts its RAM-only
+  sample number; the server preserves both sessions independently.
+- Browser disconnect: server ingestion continues and reconnection loads the
+  current live state plus persisted History.
 
-Every UI aggregate names its scope. Parent/child circuits are not blindly summed; voltage, frequency, and power factor are never summed.
+The firmware never mounts, reads, writes, repairs, verifies, or formats a
+microSD card. Existing cards are left untouched.

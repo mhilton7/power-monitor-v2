@@ -1,6 +1,6 @@
 # Roll back PowerMeter V2 on TrueNAS
 
-> This UI-oriented source document is prepared for v0.1.0-rc.16. Public rc.13, rc.12, rc.11, rc.10, rc.9, rc.8, rc.6, rc.5,
+> This UI-oriented source document is prepared for v0.1.0-rc.17. Public rc.16 and earlier releases
 > and immutable older releases retain their own attached instructions. Never
 > combine asset sets.
 
@@ -10,9 +10,10 @@ read a database touched by the new release.
 
 ## Preserve evidence first
 
-1. Put ingestion into maintenance mode if authenticated access remains usable;
-   record each device's latest accepted cursor. Sensors retain unacknowledged
-   intervals on microSD.
+1. Record each device's latest accepted stateless sample identity, cutover
+   record, live timestamp, and firmware identity. RC17 sensors keep no
+   persistent telemetry backlog, so missed readings during downtime cannot be
+   replayed from removable storage.
 2. Export redacted diagnostics and preserve app/migration logs in the UI.
 3. Require a new verified encrypted backup and isolated restore result without
    overwriting the last known-good pre-upgrade archive.
@@ -21,10 +22,12 @@ read a database touched by the new release.
 
 ## Restored rollback only
 
-A direct application-only rollback from v0.1.0-rc.16 to an earlier public
-release is unauthorized without a separate recovery test. Rc.16 uses Alembic
-head `20260817_0016`, and a forward-migration gate cannot prove that older
-binaries correctly handle state touched by rc.16; `not_exercised_github_hosted_smoke`
+A direct application-only rollback from v0.1.0-rc.17 to an earlier public
+release is unauthorized without a separate recovery test. Rc.17 uses Alembic
+head `20260818_0017`; its downgrade deliberately refuses to remove accepted
+stateless telemetry, History, or cutover evidence. A forward-migration gate
+cannot prove that older binaries correctly handle state touched by rc.17;
+`not_exercised_github_hosted_smoke`
 is not rollback evidence. The immutable server rc.2 and rc.4 tags have no
 GitHub Releases and are not predecessors.
 
@@ -56,11 +59,12 @@ After that separate test passes:
    preparation instructions. For rc.3, there is no initializer: PostgreSQL must
    become healthy, its one-shot migration must exit 0 against the restored rc.3
    database, and all seven-service runtime checks must pass.
-5. Re-enable ingestion only after proving acknowledgements did not regress.
+5. Re-enable ingestion only after proving sensor identities, cutover state,
+   server History, and independently accepted sample identities did not regress.
 
 Do not use an undocumented down migration, overwrite the only production
-database, restore destructively in place, or infer missing readings. Reconcile
-post-backup accepted sequences from preserved server evidence and sensor
-journals before any cutover. Firmware rollback is separately governed by its
-signed configuration/storage/bootloader/partition compatibility and physical
+database, restore destructively in place, or infer missing readings. Preserve
+post-backup stateless sample identities from server evidence and show an honest
+connection gap for downtime; there is no sensor journal to replay. Firmware
+rollback is separately governed by its signed configuration/bootloader/partition compatibility and physical
 evidence; never roll it back solely to match a server.

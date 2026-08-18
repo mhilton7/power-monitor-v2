@@ -1,7 +1,7 @@
 # Upgrade PowerMeter V2 on TrueNAS
 
-> This UI-only flow is prepared for the complete signed v0.1.0-rc.16 release
-> asset set. Public rc.12, rc.11, rc.10, rc.9, rc.8, rc.6, rc.5, and immutable rc.3 assets retain their attached
+> This UI-only flow is prepared for the complete signed v0.1.0-rc.17 release
+> asset set. Public rc.16 and earlier releases retain their attached
 > procedures. Never mix release asset sets.
 
 Upgrade by replacing the complete verified YAML in the TrueNAS app editor.
@@ -14,7 +14,7 @@ Never edit one image tag/digest, accept a generic image-update suggestion, use
    the exact SHA256SUMS and GitHub-attestation verification in `INSTALLATION.md`.
 2. Read its release notes, migration/security/deployment reports, firmware
    compatibility, and hardware-certification status. Require the declared
-   `pm-protocol/1.0.0` pairing.
+   `pm-protocol/1.0.0` and `pm-telemetry/2.0.0` pairing.
 3. Retain the complete previous release, including its generated YAML,
    manifest, image digests, checksum set, and operator guides.
 4. In PowerMeter **System health**, require a recent verified encrypted backup
@@ -23,10 +23,13 @@ Never edit one image tag/digest, accept a generic image-update suggestion, use
    `Apps/PowerMeterV2` named with the old version and UTC time. A snapshot
    supplements rather than replaces the verified logical backup.
 
-The coordinated rc.16 release extends the migration chain to Alembic head
-`20260817_0016`; revision 0016 generalizes verified circuits into named service
-branches and safely designates an eligible existing verified aggregate as Main
-service/home total. Revision 0015 retains structured SCE thresholds and
+The coordinated rc.17 release extends the migration chain to Alembic head
+`20260818_0017`. Revision 0017 adds independently accepted stateless telemetry,
+server-owned current History buckets, server-managed cadence and retention,
+per-sensor cutover and cumulative-energy gap evidence, billing adjustments, and
+an explicit Main service billing-source designation. Revision 0016 generalizes
+verified circuits into named service branches and safely designates an eligible
+existing verified aggregate as Main service/home total. Revision 0015 retains structured SCE thresholds and
 per-sensor OTA batches while preserving and linking every legacy deployment. No existing
 home, sensor, reading, rate, release, deployment, or command is deleted. Upgrades from rc.5 or
 earlier still traverse the additive fail-closed revisions. The 0008 preflight can
@@ -37,7 +40,7 @@ that evidence automatically. It also stops if a legacy database row references
 a retained original bill document; the new runtime forbids all persistent
 original-bill storage, including encrypted storage, and does not silently
 delete an operator's legacy file. Complete and verify the backup and snapshot
-above before applying rc.16. If either preflight stops, leave the prior datasets
+above before applying rc.17. If either preflight stops, leave the prior datasets
 intact and preserve the exact failure for reviewed recovery; do not edit
 evidence or delete a referenced file merely to make the migration pass.
 
@@ -63,6 +66,13 @@ non-overlap confirmation, membership timestamps, and audit evidence. It does
 not rewrite immutable readings, rate versions, or firmware evidence. A home
 total must contain at least two eligible sensors from the same home and cannot
 silently absorb a revoked or cross-home device.
+
+Revision 0017 does not rewrite or delete legacy readings, accepted History,
+rate versions, users, firmware releases, deployments, or audit evidence. Its
+downgrade refuses to run after stateless samples, stateless History, or cutover
+records exist, because removing those tables would destroy accepted evidence.
+Rollback therefore requires a separately verified pre-upgrade restore rather
+than an in-place down migration.
 
 Unchanged secrets are not restaged and the secrets dataset is not reshared.
 Never rotate a database/application/TLS value merely to upgrade. If a future
@@ -100,7 +110,8 @@ app UI, require:
 - strict TLS chain and `power-monitor.home.arpa` hostname verification;
 - `/healthz`, liveness, readiness, database, and PDF sandbox readiness;
 - owner login and permission isolation;
-- authenticated PZEM heartbeat, committed History, SSE, and idempotent retry;
+- authenticated stateless PZEM telemetry, independently accepted later
+  samples, server-owned History, SSE, and idempotent duplicate retry;
 - unchanged historical cost provenance and current rate fixture;
 - command delivery, firmware inventory, and redacted diagnostics;
 - successful restarts of each long-running service without rerunning the
