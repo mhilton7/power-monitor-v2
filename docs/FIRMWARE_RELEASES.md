@@ -99,15 +99,15 @@ the public server rc.13 contract. Firmware rc.14 and rc.15 remain immutable
 historical releases and must not be moved, rewritten, or relabeled.
 
 Public firmware/server rc.16 remain immutable historical installation
-evidence. Coordinated firmware rc.19 must name server `v0.1.0-rc.19`, retain
+evidence. Coordinated firmware rc.20 must name server `v0.1.0-rc.20`, retain
 `pm-protocol/1.0.0`, declare `pm-telemetry/2.0.0`, and bind generated OpenAPI
 SHA-256
-`1f0fe0aed5fe187a6c22523469dc9d2e76de9f5c75bed4433a654e339968deda`.
-RC19 firmware removes the microSD journal and active backlog protocol from the
+`dd49a242ebcd374b3e7574742aa010a29d4c5dab2008960ea9e0c842c62fd915`.
+RC20 firmware removes the microSD journal and active backlog protocol from the
 runtime, keeps only one in-flight and one newest pending sample in RAM, and
 preserves existing NVS identity/configuration through the schema-v1 layout.
-Its build number is 20. Its metadata and artifacts must be created, signed,
-published, and independently verified before the server rc.19 tag is created.
+Its build number is 23. Its metadata and artifacts must be created, signed,
+published, and independently verified before the server rc.20 tag is created.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

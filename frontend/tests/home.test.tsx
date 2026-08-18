@@ -45,7 +45,7 @@ describe('Home', () => {
           ],
         },
       };
-      if (path.includes('/devices?')) return { status: 200, body: { devices: [{ ...device, storage_status: null }, { ...device, id: 'device-outdoor', friendly_name: 'Outdoor AC', location: 'Outdoor unit', pzem_status: 'absent', storage_status: null }] } };
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [{ ...device, storage_status: null, acknowledgement: null }, { ...device, id: 'device-outdoor', friendly_name: 'Outdoor AC', location: 'Outdoor unit', pzem_status: 'absent', storage_status: null, acknowledgement: null }] } };
       return path.includes('/history') ? { status: 200, body: { points: [], energy_kwh: 0, cost: '0', completeness: 1, missing_ranges: [], resolution_seconds: 300, timezone: 'UTC', usage_source: 'authenticated PZEM-004T sensor intervals only' } } : { status: 200, body: { alerts: [] } };
     });
 

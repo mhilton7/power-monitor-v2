@@ -652,7 +652,7 @@ export const deviceDetailSchema = z.object({
   storage_bytes_free: z.number().int().nonnegative().nullable().optional(),
   oldest_sequence: z.number().int().nonnegative().nullable().optional(),
   newest_sequence: z.number().int().nonnegative().nullable().optional(),
-  acknowledgement: z.number().int().nonnegative().optional(),
+  acknowledgement: z.number().int().nonnegative().nullable().optional(),
   backlog: z.number().int().nonnegative().nullable().optional(),
   telemetry_protocol: z.string().nullable().optional(),
   server_delivery_status: z.string().nullable().optional(),
@@ -808,7 +808,7 @@ export const systemHealthSchema = z.object({
     telemetry_protocol: z.string().nullable().optional(), server_delivery_status: z.string().nullable().optional(),
     last_server_received_at: isoDate.nullable().optional(), last_sensor_sampled_at: isoDate.nullable().optional(), sensor_time_trusted: z.boolean().nullable().optional(),
     firmware_build_id: z.union([z.string(), z.number()]).nullable().optional(), firmware_digest: z.string().nullable().optional(), protocol: z.string().optional(),
-    boot_partition: z.string().nullable().optional(), last_successful_ota: z.string().nullable().optional(), acknowledgement: z.number().int().nonnegative().optional(),
+    boot_partition: z.string().nullable().optional(), last_successful_ota: z.string().nullable().optional(), acknowledgement: z.number().int().nonnegative().nullable().optional(),
     oldest_sequence: z.number().int().nonnegative().nullable().optional(), newest_sequence: z.number().int().nonnegative().nullable().optional(),
     synchronization: z.object({
       last_batch_start: z.number().int().nonnegative().nullable().optional(), last_batch_end: z.number().int().nonnegative().nullable().optional(),

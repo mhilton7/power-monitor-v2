@@ -1,14 +1,15 @@
-# PowerMeter V2 v0.1.0-rc.19
+# PowerMeter V2 v0.1.0-rc.20
 
-RC19 is a frontend compatibility repair for the coordinated stateless-telemetry
-release. Stateless sensors intentionally report the retired storage status as
-`null`; the RC18 frontend rejected that valid value and could replace the
-entire Dashboard with a schema error. RC19 accepts null or omitted legacy
-storage fields on the Dashboard, device details, and diagnostics. It remains a
-release candidate: marked-unit hardware certification is still pending.
+RC20 is a frontend compatibility repair for the coordinated stateless-telemetry
+release. Stateless sensors intentionally report retired storage and contiguous
+acknowledgement fields as `null`; the RC19 frontend accepted the storage value
+but still rejected the acknowledgement value and could replace History, Sensors,
+or diagnostics with a schema error. RC20 accepts null or omitted legacy fields
+across those views. It remains a release candidate: marked-unit hardware
+certification is still pending.
 
-Firmware and server RC18 remain immutable public prereleases and introduced the
-stateless runtime described below. RC19 retains that runtime, database schema,
+Firmware and server RC19 remain immutable public prereleases and retain the
+stateless runtime described below. RC20 retains that runtime, database schema,
 API, protocols, and firmware bytes; only coordinated version metadata changes
 in firmware so the same-tag server release gate remains fail-closed. RC17 also
 remains immutable failed-candidate evidence and is never moved or rewritten.
@@ -88,25 +89,25 @@ remains immutable failed-candidate evidence and is never moved or rewritten.
 
 ## Release binding
 
-- Server and frontend version: `0.1.0-rc.19`.
-- Compatible firmware tag: `v0.1.0-rc.19`, build number `22`.
+- Server and frontend version: `0.1.0-rc.20`.
+- Compatible firmware tag: `v0.1.0-rc.20`, build number `23`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
 - Alembic head: `20260818_0017`.
 - Generated contract-document SHA-256:
-  `1f0fe0aed5fe187a6c22523469dc9d2e76de9f5c75bed4433a654e339968deda`.
+  `dd49a242ebcd374b3e7574742aa010a29d4c5dab2008960ea9e0c842c62fd915`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned
-`power-monitor-v2-v0.1.0-rc.19.yaml`, release manifest, migration/security/test
+`power-monitor-v2-v0.1.0-rc.20.yaml`, release manifest, migration/security/test
 evidence, and checksums. The firmware prerelease must be published and
 independently verified first, then the server compatibility variable must be
-set to the exact RC19 firmware tag.
+set to the exact RC20 firmware tag.
 
 ## Deployment boundary
 
-Deploy the server RC19 YAML before applying the metadata-only firmware RC19
-update. Existing RC18 sensors remain protocol-compatible throughout. Automated
+Deploy the server RC20 YAML before applying the metadata-only firmware RC20
+update. Existing RC19 sensors remain protocol-compatible throughout. Automated
 tests do not install firmware on physical sensors. No card was formatted and no
 NVS namespace was erased while preparing this release.
 
