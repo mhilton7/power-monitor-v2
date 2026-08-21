@@ -82,6 +82,22 @@ export function dateTime(value: string | null | undefined, timezone?: string): s
   }).format(new Date(value));
 }
 
+export function dateTimeRange(start: string, end: string, timezone?: string): string {
+  const iso = document.documentElement.dataset.dateFormat === 'iso';
+  const hour12 = document.documentElement.dataset.timeFormat !== '24h';
+  const displayTimezone = resolveDisplayTimezone(timezone ?? document.documentElement.dataset.displayTimezone);
+  const formatter = new Intl.DateTimeFormat(iso ? 'en-CA' : 'en-US', {
+    month: iso ? '2-digit' : 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12,
+    timeZone: displayTimezone,
+    timeZoneName: 'short',
+  });
+  return formatter.formatRange(new Date(start), new Date(end));
+}
+
 export function chartTick(epoch: number, rangeHours: number, timezone: string): string {
   const date = new Date(epoch);
   return new Intl.DateTimeFormat('en-US', rangeHours > 48

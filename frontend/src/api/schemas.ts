@@ -103,10 +103,14 @@ export const energyCostSummarySchema = z.object({
 
 export const homeSchema = z.object({
   generated_at: isoDate.optional(),
+  timezone: z.string().optional(),
   devices: z.array(deviceSummarySchema),
   summaries: z.object({
     today: energyCostSummarySchema,
+    yesterday: energyCostSummarySchema.optional(),
     week: energyCostSummarySchema,
+    last_week: energyCostSummarySchema.optional(),
+    month: energyCostSummarySchema.optional(),
     billing_cycle: energyCostSummarySchema,
   }).passthrough(),
   current_rate: z.object({
@@ -809,6 +813,7 @@ export const firmwareDeploymentJobSchema = z.object({
   current_version: z.string().nullable(),
   target_version: z.string(),
   target_build: z.number().int().positive(),
+  target_firmware_build_id: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   state: z.enum(['staged', 'queued', 'downloading', 'rebooting', 'validating', 'succeeded', 'failed', 'rolled_back', 'timed_out', 'cancelled']),
   attempt_state: z.enum(['waiting', 'downloading', 'installing', 'restarting', 'confirming', 'updated', 'failed', 'timed_out', 'canceled']).optional(),
   progress_percent: z.number().int().min(0).max(100),
@@ -820,9 +825,10 @@ export const firmwareDeploymentJobSchema = z.object({
   completed_at: isoDate.nullable(),
   confirmation_heartbeat_at: isoDate.nullable(),
   reported_firmware_after_reboot: z.string().nullable(),
+  reported_firmware_build_id_after_reboot: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   retry_eligible: z.boolean(),
   cancel_eligible: z.boolean(),
-}).strict();
+}).passthrough();
 
 export const firmwareDeploymentBatchSchema = z.object({
   id: z.string(),
@@ -895,8 +901,24 @@ export const firmwareReleaseListSchema = z.object({
     strategy: z.string(),
     inconsistent_release_ids: z.array(z.string()),
     silent_deletion_performed: z.boolean(),
-  }).strict().optional(),
-}).strict();
+    artifact_quarantines: z.object({
+      apply: z.boolean(),
+      restored_release_ids: z.array(z.string()),
+      purged_release_ids: z.array(z.string()),
+      purged_unknown_upload_release_ids: z.array(z.string()),
+      promoted_upload_release_ids: z.array(z.string()),
+      collision_release_ids: z.array(z.string()),
+      corrupt_artifact_release_ids: z.array(z.string()),
+      unknown_release_ids: z.array(z.string()),
+      orphan_final_release_ids: z.array(z.string()),
+      orphan_temp_release_ids: z.array(z.string()),
+      deferred_recovery_release_ids: z.array(z.string()),
+      recovery_grace_seconds: z.number().int().nonnegative(),
+      unsafe_entries: z.array(z.string()),
+      attention_required: z.boolean(),
+    }).passthrough().optional(),
+  }).passthrough().optional(),
+}).passthrough();
 
 export const firmwareLifecycleSettingsSchema = z.object({
   deployment_retention_days: z.union([z.literal(90), z.literal(180), z.literal(365)]).nullable(),

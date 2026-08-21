@@ -25,9 +25,34 @@ test('Home shows live readings, a compact billing-cycle summary, and sensor evid
   await expect(page.getByRole('heading', { name: 'Power Factor' })).toHaveCount(0);
   await expect(page.getByText('Today Completeness')).toHaveCount(0);
   await expect(page.getByTestId('usage-chart')).toBeVisible();
+  await expect(page.getByTestId('daily-chart')).toHaveAttribute('data-day-source', 'calendar-summaries');
+  await expect(page.getByTestId('daily-chart')).toHaveAttribute('data-day-count', '2');
+  await expect(page.getByText('38.44 kWh')).toBeVisible();
   const usagePath = await page.locator('[data-testid="usage-chart"] .recharts-area-area').getAttribute('d');
   expect(usagePath?.match(/M/g)?.length).toBeGreaterThanOrEqual(2);
   await expect(page.getByRole('button', { name: /Main Panel Sensor/ })).toBeVisible();
+});
+
+test('Power History slider updates a readable non-overlapping selected range', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  const chart = page.getByTestId('usage-chart');
+  const rangeLabel = page.getByTestId('power-selected-range');
+  const original = await rangeLabel.innerText();
+  const leftHandle = chart.locator('.recharts-brush-traveller').first();
+  const brushSlide = chart.locator('.recharts-brush-slide');
+  await leftHandle.dragTo(brushSlide, { targetPosition: { x: 150, y: 10 }, force: true });
+  await expect.poll(() => rangeLabel.innerText()).not.toBe(original);
+  const overlaps = await page.locator('.dashboard-power-history .chart-footer').evaluate((footer) => {
+    const selectedRange = footer.querySelector('.chart-footer-range')?.getBoundingClientRect();
+    const coverage = footer.querySelector('.chart-footer-coverage')?.getBoundingClientRect();
+    if (!selectedRange || !coverage) return true;
+    return selectedRange.left < coverage.right
+      && selectedRange.right > coverage.left
+      && selectedRange.top < coverage.bottom
+      && selectedRange.bottom > coverage.top;
+  });
+  expect(overlaps).toBe(false);
 });
 
 test('Home preserves measured zero while showing missing voltage as unavailable', async ({ page }) => {
