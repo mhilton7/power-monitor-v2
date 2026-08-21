@@ -44,7 +44,7 @@ DIGEST_D = "sha256:" + "4" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
 FIRMWARE_BUILD_ID = "c" * 64
-VERSION = "0.1.0-rc.22"
+VERSION = "0.1.0-rc.23"
 
 
 @pytest.fixture
@@ -91,13 +91,13 @@ def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]
             "build_time": "2026-08-17T00:00:00Z",
         },
         "firmware_release_url": (
-            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.22"
+            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.23"
         ),
         "firmware": {
             "repository": "https://github.com/mhilton7/power-monitor-sensor-headless",
-            "tag": "v0.1.0-rc.22",
+            "tag": "v0.1.0-rc.23",
             "revision": COMMIT,
-            "build_number": 25,
+            "build_number": 26,
             "firmware_build_id": FIRMWARE_BUILD_ID,
             "image_sha256": IMAGE,
             "protocol": "pm-protocol/1.0.0",
@@ -268,7 +268,7 @@ def _write_failure_evidence(prefix: Path) -> None:
         '{"service":"api","state":"running","health":"unhealthy","exit_code":0}\n',
     )
     health = {
-        "service": "api",
+        "service": "worker",
         "container_id": "a" * 64,
         "state": {
             "status": "running",
@@ -278,11 +278,11 @@ def _write_failure_evidence(prefix: Path) -> None:
             "dead": False,
             "exit_code": 0,
             "health": {"status": "unhealthy", "failing_streak": 3},
-            "readiness": {
-                "http_status": 503,
-                "status": "not_ready",
-                "database": "ready",
-                "pdf_sandbox": "unavailable",
+            "readiness": None,
+            "worker_cycle": {
+                "state": "degraded",
+                "completed_at": "2026-08-14T12:00:00Z",
+                "error_code": "ValueError",
             },
         },
     }
@@ -408,6 +408,8 @@ def test_deployment_failure_health_allowlist_checks_every_jsonl_record(
             "dead": False,
             "exit_code": 0,
             "health": {"status": "unhealthy", "failing_streak": 3, "log": "secret"},
+            "readiness": None,
+            "worker_cycle": None,
         },
     }
     safe = json.loads(health_path.read_text(encoding="utf-8"))
@@ -423,6 +425,49 @@ def test_deployment_failure_health_allowlist_checks_every_jsonl_record(
 
     _write(health_path, json.dumps(safe) + "\n\n" + json.dumps(safe) + "\n")
     with pytest.raises(EvidenceError, match="blank JSONL"):
+        _validate(prefix, outcome="failure")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        (
+            {"exception": "raw exception text"},
+            "non-allowlisted",
+        ),
+        (
+            {"error_code": "ValueError: secret raw message"},
+            "error code is outside the fixed format",
+        ),
+        (
+            {"state": "healthy", "error_code": "ValueError"},
+            "healthy worker cycle must not contain an error code",
+        ),
+    ],
+)
+def test_deployment_failure_worker_cycle_health_is_strictly_allowlisted(
+    evidence_dir: Path,
+    mutation: dict[str, str],
+    match: str,
+) -> None:
+    prefix = evidence_dir / "worker-health-report"
+    _write_failure_evidence(prefix)
+    health_path = prefix.with_name(prefix.name + "-failure-health.jsonl")
+    record = json.loads(health_path.read_text(encoding="utf-8"))
+    record["state"]["worker_cycle"].update(mutation)
+    _write(health_path, json.dumps(record) + "\n")
+    with pytest.raises(EvidenceError, match=match):
+        _validate(prefix, outcome="failure")
+
+
+def test_deployment_failure_worker_cycle_health_is_worker_only(evidence_dir: Path) -> None:
+    prefix = evidence_dir / "worker-only-health-report"
+    _write_failure_evidence(prefix)
+    health_path = prefix.with_name(prefix.name + "-failure-health.jsonl")
+    record = json.loads(health_path.read_text(encoding="utf-8"))
+    record["service"] = "api"
+    _write(health_path, json.dumps(record) + "\n")
+    with pytest.raises(EvidenceError, match="only valid for the worker"):
         _validate(prefix, outcome="failure")
 
 
@@ -723,7 +768,7 @@ def test_release_renderer_separates_firmware_build_number_and_exact_build_id(
     evidence_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    output = evidence_dir / "power-monitor-v2-v0.1.0-rc.22.yaml"
+    output = evidence_dir / "power-monitor-v2-v0.1.0-rc.23.yaml"
     manifest_path = evidence_dir / "release-manifest.json"
     monkeypatch.setattr(
         sys,
@@ -753,15 +798,15 @@ def test_release_renderer_separates_firmware_build_number_and_exact_build_id(
             "--frontend-asset-id",
             f"{VERSION}-{COMMIT[:16]}",
             "--firmware-release-url",
-            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.22",
+            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.23",
             "--firmware-tag",
-            "v0.1.0-rc.22",
+            "v0.1.0-rc.23",
             "--firmware-revision",
             COMMIT,
             "--firmware-image-sha256",
             IMAGE,
             "--firmware-build-number",
-            "25",
+            "26",
             "--firmware-build-id",
             FIRMWARE_BUILD_ID,
         ],
@@ -770,7 +815,7 @@ def test_release_renderer_separates_firmware_build_number_and_exact_build_id(
     assert render_release_main() == 0
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema"] == "pm-server-release/1.1.0"
-    assert manifest["firmware"]["build_number"] == 25
+    assert manifest["firmware"]["build_number"] == 26
     assert manifest["firmware"]["firmware_build_id"] == FIRMWARE_BUILD_ID
     assert "build_id" not in manifest["firmware"]
     verify_release_artifacts(manifest_path)
@@ -1011,7 +1056,7 @@ def test_release_workflows_bind_both_firmware_build_identities() -> None:
     assert release.count("--firmware-build-number") == 2
     assert release.count("--firmware-build-id") == 2
     assert "pm-cross-repository-contract/1.1.0" in release
-    assert "--firmware-build-number 25" in ci
+    assert "--firmware-build-number 26" in ci
     assert f"--firmware-build-id {FIRMWARE_BUILD_ID}" in ci
 
     assert '.schema == "pm-firmware-release/1.1.0"' in promotion

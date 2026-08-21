@@ -53,6 +53,8 @@ CONTAINER_STATUSES = {
     "dead",
 }
 HEALTH_STATUSES = {"starting", "healthy", "unhealthy"}
+WORKER_CYCLE_STATES = {"healthy", "degraded"}
+WORKER_ERROR_CODE_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}\Z")
 LOG_EVENTS = {
     "application_starting",
     "application_started",
@@ -124,6 +126,7 @@ SUCCESS_CHECKS = [
     "PZEM-only History",
     "reviewed rate-only PDF",
     "worker-produced sensor cost",
+    "worker healthy after authenticated pricing",
     "authenticated command round trip",
     "authenticated system health",
     "SSE proxy streaming",
@@ -139,6 +142,7 @@ FAILURE_DIAGNOSTICS = [
     "allowlisted service log event timeline",
     "Compose service state",
     "allowlisted container health state",
+    "allowlisted worker cycle health state",
 ]
 FAILURE_ASSERTIONS = {
     "outside_instrumented_recovery",
@@ -149,6 +153,7 @@ FAILURE_ASSERTIONS = {
     "runtime_container_direct_start",
     "runtime_container_identity_after_direct_start",
     "runtime_container_healthy_after_direct_start",
+    "worker_healthy_after_authenticated_pricing",
     "initializer_id_unchanged_after_runtime_restart",
     "initializer_exited_zero_after_runtime_restart",
     "initializer_finished_at_unchanged_after_runtime_restart",
@@ -427,6 +432,7 @@ def _validate_health_record(value: Any, *, source: Path, line_number: int) -> No
         "exit_code",
         "health",
         "readiness",
+        "worker_cycle",
     }
     if not isinstance(state, dict) or set(state) != state_keys:
         raise EvidenceError(f"health state has non-allowlisted fields: {location}")
@@ -473,14 +479,42 @@ def _validate_health_record(value: Any, *, source: Path, line_number: int) -> No
         if not ready and not not_ready:
             raise EvidenceError(f"readiness summary fields are inconsistent: {location}")
     health = state["health"]
-    if health is None:
+    if health is not None:
+        if not isinstance(health, dict) or set(health) != {"status", "failing_streak"}:
+            raise EvidenceError(f"health summary has non-allowlisted fields: {location}")
+        if not isinstance(health["status"], str) or health["status"] not in HEALTH_STATUSES:
+            raise EvidenceError(f"health status is outside the fixed allowlist: {location}")
+        if not _is_int(health["failing_streak"]) or health["failing_streak"] < 0:
+            raise EvidenceError(f"health failing_streak must be a nonnegative integer: {location}")
+    worker_cycle = state["worker_cycle"]
+    if worker_cycle is None:
         return
-    if not isinstance(health, dict) or set(health) != {"status", "failing_streak"}:
-        raise EvidenceError(f"health summary has non-allowlisted fields: {location}")
-    if not isinstance(health["status"], str) or health["status"] not in HEALTH_STATUSES:
-        raise EvidenceError(f"health status is outside the fixed allowlist: {location}")
-    if not _is_int(health["failing_streak"]) or health["failing_streak"] < 0:
-        raise EvidenceError(f"health failing_streak must be a nonnegative integer: {location}")
+    if service != "worker":
+        raise EvidenceError(f"worker cycle health is only valid for the worker service: {location}")
+    if not isinstance(worker_cycle, dict) or set(worker_cycle) != {
+        "state",
+        "completed_at",
+        "error_code",
+    }:
+        raise EvidenceError(f"worker cycle health has non-allowlisted fields: {location}")
+    if (
+        not isinstance(worker_cycle["state"], str)
+        or worker_cycle["state"] not in WORKER_CYCLE_STATES
+    ):
+        raise EvidenceError(f"worker cycle state is outside the fixed allowlist: {location}")
+    if (
+        not isinstance(worker_cycle["completed_at"], str)
+        or LOG_TIMESTAMP_PATTERN.fullmatch(worker_cycle["completed_at"]) is None
+    ):
+        raise EvidenceError(f"worker cycle completed_at is outside the fixed format: {location}")
+    error_code = worker_cycle["error_code"]
+    if worker_cycle["state"] == "healthy":
+        if error_code is not None:
+            raise EvidenceError(f"healthy worker cycle must not contain an error code: {location}")
+    elif not isinstance(error_code, str) or WORKER_ERROR_CODE_PATTERN.fullmatch(error_code) is None:
+        raise EvidenceError(
+            f"degraded worker cycle error code is outside the fixed format: {location}"
+        )
 
 
 def _validate_permissions(path: Path) -> None:

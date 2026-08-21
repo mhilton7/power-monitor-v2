@@ -128,6 +128,32 @@ async def test_bill_upload_route_creates_zero_usage_history_or_rollups(
         assert await session.scalar(select(func.count(Rollup.id))) == 0
 
 
+@pytest.mark.asyncio
+async def test_bill_publish_rejects_day_sensitive_schedule_without_holiday_calendar(
+    owner_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    draft = extract_rate_plan_from_text(SCHEDULE, "f" * 64)
+    monkeypatch.setattr(
+        "backend.app.routes.billing.extract_rate_plan_from_pdf",
+        lambda _data: (draft, ()),
+    )
+    uploaded = await owner_client.post(
+        "/api/v1/bill-rate-imports",
+        files={"document": ("rates.pdf", b"%PDF-1.7 sanitized", "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    published = await owner_client.post(
+        f"/api/v1/bill-rate-imports/{uploaded.json()['extraction']['id']}/publish",
+        json={
+            "effective_start": "2026-08-01T07:00:00Z",
+            "effective_end": None,
+            "administrator_confirmed_effective_date": True,
+        },
+    )
+    assert published.status_code == 422, published.text
+    assert published.json()["code"] == "RATE_HOLIDAY_CALENDAR_REQUIRED"
+
+
 def test_database_has_no_prohibited_bill_columns() -> None:
     prohibited = {
         "customer_name",

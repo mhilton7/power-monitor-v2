@@ -26,19 +26,9 @@ RATE_ONLY_SCHEDULE = """
 Rate plan: TOU-D-4-9PM
 Base Services Charge $0.79 per day
 Baseline Credit $0.10/kWh
-Summer Weekday Off-Peak 00:00-16:00 $0.34/kWh
-Summer Weekday On-Peak 16:00-21:00 $0.58/kWh
-Summer Weekday Off-Peak 21:00-24:00 $0.34/kWh
-Summer Weekend Off-Peak 00:00-16:00 $0.34/kWh
-Summer Weekend Mid-Peak 16:00-21:00 $0.46/kWh
-Summer Weekend Off-Peak 21:00-24:00 $0.34/kWh
-Summer Holiday Off-Peak 00:00-16:00 $0.34/kWh
-Summer Holiday Mid-Peak 16:00-21:00 $0.46/kWh
-Summer Holiday Off-Peak 21:00-24:00 $0.34/kWh
-Winter All Off-Peak 00:00-08:00 $0.37/kWh
-Winter All Super-Off-Peak 08:00-16:00 $0.33/kWh
-Winter All Mid-Peak 16:00-21:00 $0.51/kWh
-Winter All Off-Peak 21:00-24:00 $0.37/kWh
+All All Off-Peak 00:00-16:00 $0.34/kWh
+All All On-Peak 16:00-21:00 $0.58/kWh
+All All Off-Peak 21:00-24:00 $0.34/kWh
 """.strip()
 
 

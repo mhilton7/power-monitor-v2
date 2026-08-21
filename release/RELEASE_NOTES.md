@@ -1,16 +1,37 @@
-# PowerMeter V2 v0.1.0-rc.22
+# PowerMeter V2 v0.1.0-rc.23
 
-RC22 completes the server-owned History, billing presentation, official-rate
-catalog evidence, responsive chart, and firmware/deployment lifecycle work for
-the coordinated stateless-telemetry architecture. The already-correct firmware
-runtime remains stateless; this candidate updates its operator evidence and
+RC23 carries forward the server-owned History, billing presentation,
+official-rate catalog, responsive chart, and firmware/deployment lifecycle
+work while remediating the deterministic RC22 deployment-smoke failure. The
+firmware runtime remains stateless; this candidate advances its coordinated
 release binding without reintroducing storage or backlog behavior. It remains
-a release candidate: marked-unit hardware certification is still pending.
+a release candidate because marked-unit hardware certification is pending.
 
-Firmware and server RC21 remain immutable public prereleases. RC22 retains the
-protocols, NVS configuration, TLS/HMAC controls, and stateless
-latest-value-wins memory bounds described below. RC17 also remains immutable
-failed-candidate evidence and is never moved or rewritten.
+The signed server `v0.1.0-rc.22` tag and run
+[`32451170213`](https://github.com/mhilton7/power-monitor-v2/actions/runs/32451170213)
+are immutable failed-candidate evidence. Mandatory gates, four image
+publications, and anonymous GHCR verification passed, but deployment smoke
+failed when a published bill-derived day-sensitive rate had no authoritative
+holiday calendar. Assembly was skipped, so RC22 has no server GitHub Release
+or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
+
+## RC22 smoke remediation
+
+- Bill-rate publication now rejects a day-sensitive schedule whose holiday
+  treatment requires an authoritative calendar that bill-only evidence cannot
+  supply; the official-source workflow remains the route for completing that
+  evidence.
+- Stored legacy or otherwise unexecutable rate evidence fails closed for only
+  the affected interval/account. The worker records safe unpriceable counts,
+  continues independent work, and does not invent a price.
+- A bounded pricing-scan checkpoint under `PM_LOG_DIR` persists across worker
+  restarts, so invalid historical rates cannot starve later intervals; it never
+  fabricates a reading, rate, or price.
+- Deployment smoke uses an executable all-day synthetic rate fixture, then
+  explicitly requires worker health after the evidence probe. Failure evidence
+  exposes only allowlisted worker state, completion time, and error code.
+- Firmware/server RC21 and firmware RC22 remain immutable public prereleases.
+  RC17 remains immutable failed-candidate evidence and is never rewritten.
 
 ## Stateless sensor telemetry
 
@@ -101,25 +122,25 @@ failed-candidate evidence and is never moved or rewritten.
 
 ## Release binding
 
-- Server and frontend version: `0.1.0-rc.22`.
-- Compatible firmware tag: `v0.1.0-rc.22`, build number `25`.
+- Server and frontend version: `0.1.0-rc.23`.
+- Compatible firmware tag: `v0.1.0-rc.23`, build number `26`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
 - Alembic head: `20260820_0018`.
 - Generated contract-document SHA-256:
-  `f15e5429ca0333dbf5f1defeef01197d8a21d2bc9e684c78463f44e279b03123`.
+  `3815180f5de88ed073a83f17ae13cffcf6a233e2daebf6b6ac56d1dc892dac72`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned
-`power-monitor-v2-v0.1.0-rc.22.yaml`, release manifest, migration/security/test
+`power-monitor-v2-v0.1.0-rc.23.yaml`, release manifest, migration/security/test
 evidence, and checksums. The firmware prerelease must be published and
 independently verified first, then the server compatibility variable must be
-set to the exact RC22 firmware tag.
+set to the exact RC23 firmware tag.
 
 ## Deployment boundary
 
-Deploy the server RC22 YAML before applying the firmware RC22 update. Existing
-RC21 sensors remain protocol-compatible throughout. Automated
+Deploy the server RC23 YAML before applying the firmware RC23 update. Existing
+RC21 and RC22 sensors remain protocol-compatible throughout. Automated
 tests do not install firmware on physical sensors. No card was formatted and no
 NVS namespace was erased while preparing this release.
 

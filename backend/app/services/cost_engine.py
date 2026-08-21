@@ -3,13 +3,17 @@ from __future__ import annotations
 from calendar import monthrange
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from decimal import ROUND_FLOOR, ROUND_HALF_EVEN, Decimal
+from decimal import ROUND_FLOOR, ROUND_HALF_EVEN, Decimal, InvalidOperation
 from itertools import pairwise
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 MICRODOLLARS_PER_DOLLAR = Decimal(1_000_000)
 MWH_PER_KWH = Decimal(1_000_000)
+
+
+class RateEvaluationError(ValueError):
+    """Immutable rate evidence cannot resolve an exact price."""
 
 
 @dataclass(frozen=True)
@@ -144,15 +148,29 @@ def season_definitions_from_storage(value: object) -> tuple[SeasonDefinition, ..
     definitions: list[SeasonDefinition] = []
     for item in value:
         if not isinstance(item, dict) or not isinstance(item.get("season_name"), str):
-            raise ValueError("stored season definition is malformed")
+            raise RateEvaluationError("stored season definition is malformed")
         start_month = item.get("start_month")
         end_month = item.get("end_month")
-        if not isinstance(start_month, int) or not isinstance(end_month, int):
-            raise ValueError("stored season definition is malformed")
+        if (
+            not isinstance(start_month, int)
+            or isinstance(start_month, bool)
+            or not isinstance(end_month, int)
+            or isinstance(end_month, bool)
+            or not 1 <= start_month <= 12
+            or not 1 <= end_month <= 12
+        ):
+            raise RateEvaluationError("stored season definition is malformed")
         start_day = item.get("start_day", 1)
         end_day = item.get("end_day", monthrange(2000, end_month)[1])
-        if not isinstance(start_day, int) or not isinstance(end_day, int):
-            raise ValueError("stored season definition is malformed")
+        if (
+            not isinstance(start_day, int)
+            or isinstance(start_day, bool)
+            or not isinstance(end_day, int)
+            or isinstance(end_day, bool)
+            or not 1 <= start_day <= monthrange(2000, start_month)[1]
+            or not 1 <= end_day <= monthrange(2000, end_month)[1]
+        ):
+            raise RateEvaluationError("stored season definition is malformed")
         definitions.append(
             SeasonDefinition(
                 name=item["season_name"],
@@ -186,7 +204,7 @@ def fixed_charges_from_storage(value: object) -> tuple[FixedCharge, ...]:
     }
     for item in value:
         if not isinstance(item, dict):
-            raise ValueError("stored fixed charge is malformed")
+            raise RateEvaluationError("stored fixed charge is malformed")
         kind = item.get("charge", item.get("kind"))
         applies = item.get("applies")
         legacy = (
@@ -200,11 +218,14 @@ def fixed_charges_from_storage(value: object) -> tuple[FixedCharge, ...]:
         if legacy is not None and applies is None:
             kind, applies = legacy
         if not isinstance(kind, str) or kind not in kinds or applies not in applies_values:
-            raise ValueError("stored fixed-charge applicability is unresolved")
+            raise RateEvaluationError("stored fixed-charge applicability is unresolved")
         assert isinstance(applies, str)
-        amount = Decimal(str(item.get("amount")))
+        try:
+            amount = Decimal(str(item.get("amount")))
+        except InvalidOperation as exc:
+            raise RateEvaluationError("stored fixed charge is malformed") from exc
         if not amount.is_finite() or amount < 0:
-            raise ValueError("stored fixed charge is malformed")
+            raise RateEvaluationError("stored fixed charge is malformed")
         charges.append(FixedCharge(kind=kind, amount=amount, applies=applies))  # type: ignore[arg-type]
     return tuple(charges)
 
@@ -220,7 +241,7 @@ def event_calendar_from_evidence(value: object) -> EventCalendar | None:
     if not matching:
         return None
     if len(matching) != 1:
-        raise ValueError("stored event calendar is ambiguous")
+        raise RateEvaluationError("stored event calendar is ambiguous")
     item = matching[0]
     if (
         item.get("status") != "resolved"
@@ -228,19 +249,19 @@ def event_calendar_from_evidence(value: object) -> EventCalendar | None:
         or not isinstance(item.get("coverage_start"), str)
         or not isinstance(item.get("coverage_end"), str)
     ):
-        raise ValueError("stored event calendar is unresolved")
+        raise RateEvaluationError("stored event calendar is unresolved")
     try:
         local_dates = frozenset(date.fromisoformat(str(raw)) for raw in item["local_dates"])
         coverage_start = date.fromisoformat(item["coverage_start"])
         coverage_end = date.fromisoformat(item["coverage_end"])
     except ValueError as exc:
-        raise ValueError("stored event calendar is malformed") from exc
+        raise RateEvaluationError("stored event calendar is malformed") from exc
     if len(local_dates) != len(item["local_dates"]):
-        raise ValueError("stored event calendar is malformed or duplicated")
+        raise RateEvaluationError("stored event calendar is malformed or duplicated")
     if coverage_end < coverage_start or any(
         local_date < coverage_start or local_date > coverage_end for local_date in local_dates
     ):
-        raise ValueError("stored event calendar is malformed")
+        raise RateEvaluationError("stored event calendar is malformed")
     return EventCalendar(
         local_dates=local_dates,
         coverage_start=coverage_start,
@@ -259,7 +280,7 @@ def holiday_calendar_from_evidence(value: object) -> EventCalendar | None:
     if not matching:
         return None
     if len(matching) != 1:
-        raise ValueError("stored holiday calendar is ambiguous")
+        raise RateEvaluationError("stored holiday calendar is ambiguous")
     item = matching[0]
     if (
         item.get("status") != "resolved"
@@ -267,7 +288,7 @@ def holiday_calendar_from_evidence(value: object) -> EventCalendar | None:
         or not isinstance(item.get("coverage_start"), str)
         or not isinstance(item.get("coverage_end"), str)
     ):
-        raise ValueError("stored holiday calendar is unresolved")
+        raise RateEvaluationError("stored holiday calendar is unresolved")
     try:
         local_dates = frozenset(
             date.fromisoformat(str(holiday["local_date"]))
@@ -279,13 +300,13 @@ def holiday_calendar_from_evidence(value: object) -> EventCalendar | None:
         coverage_start = date.fromisoformat(item["coverage_start"])
         coverage_end = date.fromisoformat(item["coverage_end"])
     except (KeyError, ValueError) as exc:
-        raise ValueError("stored holiday calendar is malformed") from exc
+        raise RateEvaluationError("stored holiday calendar is malformed") from exc
     if len(local_dates) != len(item["holidays"]):
-        raise ValueError("stored holiday calendar is malformed or duplicated")
+        raise RateEvaluationError("stored holiday calendar is malformed or duplicated")
     if coverage_end < coverage_start or any(
         local_date < coverage_start or local_date > coverage_end for local_date in local_dates
     ):
-        raise ValueError("stored holiday calendar is malformed")
+        raise RateEvaluationError("stored holiday calendar is malformed")
     return EventCalendar(
         local_dates=local_dates,
         coverage_start=coverage_start,
@@ -295,7 +316,7 @@ def holiday_calendar_from_evidence(value: object) -> EventCalendar | None:
 
 def _ensure_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
-        raise ValueError("authoritative timestamps must be timezone-aware")
+        raise RateEvaluationError("authoritative timestamps must be timezone-aware")
     return value.astimezone(UTC)
 
 
@@ -319,7 +340,7 @@ def season_for_local(rate: RateVersion, local: datetime) -> str:
         if _month_day_in_range(local.month, local.day, definition)
     ]
     if len(matches) != 1:
-        raise ValueError(
+        raise RateEvaluationError(
             f"rate season resolved to {len(matches)} definitions at {local.date().isoformat()}"
         )
     return matches[0]
@@ -335,11 +356,40 @@ def season_from_storage(value: object, local: datetime) -> str:
         if _month_day_in_range(local.month, local.day, definition)
     ]
     if len(matches) != 1:
-        raise ValueError("stored season definitions do not resolve exactly once")
+        raise RateEvaluationError("stored season definitions do not resolve exactly once")
     return matches[0]
 
 
+def validate_rate_evidence(rate: RateVersion, context: CostContext | None = None) -> None:
+    """Reject a stored schedule that needs unresolved external classifications."""
+
+    treatment = {
+        "weekend_schedule": "same_as_weekend",
+        "explicit_schedule": "explicit_holiday_schedule",
+        "no_special_treatment": "no_special_treatment",
+    }.get(rate.holiday_treatment, rate.holiday_treatment)
+    day_sensitive = any(
+        period.day_type in {"weekday", "weekend", "holiday"} for period in rate.periods
+    )
+    if treatment == "unresolved" and day_sensitive:
+        raise RateEvaluationError("rate holiday treatment is unresolved")
+    if (
+        treatment in {"same_as_weekend", "same_as_weekday", "explicit_holiday_schedule"}
+        and day_sensitive
+        and rate.holiday_calendar is None
+        and (context is None or context.holiday_calendar is None)
+    ):
+        raise RateEvaluationError("rate holiday calendar is unresolved")
+    if (
+        any(period.day_type in {"event_day", "non_event_day"} for period in rate.periods)
+        and rate.event_calendar is None
+        and (context is None or context.event_calendar is None)
+    ):
+        raise RateEvaluationError("rate event calendar is unresolved")
+
+
 def _base_day_type(rate: RateVersion, local: datetime, context: CostContext) -> str:
+    validate_rate_evidence(rate, context)
     ordinary = "weekend" if local.weekday() >= 5 else "weekday"
     treatment = {
         "weekend_schedule": "same_as_weekend",
@@ -351,7 +401,7 @@ def _base_day_type(rate: RateVersion, local: datetime, context: CostContext) -> 
     )
     if treatment == "unresolved":
         if day_sensitive:
-            raise ValueError("rate holiday treatment is unresolved")
+            raise RateEvaluationError("rate holiday treatment is unresolved")
         return ordinary
     requires_detection = (
         treatment
@@ -374,14 +424,14 @@ def _base_day_type(rate: RateVersion, local: datetime, context: CostContext) -> 
             "same_as_weekday",
             "explicit_holiday_schedule",
         }:
-            raise ValueError("rate holiday treatment is unresolved")
+            raise RateEvaluationError("rate holiday treatment is unresolved")
         return ordinary
     calendar = context.holiday_calendar or rate.holiday_calendar
     if calendar is None:
-        raise ValueError("rate holiday calendar is unresolved")
+        raise RateEvaluationError("rate holiday calendar is unresolved")
     local_date = local.date()
     if local_date < calendar.coverage_start or local_date > calendar.coverage_end:
-        raise ValueError("rate holiday calendar does not cover the pricing instant")
+        raise RateEvaluationError("rate holiday calendar does not cover the pricing instant")
     if local_date not in calendar.local_dates:
         return ordinary
     if treatment == "same_as_weekend":
@@ -390,7 +440,7 @@ def _base_day_type(rate: RateVersion, local: datetime, context: CostContext) -> 
         return "weekday"
     if treatment == "explicit_holiday_schedule":
         return "holiday"
-    raise ValueError("rate holiday treatment is unresolved")
+    raise RateEvaluationError("rate holiday treatment is unresolved")
 
 
 def _day_type_priority(
@@ -404,10 +454,10 @@ def _day_type_priority(
         return (base, "all")
     calendar = context.event_calendar or rate.event_calendar
     if calendar is None:
-        raise ValueError("rate event calendar is unresolved")
+        raise RateEvaluationError("rate event calendar is unresolved")
     local_date = local.date()
     if local_date < calendar.coverage_start or local_date > calendar.coverage_end:
-        raise ValueError("rate event calendar does not cover the pricing instant")
+        raise RateEvaluationError("rate event calendar does not cover the pricing instant")
     event_type = "event_day" if local_date in calendar.local_dates else "non_event_day"
     return (event_type, base, "all")
 
@@ -421,7 +471,7 @@ def _effective_tier_bounds(
             or context.tier_threshold_season is None
             or period.season not in (context.tier_threshold_season, "all")
         ):
-            raise ValueError("account tier-threshold evidence is unresolved")
+            raise RateEvaluationError("account tier-threshold evidence is unresolved")
         threshold = context.tier_threshold_cycle_kwh
         return (
             threshold if period.tier_start_kwh > 0 else Decimal("0"),
@@ -469,7 +519,7 @@ def _period_for(
             if _ensure_utc(item.start_utc) <= instant < _ensure_utc(item.end_utc)
         ]
         if len(matches) != 1:
-            raise ValueError(
+            raise RateEvaluationError(
                 f"dated rate schedule resolved to {len(matches)} prices at {instant.isoformat()}"
             )
         selected = matches[0]
@@ -530,7 +580,7 @@ def _period_for(
         ):
             candidates = [upper if incremental_energy else lower]
     if len(candidates) != 1:
-        raise ValueError(
+        raise RateEvaluationError(
             f"rate schedule resolved to {len(candidates)} periods at {local.isoformat()}"
         )
     return candidates[0][0]
@@ -582,7 +632,7 @@ def _timedelta_microseconds(value: timedelta) -> int:
 def _allocate_integer_energy(total_mwh: int, durations_us: list[int]) -> list[int]:
     duration_total = sum(durations_us)
     if duration_total <= 0:
-        raise ValueError("interval duration must be positive")
+        raise RateEvaluationError("interval duration must be positive")
     allocations: list[int] = []
     remainder = total_mwh
     for index, duration in enumerate(durations_us):
@@ -599,7 +649,7 @@ def _allocate_microdollars(values: list[Decimal]) -> list[int]:
     """Round once at the interval boundary, then apportion exact integer microdollars."""
 
     if any(value < 0 for value in values):
-        raise ValueError("microdollar allocation values must be non-negative")
+        raise RateEvaluationError("microdollar allocation values must be non-negative")
     bases = [int(value.to_integral_value(rounding=ROUND_FLOOR)) for value in values]
     target = int(sum(values, Decimal("0")).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
     remaining = target - sum(bases)
@@ -627,11 +677,11 @@ def price_sensor_interval(
     end = _ensure_utc(end_utc)
     context = context or CostContext()
     if end <= start or energy_mwh < 0:
-        raise ValueError("invalid sensor interval")
+        raise RateEvaluationError("invalid sensor interval")
     effective_start = _ensure_utc(rate.effective_start)
     effective_end = _ensure_utc(rate.effective_end) if rate.effective_end else None
     if start < effective_start or (effective_end is not None and end > effective_end):
-        raise ValueError("sensor interval is outside the immutable rate version")
+        raise RateEvaluationError("sensor interval is outside the immutable rate version")
 
     boundaries = [start, *_pricing_boundaries(rate, start, end), end]
     durations_us = [_timedelta_microseconds(right - left) for left, right in pairwise(boundaries)]
@@ -659,7 +709,7 @@ def price_sensor_interval(
             if tier_end is not None:
                 tier_capacity = int((tier_end - cumulative) * MWH_PER_KWH)
                 if tier_capacity <= 0:
-                    raise ValueError("tier schedule does not advance at its threshold")
+                    raise RateEvaluationError("tier schedule does not advance at its threshold")
                 segment_mwh = min(segment_mwh, tier_capacity)
             if bucket_mwh and segment_mwh < remaining_mwh:
                 consumed_after = bucket_mwh - remaining_mwh + segment_mwh
@@ -711,7 +761,7 @@ def _canonical_fixed_charges(rate: RateVersion) -> tuple[FixedCharge, ...]:
     if rate.fixed_charges:
         return rate.fixed_charges
     if rate.minimum_charge or rate.meter_charge or rate.other_fixed_charge:
-        raise ValueError("fixed-charge applicability is unresolved")
+        raise RateEvaluationError("fixed-charge applicability is unresolved")
     charges: list[FixedCharge] = []
     if rate.daily_fixed_charge:
         charges.append(
@@ -749,7 +799,9 @@ def _fixed_charge_multiplier(
 ) -> int:
     if charge.applies.startswith("per_meter_"):
         if meter_count is None or meter_count < 1:
-            raise ValueError("per-meter fixed charge requires an exact utility meter count")
+            raise RateEvaluationError(
+                "per-meter fixed charge requires an exact utility meter count"
+            )
         entity_count = meter_count
     else:
         entity_count = 1
@@ -775,14 +827,14 @@ def fixed_charge_microdollars(
     if scope != "full_account":
         return 0
     if end_local_date_exclusive <= start_local_date:
-        raise ValueError("fixed-charge range must be ordered")
+        raise RateEvaluationError("fixed-charge range must be ordered")
     days = (end_local_date_exclusive - start_local_date).days
     months = _touched_calendar_months(start_local_date, end_local_date_exclusive)
     additive = Decimal("0")
     minimums: list[Decimal] = []
     for charge in _canonical_fixed_charges(rate):
         if not charge.amount.is_finite() or charge.amount < 0:
-            raise ValueError("fixed charge must be a nonnegative exact decimal")
+            raise RateEvaluationError("fixed charge must be a nonnegative exact decimal")
         if not charge.amount:
             continue
         multiplier = _fixed_charge_multiplier(
@@ -803,7 +855,7 @@ def fixed_charge_microdollars(
     if not minimums:
         return additive_microdollars
     if variable_charge_microdollars is None:
-        raise ValueError("minimum charge requires the exact variable-charge subtotal")
+        raise RateEvaluationError("minimum charge requires the exact variable-charge subtotal")
     minimum_microdollars = max(
         int((minimum * MICRODOLLARS_PER_DOLLAR).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
         for minimum in minimums
@@ -814,6 +866,6 @@ def fixed_charge_microdollars(
 
 def current_cost_per_hour_microdollars(power_w: Decimal, price_per_kwh: Decimal) -> int:
     if power_w < 0 or price_per_kwh < 0:
-        raise ValueError("power and price must be nonnegative")
+        raise RateEvaluationError("power and price must be nonnegative")
     dollars = power_w / Decimal(1000) * price_per_kwh
     return int((dollars * MICRODOLLARS_PER_DOLLAR).quantize(Decimal("1")))

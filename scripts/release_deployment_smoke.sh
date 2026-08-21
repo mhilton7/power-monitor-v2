@@ -90,8 +90,57 @@ finally:
   '
 }
 
+collect_worker_cycle_health() {
+  local container_id="$1"
+  docker exec "$container_id" python -c '
+import datetime
+import json
+import pathlib
+import re
+
+try:
+    raw = json.loads(pathlib.Path("/tmp/worker-health.json").read_text(encoding="utf-8"))
+    state = raw["state"]
+    completed = datetime.datetime.fromisoformat(raw["completed_at"])
+    error_code = raw.get("error_code")
+    if state not in {"healthy", "degraded"}:
+        raise ValueError
+    if completed.utcoffset() != datetime.timedelta(0):
+        raise ValueError
+    if state == "healthy" and error_code is not None:
+        raise ValueError
+    if state == "degraded" and (
+        not isinstance(error_code, str)
+        or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", error_code) is None
+    ):
+        raise ValueError
+except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+print(
+    json.dumps(
+        {
+            "state": state,
+            "completed_at": completed.astimezone(datetime.UTC).isoformat().replace("+00:00", "Z"),
+            "error_code": error_code,
+        },
+        allow_nan=False,
+        separators=(",", ":"),
+    )
+)
+' 2>/dev/null | jq -ce '
+    select(
+      type == "object" and
+      (.state == "healthy" or .state == "degraded") and
+      (.completed_at | type) == "string" and
+      (.error_code == null or (.error_code | type) == "string")
+    ) |
+    {state,completed_at,error_code}
+  '
+}
+
 collect_failure_diagnostics() {
-  local exit_code="$1" service container_id readiness
+  local exit_code="$1" service container_id readiness worker_cycle
   mkdir -p -- "$(dirname -- "$EVIDENCE_FILE")"
   rm -f -- "$EVIDENCE_FILE" "$authenticated_evidence" \
     "$compose_ps_evidence" "$permissions_evidence"
@@ -113,8 +162,13 @@ collect_failure_diagnostics() {
       if [[ "$service" == "api" ]]; then
         readiness="$(collect_api_readiness "$container_id")" || readiness="null"
       fi
+      worker_cycle="null"
+      if [[ "$service" == "worker" ]]; then
+        worker_cycle="$(collect_worker_cycle_health "$container_id")" || worker_cycle="null"
+      fi
       if ! docker inspect "$container_id" 2>/dev/null | jq -c \
-        --arg service "$service" --arg container_id "$container_id" --argjson readiness "$readiness" \
+        --arg service "$service" --arg container_id "$container_id" \
+        --argjson readiness "$readiness" --argjson worker_cycle "$worker_cycle" \
         '.[0].State as $state |
           {service:$service,container_id:$container_id,state:(
             if
@@ -133,7 +187,7 @@ collect_failure_diagnostics() {
                 then {status:$state.Health.Status,failing_streak:$state.Health.FailingStreak}
                 else null
                 end
-              ),readiness:$readiness}
+              ),readiness:$readiness,worker_cycle:$worker_cycle}
             else null
             end
           )}' \
@@ -176,6 +230,7 @@ Path(sys.argv[1]).write_text(
                 "allowlisted service log event timeline",
                 "Compose service state",
                 "allowlisted container health state",
+                "allowlisted worker cycle health state",
             ],
         },
         allow_nan=False,
@@ -306,6 +361,9 @@ python backend/tests/deployment_evidence_probe.py \
   --base-url "$endpoint" --ca-file "$work/tls-ca.crt" \
   --email "$smoke_email" --password "$test_password" \
   --output "$authenticated_evidence"
+failed_assertion="worker_healthy_after_authenticated_pricing"
+wait_healthy worker
+failed_assertion="outside_instrumented_recovery"
 jq -e \
   '.schema == "pm-deployment-authenticated-evidence/1.0.0" and .status == "passed" and .enrollment == "authenticated" and .heartbeat == "authenticated_pzem" and .reading_sequence == 1 and .usage_source == "authenticated PZEM-004T sensor intervals only" and .rate_source == "reviewed_rate_only_pdf" and (.cost | tonumber) > 0 and .command.delivery == "authenticated" and .command.state == "succeeded"' \
   "$authenticated_evidence" >/dev/null
@@ -469,7 +527,7 @@ jq -cn \
   --argjson restore "$(sudo cat "$base/backups/status/last-successful-restore-test.json")" \
   --argjson authenticated "$(cat "$authenticated_evidence")" \
   --argjson pdf_sandbox "$(cat "$work/pdf-sandbox.json")" \
-  '{schema:"pm-deployment-test/1.0.0",version:$version,revision:$revision,completed_at:$completed_at,status:"passed",services:($services|split(" ")),checks:["exact service set","digest-pinned image startup","one-shot host initializer first run","one-shot host initializer idempotent rerun","TLS chain and hostname","liveness and readiness","API image PDF sandbox self-test","authenticated owner login","authenticated sensor enrollment","authenticated PZEM heartbeat and reading","PZEM-only History","reviewed rate-only PDF","worker-produced sensor cost","authenticated command round trip","authenticated system health","SSE proxy streaming","oversize PDF rejection","per-service restarts without initializer restart","migration rerun","full-stack runtime restart without initializer restart","bind-mount access","encrypted backup","isolated restore"],rollback:"not_exercised_github_hosted_smoke",pdf_sandbox:$pdf_sandbox,authenticated_sensor_evidence:$authenticated,backup:$backup,restore_test:$restore}' \
+  '{schema:"pm-deployment-test/1.0.0",version:$version,revision:$revision,completed_at:$completed_at,status:"passed",services:($services|split(" ")),checks:["exact service set","digest-pinned image startup","one-shot host initializer first run","one-shot host initializer idempotent rerun","TLS chain and hostname","liveness and readiness","API image PDF sandbox self-test","authenticated owner login","authenticated sensor enrollment","authenticated PZEM heartbeat and reading","PZEM-only History","reviewed rate-only PDF","worker-produced sensor cost","worker healthy after authenticated pricing","authenticated command round trip","authenticated system health","SSE proxy streaming","oversize PDF rejection","per-service restarts without initializer restart","migration rerun","full-stack runtime restart without initializer restart","bind-mount access","encrypted backup","isolated restore"],rollback:"not_exercised_github_hosted_smoke",pdf_sandbox:$pdf_sandbox,authenticated_sensor_evidence:$authenticated,backup:$backup,restore_test:$restore}' \
   > "$EVIDENCE_FILE"
 cp "$work/compose-ps.jsonl" "$compose_ps_evidence"
 cp "$work/permissions.txt" "$permissions_evidence"

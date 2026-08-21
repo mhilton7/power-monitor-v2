@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from backend.app.config import Settings, get_settings
@@ -55,6 +59,7 @@ from backend.app.services.cost_engine import (
     CostContext,
     DatedPrice,
     PricePeriod,
+    RateEvaluationError,
     RateVersion,
     event_calendar_from_evidence,
     fixed_charge_microdollars,
@@ -63,6 +68,7 @@ from backend.app.services.cost_engine import (
     price_sensor_interval,
     season_definitions_from_storage,
     season_for_local,
+    validate_rate_evidence,
 )
 from backend.app.services.firmware_deployments import (
     advance_next_staged_firmware_deployment as advance_next_staged_firmware_deployment,
@@ -80,10 +86,104 @@ from backend.app.services.stateless_telemetry import (
     apply_stateless_history_retention,
     finalize_stateless_history,
 )
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 WORKER_LOCK_ID = 0x504D5632
+PENDING_COST_CURSOR_FILENAME = "worker-cost-scan-cursor.json"
+PENDING_COST_CURSOR_SCHEMA = "pm-worker-cost-scan-cursor/1.0.0"
+PENDING_COST_CURSOR_MAX_BYTES = 1024
+
+
+def _load_pending_cost_scan_cursor(directory: Path) -> tuple[datetime, str] | None:
+    path = directory / PENDING_COST_CURSOR_FILENAME
+    try:
+        if stat.S_ISLNK(path.lstat().st_mode):
+            return None
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            metadata = os.fstat(handle.fileno())
+            if not stat.S_ISREG(metadata.st_mode):
+                return None
+            if metadata.st_size < 2 or metadata.st_size > PENDING_COST_CURSOR_MAX_BYTES:
+                return None
+            raw = handle.read(PENDING_COST_CURSOR_MAX_BYTES + 1)
+            if handle.read(1) or len(raw.encode("utf-8")) > PENDING_COST_CURSOR_MAX_BYTES:
+                return None
+        value = json.loads(raw)
+    except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or set(value) != {"schema", "start_utc", "interval_id"}:
+        return None
+    if value["schema"] != PENDING_COST_CURSOR_SCHEMA:
+        return None
+    start_text = value["start_utc"]
+    interval_id = value["interval_id"]
+    if (
+        not isinstance(start_text, str)
+        or len(start_text) > 40
+        or not isinstance(interval_id, str)
+        or len(interval_id) != 36
+    ):
+        return None
+    try:
+        start = datetime.fromisoformat(start_text.replace("Z", "+00:00"))
+        parsed_id = UUID(interval_id)
+    except ValueError:
+        return None
+    if start.tzinfo is None or start.utcoffset() != timedelta(0) or str(parsed_id) != interval_id:
+        return None
+    return start.astimezone(UTC), interval_id
+
+
+def _write_pending_cost_scan_cursor(
+    directory: Path,
+    cursor: tuple[datetime, str],
+) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    resolved_directory = directory.resolve(strict=True)
+    destination = resolved_directory / PENDING_COST_CURSOR_FILENAME
+    start, interval_id = cursor
+    payload = (
+        json.dumps(
+            {
+                "schema": PENDING_COST_CURSOR_SCHEMA,
+                "start_utc": aware_utc(start).isoformat().replace("+00:00", "Z"),
+                "interval_id": interval_id,
+            },
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    if len(payload.encode("utf-8")) > PENDING_COST_CURSOR_MAX_BYTES:
+        raise RuntimeError("pending-cost scan cursor exceeded its fixed size limit")
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=resolved_directory,
+        prefix=f".{PENDING_COST_CURSOR_FILENAME}.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, destination)
+        if os.name == "posix":
+            directory_descriptor = os.open(
+                resolved_directory,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
 
 DEVICE_ALERT_TYPES = frozenset(
     {
@@ -184,7 +284,9 @@ async def _rate_for_interval(
     )
     holiday_calendar = holiday_calendar_from_evidence(version.eligibility_evidence)
     if holiday_calendar is not None and holiday_calendar.local_dates != holidays:
-        raise ValueError("stored holiday calendar does not match its persisted holiday rows")
+        raise RateEvaluationError(
+            "stored holiday calendar does not match its persisted holiday rows"
+        )
     domain = RateVersion(
         id=version.id,
         rate_plan_id=version.rate_plan_id,
@@ -235,6 +337,7 @@ async def _rate_for_interval(
         algorithm_version=version.algorithm_version,
         holidays=holidays,
     )
+    validate_rate_evidence(domain)
     effective_scope = "energy_only"
     member_ids: tuple[str, ...] = (device.id,)
     if account.cost_scope == "full_account":
@@ -550,33 +653,86 @@ def _allocate_integer_total(total: int, weights: list[int]) -> list[int]:
     return bases
 
 
-async def calculate_pending_costs(session: AsyncSession, limit: int = 1000) -> int:
-    intervals = (
-        await session.scalars(
-            select(NormalizedInterval)
-            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
-            .join(Device, Device.id == NormalizedInterval.device_id)
-            .where(
-                or_(
-                    NormalizedInterval.source_kind == "stateless_v2",
-                    RawReading.reset_generation == Device.reset_generation,
-                ),
-                NormalizedInterval.finalized.is_(True),
-                NormalizedInterval.energy_mwh.is_not(None),
-                ~select(IntervalCostSelection.normalized_interval_id)
-                .where(IntervalCostSelection.normalized_interval_id == NormalizedInterval.id)
-                .exists(),
-            )
-            .order_by(NormalizedInterval.start_utc)
-            .limit(limit)
+async def calculate_pending_costs(
+    session: AsyncSession,
+    limit: int = 1000,
+    *,
+    metrics: dict[str, int] | None = None,
+    cursor_directory: Path | None = None,
+) -> int:
+    if limit <= 0:
+        if metrics is not None:
+            metrics["unpriceable"] = 0
+        return 0
+
+    pending = (
+        select(NormalizedInterval)
+        .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+        .join(Device, Device.id == NormalizedInterval.device_id)
+        .where(
+            or_(
+                NormalizedInterval.source_kind == "stateless_v2",
+                RawReading.reset_generation == Device.reset_generation,
+            ),
+            NormalizedInterval.finalized.is_(True),
+            NormalizedInterval.energy_mwh.is_not(None),
+            ~select(IntervalCostSelection.normalized_interval_id)
+            .where(IntervalCostSelection.normalized_interval_id == NormalizedInterval.id)
+            .exists(),
         )
-    ).all()
+        .order_by(NormalizedInterval.start_utc, NormalizedInterval.id)
+    )
+    cursor = (
+        _load_pending_cost_scan_cursor(cursor_directory) if cursor_directory is not None else None
+    )
+    if cursor is None:
+        intervals = list((await session.scalars(pending.limit(limit))).all())
+    else:
+        after_cursor = or_(
+            NormalizedInterval.start_utc > cursor[0],
+            and_(
+                NormalizedInterval.start_utc == cursor[0],
+                NormalizedInterval.id > cursor[1],
+            ),
+        )
+        intervals = list((await session.scalars(pending.where(after_cursor).limit(limit))).all())
+        if len(intervals) < limit:
+            through_cursor = or_(
+                NormalizedInterval.start_utc < cursor[0],
+                and_(
+                    NormalizedInterval.start_utc == cursor[0],
+                    NormalizedInterval.id <= cursor[1],
+                ),
+            )
+            intervals.extend(
+                (
+                    await session.scalars(
+                        pending.where(through_cursor).limit(limit - len(intervals))
+                    )
+                ).all()
+            )
+    if intervals:
+        last_scanned = intervals[-1]
+        if cursor_directory is not None:
+            _write_pending_cost_scan_cursor(
+                cursor_directory,
+                (last_scanned.start_utc, last_scanned.id),
+            )
     created = 0
+    unpriceable = 0
     processed: set[str] = set()
     for interval in intervals:
         if interval.id in processed:
             continue
-        resolved = await _rate_for_interval(session, interval)
+        try:
+            resolved = await _rate_for_interval(session, interval)
+        except RateEvaluationError:
+            # Published evidence is immutable, so malformed or unresolved
+            # schedule evidence cannot be repaired inside this worker cycle.
+            # Fail closed for only this interval; one bad rate must not roll
+            # back independent authenticated intervals for other accounts.
+            unpriceable += 1
+            continue
         if resolved is None:
             continue
         rate, account, effective_scope, member_ids = resolved
@@ -620,17 +776,31 @@ async def calculate_pending_costs(session: AsyncSession, limit: int = 1000) -> i
             )
             if already_selected:
                 continue
-        context = await _cost_context(session, interval, account, rate, member_ids, effective_scope)
-        if context is None:
+        try:
+            context = await _cost_context(
+                session,
+                interval,
+                account,
+                rate,
+                member_ids,
+                effective_scope,
+            )
+            if context is None:
+                continue
+            combined_energy = sum(int(item.energy_mwh or 0) for item in group)
+            result = price_sensor_interval(
+                start_utc=aware_utc(interval.start_utc),
+                end_utc=aware_utc(interval.end_utc),
+                energy_mwh=combined_energy,
+                rate=rate,
+                context=context,
+            )
+        except RateEvaluationError:
+            # Cost-engine validation is deliberately fail closed. Keep the
+            # interval unpriced while allowing unrelated work to commit.
+            unpriceable += len(group)
+            processed.update(item.id for item in group)
             continue
-        combined_energy = sum(int(item.energy_mwh or 0) for item in group)
-        result = price_sensor_interval(
-            start_utc=aware_utc(interval.start_utc),
-            end_utc=aware_utc(interval.end_utc),
-            energy_mwh=combined_energy,
-            rate=rate,
-            context=context,
-        )
         run = CostRun(
             rate_plan_version_id=rate.id,
             algorithm_version=rate.algorithm_version,
@@ -667,16 +837,24 @@ async def calculate_pending_costs(session: AsyncSession, limit: int = 1000) -> i
             processed.add(member.id)
             created += 1
     await session.flush()
+    if metrics is not None:
+        metrics["unpriceable"] = unpriceable
     return created
 
 
-async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | None = None) -> int:
+async def calculate_billing_estimates(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+    metrics: dict[str, int] | None = None,
+) -> int:
     """Select immutable cycle-to-date estimates from authenticated sensor costs."""
 
     instant = now or datetime.now(UTC)
     scope_end = instant.replace(second=0, microsecond=0)
     accounts = (await session.scalars(select(UtilityAccount))).all()
     created = 0
+    unpriceable = 0
     for account in accounts:
         assignments = (
             await session.scalars(
@@ -736,9 +914,24 @@ async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | 
                 )
             ).all()
         )
-        holiday_calendar = holiday_calendar_from_evidence(version.eligibility_evidence)
-        if holiday_calendar is not None and holiday_calendar.local_dates != holidays:
-            raise ValueError("stored holiday calendar does not match its persisted holiday rows")
+        try:
+            holiday_calendar = holiday_calendar_from_evidence(version.eligibility_evidence)
+            if holiday_calendar is not None and holiday_calendar.local_dates != holidays:
+                raise RateEvaluationError(
+                    "stored holiday calendar does not match its persisted holiday rows"
+                )
+            season_definitions = season_definitions_from_storage(version.season_definitions)
+            event_calendar = event_calendar_from_evidence(version.eligibility_evidence)
+            fixed_charges = fixed_charges_from_storage(version.fixed_charges)
+        except RateEvaluationError:
+            await session.execute(
+                delete(BillingEstimateSelection).where(
+                    BillingEstimateSelection.utility_account_id == account.id,
+                    BillingEstimateSelection.estimate_kind == "billing_cycle_to_date",
+                )
+            )
+            unpriceable += 1
+            continue
         rate = RateVersion(
             id=version.id,
             rate_plan_id=version.rate_plan_id,
@@ -769,10 +962,10 @@ async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | 
                 )
                 for item in dated_prices
             ),
-            season_definitions=season_definitions_from_storage(version.season_definitions),
+            season_definitions=season_definitions,
             holiday_treatment=version.holiday_treatment,
             holiday_calendar=holiday_calendar,
-            event_calendar=event_calendar_from_evidence(version.eligibility_evidence),
+            event_calendar=event_calendar,
             baseline_credit_per_kwh=version.baseline_credit_per_kwh,
             tier_threshold_kwh_per_day=version.tier_threshold_kwh_per_day,
             tier_threshold_season=version.tier_threshold_season,
@@ -783,12 +976,23 @@ async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | 
             minimum_charge=version.minimum_charge,
             meter_charge=version.meter_charge,
             other_fixed_charge=version.other_fixed_charge,
-            fixed_charges=fixed_charges_from_storage(version.fixed_charges),
+            fixed_charges=fixed_charges,
             cca_adjustment_per_kwh=version.cca_adjustment_per_kwh,
             surcharge_percent=version.surcharge_percent,
             algorithm_version=version.algorithm_version,
             holidays=holidays,
         )
+        try:
+            validate_rate_evidence(rate)
+        except RateEvaluationError:
+            await session.execute(
+                delete(BillingEstimateSelection).where(
+                    BillingEstimateSelection.utility_account_id == account.id,
+                    BillingEstimateSelection.estimate_kind == "billing_cycle_to_date",
+                )
+            )
+            unpriceable += 1
+            continue
         cycle_start = _billing_cycle_start(instant, account)
         if (
             aware_utc(assignment.effective_start) > cycle_start
@@ -895,17 +1099,29 @@ async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | 
             zone = ZoneInfo(account.timezone)
             local_start = cycle_start.astimezone(zone).date()
             local_end_exclusive = scope_end.astimezone(zone).date() + timedelta(days=1)
-            fixed = fixed_charge_microdollars(
-                rate,
-                local_start,
-                local_end_exclusive,
-                scope=scope_kind,
-                # One UtilityAccount is unique per home and its verified Main-service
-                # billing source represents one utility billing meter.  Sensor/CT
-                # membership is deliberately never used as the meter multiplier.
-                meter_count=1,
-                variable_charge_microdollars=max(0, energy_cost - credits),
-            )
+            try:
+                fixed = fixed_charge_microdollars(
+                    rate,
+                    local_start,
+                    local_end_exclusive,
+                    scope=scope_kind,
+                    # One UtilityAccount is unique per home and its verified Main-service
+                    # billing source represents one utility billing meter.  Sensor/CT
+                    # membership is deliberately never used as the meter multiplier.
+                    meter_count=1,
+                    variable_charge_microdollars=max(0, energy_cost - credits),
+                )
+            except RateEvaluationError:
+                await session.execute(
+                    delete(BillingEstimateSelection).where(
+                        BillingEstimateSelection.utility_account_id == account.id,
+                        BillingEstimateSelection.estimate_kind == "billing_cycle_to_date",
+                        BillingEstimateSelection.scope_kind == scope_kind,
+                        BillingEstimateSelection.scope_id == scope_id,
+                    )
+                )
+                unpriceable += 1
+                continue
             input_document = {
                 "schema": "pm-billing-estimate-input/1.0.0",
                 "account_id": account.id,
@@ -974,6 +1190,8 @@ async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | 
             else:
                 selection.billing_estimate_id = estimate.id
                 selection.selected_at = scope_end
+    if metrics is not None:
+        metrics["unpriceable"] = unpriceable
     return created
 
 
@@ -1658,6 +1876,8 @@ async def run_jobs(
     if not await acquire_worker_lease(session):
         return {"lease_busy": 1}
     effective_settings = settings or get_settings()
+    if effective_settings.env == "production" and effective_settings.log_dir is None:
+        raise RuntimeError("production worker requires PM_LOG_DIR for its durable cost cursor")
     artifact_reconciliation = await reconcile_firmware_artifact_quarantines(
         session,
         firmware_dir=effective_settings.firmware_dir,
@@ -1668,14 +1888,24 @@ async def run_jobs(
     promoted_uploads = artifact_reconciliation["promoted_upload_release_ids"]
     rate_sync = await sync_due_rate_sources(session, effective_settings)
     stateless_finalized = await finalize_stateless_history(session)
+    cost_metrics: dict[str, int] = {}
+    costs = await calculate_pending_costs(
+        session,
+        metrics=cost_metrics,
+        cursor_directory=effective_settings.log_dir,
+    )
+    billing_metrics: dict[str, int] = {}
+    billing_estimates = await calculate_billing_estimates(session, metrics=billing_metrics)
     result = {
         "rate_sources_checked": rate_sync["checked"],
         "rate_sources_failed": rate_sync["failed"],
         "rate_sources_review_required": rate_sync["review_required"],
         "rate_sources_unchanged": rate_sync["unchanged"],
         "stateless_history_finalized": stateless_finalized,
-        "costs": await calculate_pending_costs(session),
-        "billing_estimates": await calculate_billing_estimates(session),
+        "costs": costs,
+        "costs_unpriceable": cost_metrics.get("unpriceable", 0),
+        "billing_estimates": billing_estimates,
+        "billing_estimates_unpriceable": billing_metrics.get("unpriceable", 0),
         "rollups": await update_rollups(session),
         "alerts": await evaluate_sensor_alerts(session),
         "operational_alerts": await evaluate_operational_alerts(
