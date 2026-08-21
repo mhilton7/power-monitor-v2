@@ -178,15 +178,16 @@ This report records the verified local RC22 implementation state on 2026-08-20. 
 
     The PostgreSQL suite ran the same pytest collection against a disposable role-separated PostgreSQL 17.10 database migrated to `20260820_0018`. The clean firmware build/assembly used the repository’s immutable-digest ESP-IDF v6.0.2 container runner; profile, stack, active-graph, artifact-identity, and dependency-audit tools ran against that build. Secrets, image-push, tag, physical flash, and production-data commands were not run.
 
-70. **Result of every command.** Ruff check and format check passed across 114 Python files; mypy passed 97 backend/worker files and the Linux initializer. The full real-PostgreSQL suite passed 378 tests with 8 expected environment skips in 120.34 seconds; API DDL, backup writes, and bootstrap login were denied as designed. A portable run produced 370 passes, 22 expected skips, and 15 setup errors caused solely by a denied default Windows temp directory; its affected audit-runner file was rerun with a validated workspace temp directory and passed 21/21, so the initial command is recorded as failed rather than hidden. Frontend check passed lint, strict typecheck, 81 unit tests, and production build; Playwright passed 44/44. Contract generation/validation, eight JSON contract checks, the cross-repository validator, 13/13 nested firmware contract tests, and release validation passed. The opt-in official-root smoke passed 1/1. Firmware host evidence passed 115 tests with 3 native-compiler discovery skips; those three C tests then passed 3/3 under MSVC 14.50, the fault matrix passed 36/36, the 10,368,000-sample simulation passed, the final ESP-IDF build/profile/active-graph/stack checks passed (322 functions, 17 objects, maximum first-party frame 2,576 ≤ 3,072 bytes), and the dependency audit reported 3 subjects/0 vulnerabilities. Local firmware release assembly passed at `power-monitor-sensor-headless/release/out/0.1.0-rc.22`: 24 files total (`SHA256SUMS` plus 23 covered artifacts), and every recorded checksum matched. Release/YAML identity tests passed 88 with 3 expected environment skips; strict build-number/build-ID separation, renderer, verifier, both Compose configurations, and hardware-certification v2 semantics passed. All four production Dockerfiles built locally for amd64 and cross-built for `linux/amd64,linux/arm64`; local validation image IDs were API `02dc8dbc…cf94a5`, frontend `e9cc8525…40bd70`, gateway `fe285613…b77db`, and backup `31771c5c…31ba8`. These local IDs are not claimed as GHCR registry-index digests. No target-TrueNAS run, remote GHCR scan/attestation, marked-unit HIL, 72-hour soak, or physical OTA was run.
+70. **Result of every command.** Ruff check and format check passed across 114 Python files; mypy passed 97 backend/worker files and the Linux initializer. The full real-PostgreSQL suite passed 378 tests with 8 expected environment skips in 120.34 seconds; API DDL, backup writes, and bootstrap login were denied as designed. A portable run produced 370 passes, 22 expected skips, and 15 setup errors caused solely by a denied default Windows temp directory; its affected audit-runner file was rerun with a validated workspace temp directory and passed 21/21, so the initial command is recorded as failed rather than hidden. Frontend check passed lint, strict typecheck, 81 unit tests, and production build; Playwright passed 44/44. Contract generation/validation, eight JSON contract checks, the cross-repository validator, 13/13 nested firmware contract tests, and release validation passed. The opt-in official-root smoke passed 1/1. Firmware host evidence passed 115 tests with 3 native-compiler discovery skips; those three C tests then passed 3/3 under MSVC 14.50, the fault matrix passed 36/36, the 10,368,000-sample simulation passed, the final ESP-IDF build/profile/active-graph/stack checks passed (322 functions, 17 objects, maximum first-party frame 2,576 ≤ 3,072 bytes), and the dependency audit reported 3 subjects/0 vulnerabilities. Local firmware release assembly passed at `power-monitor-sensor-headless/release/out/0.1.0-rc.22`: 24 files total (`SHA256SUMS` plus 23 covered artifacts), and every recorded checksum matched. Release/YAML identity tests passed 88 with 3 expected environment skips; strict build-number/build-ID separation, renderer, verifier, both Compose configurations, and hardware-certification v2 semantics passed. All four production Dockerfiles built locally for amd64 and cross-built for `linux/amd64,linux/arm64`; local validation image IDs were API `02dc8dbc…cf94a5`, frontend `e9cc8525…40bd70`, gateway `fe285613…b77db`, and backup `31771c5c…31ba8`. PR validation then found and corrected one CodeQL hostname-comparison finding and two fixed `golang.org/x/mod` vulnerabilities; the corrected gateway passed pinned Go test/vet/module verification, reproducible builder proof, and a digest-pinned Trivy scan with zero HIGH/CRITICAL findings. The server tag gate was also hardened to require a GitHub-verified signed annotated tag targeting the exact workflow commit; its focused release-policy suite passed 23 tests with 3 documented Linux/jq-only skips. These local image IDs are not claimed as GHCR registry-index digests. No target-TrueNAS run, remote GHCR scan/attestation, marked-unit HIL, 72-hour soak, or physical OTA was run.
 
-71. **`git diff --name-only`.** Immediately before the signed root commit, `git diff --name-only` plus `git ls-files --others --exclude-standard` identified exactly 103 root implementation/report paths. The signed firmware commit contains exactly 42 tracked firmware paths. The firmware paths are represented by local commit `34ca9510c77153964aedec6a28346f1d9ca256bb`; the exact reviewed path inventory was:
+71. **`git diff --name-only`.** The initial signed root implementation commit contained exactly 103 implementation/report paths. The final pre-merge CI and release-policy corrections extended the reviewed root inventory to exactly 108 paths. The signed firmware commit contains exactly 42 tracked firmware paths. The firmware paths are represented by local commit `34ca9510c77153964aedec6a28346f1d9ca256bb`; the exact reviewed path inventory was:
 
     <details>
     <summary>Root repository tracked paths</summary>
 
     ```text
     .github/workflows/ci.yml
+    .github/workflows/release-gates.yml
     .github/workflows/release.yml
     .github/workflows/stable-promotion.yml
     .gitleaks.toml
@@ -230,6 +231,7 @@ This report records the verified local RC22 implementation state on 2026-08-20. 
     deploy/truenas/INSTALLATION.md
     deploy/truenas/ROLLBACK.md
     deploy/truenas/UPGRADE.md
+    docs/DEPENDENCY_AUDIT.md
     docs/ALERTS_AND_DIAGNOSTICS.md
     docs/DEVICE_ENROLLMENT.md
     docs/FIRMWARE_RELEASES.md
@@ -238,6 +240,7 @@ This report records the verified local RC22 implementation state on 2026-08-20. 
     docs/INSTALLATION.md
     docs/RELEASE_PROCESS.md
     docs/REQUIREMENTS_TRACEABILITY.md
+    docs/SECURITY.md
     docs/TESTING.md
     docs/TRUE_NAS_DEPLOYMENT.md
     frontend/Dockerfile
@@ -271,6 +274,8 @@ This report records the verified local RC22 implementation state on 2026-08-20. 
     frontend/tests/rate-workflow.test.tsx
     frontend/tests/settings.test.tsx
     gateway/Dockerfile
+    gateway/go.mod
+    gateway/go.sum
     pyproject.toml
     release/README.md
     release/RC22_IMPLEMENTATION_REPORT.md

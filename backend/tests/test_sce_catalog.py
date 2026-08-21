@@ -5,6 +5,7 @@ import os
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from backend.app.config import Settings
@@ -210,7 +211,11 @@ def test_dynamic_discovery_never_silently_drops_unknown_or_pinned_tariff_links()
     assert multifamily.discovery_state == "requires_parser"
     solar = next(entry for entry in entries if entry.public_plan_name.startswith("Solar"))
     assert "solar_or_nem" in solar.eligibility
-    tariff = next(entry for entry in entries if "edisonintl.sharepoint.com" in entry.source_url)
+    tariff = next(
+        entry
+        for entry in entries
+        if urlsplit(entry.source_url).hostname == "edisonintl.sharepoint.com"
+    )
     assert tariff.discovery_state == "excluded"
     assert tariff.source_level == 1
     assert tariff.exclusion_reason == "OFFICIAL_HOST_OUTSIDE_FETCH_ALLOWLIST"

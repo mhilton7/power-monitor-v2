@@ -193,6 +193,34 @@ def test_release_gate_archives_latest_same_major_public_release_not_newest_tag()
     assert "|| true" not in step
 
 
+def _current_release_tag_step() -> str:
+    gates = (ROOT / ".github/workflows/release-gates.yml").read_text(encoding="utf-8")
+    return gates.split(
+        "- name: Require the current signed annotated release tag",
+        maxsplit=1,
+    )[1].split("- name: Initialize the production PostgreSQL role split", maxsplit=1)[0]
+
+
+def test_current_release_gate_requires_verified_annotated_exact_target_first() -> None:
+    gates = (ROOT / ".github/workflows/release-gates.yml").read_text(encoding="utf-8")
+    step_name = "Require the current signed annotated release tag"
+    assert gates.index(step_name) < gates.index("Initialize the production PostgreSQL role split")
+    step = _current_release_tag_step()
+
+    assert '[[ "$GITHUB_REF_TYPE" == tag ]]' in step
+    assert 'git show-ref --verify --quiet "$current_ref"' in step
+    assert '[[ "$(git cat-file -t "$local_tag_object")" == tag ]]' in step
+    assert '[[ "$local_commit" == "$GITHUB_SHA" ]]' in step
+    assert 'select(.ref == $expected_ref and .object.type == "tag")' in step
+    assert '[[ "$local_tag_object" == "$remote_tag_object" ]]' in step
+    assert "and .object.sha == $expected_commit" in step
+    assert ".verification.verified == true" in step
+    assert '.verification.reason == "valid"' in step
+    assert ".verification.verified_at" in step
+    assert '[[ "$remote_commit" == "$local_commit" ]]' in step
+    assert "git tag --points-at" not in step
+
+
 def _release_upgrade_step() -> str:
     gates = (ROOT / ".github/workflows/release-gates.yml").read_text(encoding="utf-8")
     return gates.split(
@@ -217,6 +245,80 @@ def _run_jq(program: str, value: object, *arguments: str) -> subprocess.Complete
         capture_output=True,
         check=False,
     )
+
+
+def test_current_release_tag_filters_reject_lightweight_unsigned_or_wrong_target() -> None:
+    step = _current_release_tag_step()
+    ref_program = _between(
+        step,
+        'jq -er --arg expected_ref "$current_ref" \'\n',
+        '\n            \' "$tag_ref_metadata"',
+    )
+    tag_program = _between(
+        step,
+        "              select(\n                .sha == $expected_tag_object",
+        '\n            \' "$tag_object_metadata"',
+    )
+    tag_program = "select(\n  .sha == $expected_tag_object" + tag_program
+    tag_object = "a" * 40
+    commit = "b" * 40
+    tag_name = "v0.1.0-rc.22"
+    tag_ref = f"refs/tags/{tag_name}"
+    ref = {
+        "ref": tag_ref,
+        "object": {"sha": tag_object, "type": "tag"},
+    }
+    ref_arguments = ("--arg", "expected_ref", tag_ref)
+    ref_result = _run_jq(ref_program, ref, *ref_arguments)
+    assert ref_result.returncode == 0, ref_result.stderr
+    assert ref_result.stdout.strip() == tag_object
+
+    lightweight_ref = json.loads(json.dumps(ref))
+    lightweight_ref["object"]["type"] = "commit"
+    assert _run_jq(ref_program, lightweight_ref, *ref_arguments).returncode != 0
+
+    metadata = {
+        "sha": tag_object,
+        "tag": tag_name,
+        "object": {"sha": commit, "type": "commit"},
+        "verification": {
+            "payload": "signed payload",
+            "reason": "valid",
+            "signature": "SSH signature",
+            "verified": True,
+            "verified_at": "2026-08-20T12:00:00Z",
+        },
+    }
+    tag_arguments = (
+        "--arg",
+        "expected_tag",
+        tag_name,
+        "--arg",
+        "expected_tag_object",
+        tag_object,
+        "--arg",
+        "expected_commit",
+        commit,
+    )
+    tag_result = _run_jq(tag_program, metadata, *tag_arguments)
+    assert tag_result.returncode == 0, tag_result.stderr
+    assert tag_result.stdout.strip() == commit
+
+    for path, invalid_value in (
+        (("verification", "verified"), False),
+        (("verification", "reason"), "unknown_key"),
+        (("verification", "verified_at"), None),
+        (("object", "sha"), "c" * 40),
+        (("object", "type"), "tag"),
+        (("sha",), "d" * 40),
+        (("tag",), "v0.1.0-rc.21"),
+    ):
+        invalid = json.loads(json.dumps(metadata))
+        target = invalid
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = invalid_value
+        assert _run_jq(tag_program, invalid, *tag_arguments).returncode != 0
 
 
 def test_public_release_selector_executes_against_paginated_fail_closed_fixtures() -> None:
@@ -530,8 +632,9 @@ def test_gateway_image_removes_unneeded_file_capability_and_is_release_owned() -
     assert "v2.11.4-pmv2.1" in dockerfile
     assert "h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0=" in dockerfile
     for module in (
-        "golang.org/x/net v0.56.0",
-        "golang.org/x/text v0.39.0",
+        "golang.org/x/mod v0.40.0",
+        "golang.org/x/net v0.58.0",
+        "golang.org/x/text v0.41.0",
         "google.golang.org/grpc v1.82.1",
     ):
         assert module in go_mod
@@ -931,6 +1034,26 @@ def test_candidate_notes_describe_workflow_output_without_claiming_source_public
     assert "continuous 72-hour hardware soak" in normalized
     assert "repositories do not yet exist" not in normalized
     assert "Current `gh` authentication is invalid" not in normalized
+
+
+def test_release_process_requires_merge_then_verified_signed_annotated_tag() -> None:
+    process = (ROOT / "docs/RELEASE_PROCESS.md").read_text(encoding="utf-8")
+    normalized = " ".join(process.split())
+    merge = "Merge the approved pull request through the protected `main` branch"
+    update = "git pull --ff-only origin main"
+    firmware = "Publish and independently verify the coordinated signed firmware"
+    create = "git tag -s -m 'PowerMeter V2 0.1.0-rc.22'"
+    verify = "git verify-tag v0.1.0-rc.22"
+    push = "git push origin refs/tags/v0.1.0-rc.22"
+
+    assert normalized.index(merge) < normalized.index(update)
+    assert normalized.index(update) < normalized.index(firmware)
+    assert normalized.index(firmware) < normalized.index(create)
+    assert normalized.index(create) < normalized.index(verify) < normalized.index(push)
+    assert "Never tag a feature-branch commit" in normalized
+    assert 'test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"' in normalized
+    assert "requires GitHub to report a valid cryptographic signature" in normalized
+    assert "lightweight, unsigned, invalid, or retargeted tag" in normalized
 
 
 def test_rc3_recovery_docs_separate_failed_rc2_forward_upgrade_and_publication() -> None:

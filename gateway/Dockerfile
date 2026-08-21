@@ -15,8 +15,9 @@ RUN set -eux; \
     go mod tidy -diff; \
     go list -mod=readonly -m all > /out/modules.txt; \
     grep -Fx 'github.com/caddyserver/caddy/v2 v2.11.4' /out/modules.txt; \
-    grep -Fx 'golang.org/x/net v0.56.0' /out/modules.txt; \
-    grep -Fx 'golang.org/x/text v0.39.0' /out/modules.txt; \
+    grep -Fx 'golang.org/x/mod v0.40.0' /out/modules.txt; \
+    grep -Fx 'golang.org/x/net v0.58.0' /out/modules.txt; \
+    grep -Fx 'golang.org/x/text v0.41.0' /out/modules.txt; \
     grep -Fx 'google.golang.org/grpc v1.82.1' /out/modules.txt; \
     ldflags='-s -w -buildid= -X github.com/caddyserver/caddy/v2.CustomVersion=v2.11.4-pmv2.1'; \
     CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false \
@@ -31,14 +32,14 @@ RUN set -eux; \
     go version -m /out/caddy > /out/caddy-buildinfo.txt; \
     grep -Fx '/out/caddy: go1.26.6' /out/caddy-buildinfo.txt; \
     grep -Eq 'dep[[:space:]]+github.com/caddyserver/caddy/v2[[:space:]]+v2\.11\.4[[:space:]]+h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0=' /out/caddy-buildinfo.txt; \
-    grep -Eq 'dep[[:space:]]+golang.org/x/net[[:space:]]+v0\.56\.0[[:space:]]' /out/caddy-buildinfo.txt; \
-    grep -Eq 'dep[[:space:]]+golang.org/x/text[[:space:]]+v0\.39\.0[[:space:]]' /out/caddy-buildinfo.txt; \
+    grep -Eq 'dep[[:space:]]+golang.org/x/net[[:space:]]+v0\.58\.0[[:space:]]' /out/caddy-buildinfo.txt; \
+    grep -Eq 'dep[[:space:]]+golang.org/x/text[[:space:]]+v0\.41\.0[[:space:]]' /out/caddy-buildinfo.txt; \
     grep -Eq 'dep[[:space:]]+google.golang.org/grpc[[:space:]]+v1\.82\.1[[:space:]]' /out/caddy-buildinfo.txt; \
     cp /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.4/LICENSE \
       /out/licenses/CADDY-LICENSE.txt; \
-    cp /go/pkg/mod/golang.org/x/net@v0.56.0/LICENSE \
+    cp /go/pkg/mod/golang.org/x/net@v0.58.0/LICENSE \
       /out/licenses/X-NET-LICENSE.txt; \
-    cp /go/pkg/mod/golang.org/x/text@v0.39.0/LICENSE \
+    cp /go/pkg/mod/golang.org/x/text@v0.41.0/LICENSE \
       /out/licenses/X-TEXT-LICENSE.txt; \
     cp /go/pkg/mod/google.golang.org/grpc@v1.82.1/LICENSE \
       /out/licenses/GRPC-LICENSE.txt; \

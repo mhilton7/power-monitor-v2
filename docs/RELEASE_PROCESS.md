@@ -146,6 +146,48 @@ source embedded in the API image, and release notes. The GitHub Release
 cross-links the compatible firmware release. Coordinated rc.22 publishes under
 a new immutable tag without rewriting rc.21 or any earlier release.
 
+### Release-candidate publication order
+
+Never tag a feature-branch commit. Publish an RC only in this order:
+
+1. Push the `codex/*` branch, open a pull request into `main`, and leave it in
+   draft while mandatory CI, security, migration, and review gates run. Merge
+   the approved pull request through the protected `main` branch; do not bypass
+   review or required checks.
+2. Update a clean local `main` and prove it is the exact remote merge commit:
+
+   ```bash
+   git fetch --prune origin
+   git switch main
+   git pull --ff-only origin main
+   test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+   test -z "$(git status --porcelain)"
+   ```
+
+3. Publish and independently verify the coordinated signed firmware
+   `v0.1.0-rc.22` release first. Set the server repository variable
+   `COMPATIBLE_FIRMWARE_TAG` to that exact tag and verify its immutable release
+   metadata before creating the server tag.
+4. With the release signing key and local allowed-signers policy configured,
+   create a signed annotated server tag on the audited `main` merge commit,
+   verify it locally, prove its target, and only then push the tag:
+
+   ```bash
+   release_commit="$(git rev-parse HEAD)"
+   git tag -s -m 'PowerMeter V2 0.1.0-rc.22' v0.1.0-rc.22 "$release_commit"
+   git verify-tag v0.1.0-rc.22
+   test "$(git rev-parse 'v0.1.0-rc.22^{commit}')" = "$release_commit"
+   git push origin refs/tags/v0.1.0-rc.22
+   ```
+
+The tagged workflow independently requires the pushed ref to resolve to an
+annotated tag object, requires GitHub to report a valid cryptographic signature
+with complete verification evidence, and requires the signed tag target to be
+the exact workflow commit. A lightweight, unsigned, invalid, or retargeted tag
+fails at the first mandatory release gate, before test, security, migration, or
+publication jobs can run. Do not create or push the tag if any local
+verification or prerequisite fails.
+
 ## Stable prohibition and promotion
 
 Tagged builds publish as prerelease candidates while hardware certification is
