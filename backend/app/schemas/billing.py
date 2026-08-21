@@ -70,9 +70,54 @@ class TouPeriodDraft(BaseModel):
 class ReusableChargeDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=120)
-    kind: Literal["daily_fixed", "monthly_fixed", "per_kwh", "percentage", "credit"]
+    kind: Literal[
+        "daily_fixed",
+        "monthly_fixed",
+        "meter_fixed",
+        "other_fixed",
+        "daily_fixed_charge",
+        "monthly_fixed_charge",
+        "meter_charge",
+        "other_fixed_charge",
+        "per_kwh",
+        "percentage",
+        "credit",
+    ]
     amount: Decimal
     unit: Literal["USD/day", "USD/month", "USD/kWh", "percent"]
+    applies: (
+        Literal[
+            "per_account_per_day",
+            "per_account_per_month",
+            "per_account_per_cycle",
+            "per_meter_per_day",
+            "per_meter_per_month",
+            "per_meter_per_cycle",
+        ]
+        | None
+    ) = None
+
+    @model_validator(mode="after")
+    def fixed_charge_semantics(self) -> ReusableChargeDraft:
+        if self.kind in {"meter_fixed", "meter_charge"}:
+            inferred = {
+                "USD/day": "per_meter_per_day",
+                "USD/month": "per_meter_per_month",
+            }.get(self.unit)
+            if self.applies is None and inferred is None:
+                raise ValueError("meter charge recurrence is unresolved")
+            if self.applies is not None and not self.applies.startswith("per_meter_"):
+                raise ValueError("meter charge must apply per utility meter")
+        elif self.kind in {"other_fixed", "other_fixed_charge"}:
+            inferred = {
+                "USD/day": "per_account_per_day",
+                "USD/month": "per_account_per_month",
+            }.get(self.unit)
+            if self.applies is None and inferred is None:
+                raise ValueError("other fixed charge recurrence is unresolved")
+            if self.applies is not None and not self.applies.startswith("per_account_"):
+                raise ValueError("other fixed charge must apply per utility account")
+        return self
 
 
 class TierThresholdRuleDraft(BaseModel):

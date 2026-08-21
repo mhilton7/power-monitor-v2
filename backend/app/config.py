@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     frontend_build_time: str = "unknown"
     frontend_image_digest: str = "unknown"
     frontend_static_asset_id: str = "unknown"
-    expected_database_revision: str = "20260818_0017"
+    expected_database_revision: str = "20260820_0018"
     bill_import_timeout_seconds: int = Field(default=30, ge=5, le=60)
     rate_artifact_dir: Path = Path("/data/rate-source-artifacts")
     firmware_dir: Path = Path("/data/firmware")
@@ -75,6 +75,15 @@ class Settings(BaseSettings):
     rate_source_due_limit: int = Field(default=10, ge=1, le=100)
     rate_source_retry_attempts: int = Field(default=3, ge=1, le=5)
     rate_source_retry_backoff_seconds: float = Field(default=0.25, ge=0, le=5)
+    sce_catalog_crawl_max_documents: int = Field(default=24, ge=2, le=64)
+    sce_catalog_crawl_max_depth: int = Field(default=2, ge=1, le=4)
+    sce_catalog_crawl_max_total_bytes: int = Field(
+        default=25_000_000,
+        ge=1_000_000,
+        le=50_000_000,
+    )
+    sce_catalog_crawl_request_delay_seconds: float = Field(default=0.1, ge=0, le=2.0)
+    sce_catalog_parse_timeout_seconds: float = Field(default=2.0, ge=0.05, le=10.0)
     rate_source_operation_timeout_seconds: float = Field(
         default=20.0,
         ge=0.05,
@@ -117,7 +126,7 @@ class Settings(BaseSettings):
         source_host = (source_url.host or "").lower().rstrip(".")
         if (
             source_url.scheme != "https"
-            or source_host not in self.allowed_sce_hosts
+            or source_host not in {"www.sce.com", "sce.com"}
             or source_url.port not in (None, 443)
             or source_url.username is not None
             or source_url.password is not None

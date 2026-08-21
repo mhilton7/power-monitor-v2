@@ -1,6 +1,6 @@
 # Roll back PowerMeter V2 on TrueNAS
 
-> This UI-oriented source document is prepared for v0.1.0-rc.21. Public rc.20 and earlier releases
+> This UI-oriented source document is prepared for v0.1.0-rc.22. Public rc.21 and earlier releases
 > and immutable older releases retain their own attached instructions. Never
 > combine asset sets.
 
@@ -22,11 +22,12 @@ read a database touched by the new release.
 
 ## Restored rollback only
 
-A direct application-only rollback from v0.1.0-rc.21 to an earlier public
-release is unauthorized without a separate recovery test. Rc.17 uses Alembic
-head `20260818_0017`; its downgrade deliberately refuses to remove accepted
+A direct application-only rollback from v0.1.0-rc.22 to an earlier public
+release is unauthorized without a separate recovery test. Rc.22 uses Alembic
+head `20260820_0018`; revision 0018 refuses to remove lifecycle or catalog
+evidence that cannot be represented safely, and revision 0017 deliberately refuses to remove accepted
 stateless telemetry, History, or cutover evidence. A forward-migration gate
-cannot prove that older binaries correctly handle state touched by rc.19;
+cannot prove that older binaries correctly handle state touched by rc.22;
 `not_exercised_github_hosted_smoke`
 is not rollback evidence. The immutable server rc.2 and rc.4 tags have no
 GitHub Releases and are not predecessors.

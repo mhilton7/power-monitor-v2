@@ -6,7 +6,7 @@ import { Area, AreaChart, Brush, CartesianGrid, Line, LineChart, ResponsiveConta
 import { api } from '../api';
 import { PermissionGate } from '../auth/PermissionGate';
 import { Card, EmptyState, ErrorState, Loading, Notice } from '../components/ui';
-import { chartTick, dateTime, download, inputDateTime, money, numeric, percent } from '../lib/format';
+import { browserTimezone, chartAxisFormat, chartTick, dateTime, download, inputDateTime, money, numeric, percent, resolveDisplayTimezone } from '../lib/format';
 import { useHomeScope } from '../home/useHomeScope';
 import { useHeartbeatTickerNow } from '../lib/heartbeatTicker';
 
@@ -43,7 +43,7 @@ export function HistoryPage() {
   const [preset, setPreset] = useState<Preset>('24 hours');
   const presetWasChanged = useRef(false);
   const [metric, setMetric] = useState<(typeof metrics)[number]['value']>('power');
-  const [timezone, setTimezone] = useState('America/Los_Angeles');
+  const [timezoneOverride, setTimezoneOverride] = useState('');
   const [custom, setCustom] = useState(() => ({ from: inputDateTime(subHours(new Date(rangeAnchor), 24)), to: inputDateTime(new Date(rangeAnchor)) }));
   const homeScope = useHomeScope();
   const { selectedHomeId } = homeScope;
@@ -92,13 +92,37 @@ export function HistoryPage() {
     enabled: Boolean(selectedHomeId && (deviceId || circuitId)) && queryRange.to > queryRange.from,
   });
   const metricDefinition = metrics.find((entry) => entry.value === metric) ?? metrics[0];
+  const detectedBrowserTimezone = browserTimezone();
+  const automaticTimezone = resolveDisplayTimezone(preferences.data?.display_timezone, history.data?.timezone);
+  const timezone = timezoneOverride || automaticTimezone;
+  const automaticTimezoneLabel = preferences.data?.display_timezone
+    ? `Saved preference · ${automaticTimezone}`
+    : detectedBrowserTimezone
+      ? `Browser · ${automaticTimezone}`
+      : history.data?.timezone
+        ? `Home · ${automaticTimezone}`
+        : `Fallback · ${automaticTimezone}`;
   const rangeHours = (displayRange.to.getTime() - displayRange.from.getTime()) / 3_600_000;
   const timeAxisTicks = [displayRange.from.getTime(), displayRange.to.getTime()];
-  const chartData = useMemo(() => history.data?.points.map((point) => ({
-    ...point,
-    epoch: new Date(point.timestamp).getTime(),
-    plottedValue: metric === 'cost' ? (point.cost === null ? null : Number(point.cost)) : point.value === null ? null : Number(point.value),
-  })) ?? [], [history.data, metric]);
+  const chartData = useMemo(() => {
+    if (!history.data) return [];
+    const points = history.data.points.map((point) => ({
+      ...point,
+      epoch: new Date(point.timestamp).getTime(),
+      plottedValue: metric === 'cost' ? (point.cost === null ? null : Number(point.cost)) : point.value === null ? null : Number(point.value),
+      gapBoundary: false,
+    }));
+    for (const gap of history.data.missing_ranges) {
+      const start = Math.max(displayRange.from.getTime(), new Date(gap.start).getTime());
+      const end = Math.min(displayRange.to.getTime(), new Date(gap.end).getTime());
+      if (Number.isFinite(start) && Number.isFinite(end) && end - start > 2) {
+        points.push({ timestamp: new Date(start + 1).toISOString(), value: null, cost: null, quality: null, epoch: start + 1, plottedValue: null, gapBoundary: true });
+        points.push({ timestamp: new Date(end - 1).toISOString(), value: null, cost: null, quality: null, epoch: end - 1, plottedValue: null, gapBoundary: true });
+      }
+    }
+    return points.sort((left, right) => left.epoch - right.epoch);
+  }, [displayRange.from, displayRange.to, history.data, metric]);
+  const historyAxis = useMemo(() => chartAxisFormat(chartData.map((point) => point.plottedValue), metricDefinition.unit, metric === 'cost' ? 62 : 58), [chartData, metric, metricDefinition.unit]);
   const hasCommittedPoint = chartData.some((point) => point.plottedValue !== null);
   const lastSavedPoint = [...chartData].reverse().find((point) => point.plottedValue !== null);
   const recoveredGapEnergy = history.data?.recovered_gap_energy_kwh === null || history.data?.recovered_gap_energy_kwh === undefined
@@ -163,7 +187,7 @@ export function HistoryPage() {
       <div className="filter-row">
         <div className="field"><label htmlFor="history-device">Service branch or sensor</label><select id="history-device" value={scopeValue} onChange={(event) => chooseScope(event.target.value)}>{verifiedCircuits.map((circuit) => <option key={circuit.id} value={`circuit:${circuit.id}`}>{circuit.name}{circuit.is_billing_source || circuit.is_home_total ? ' · Main service' : ''}</option>)}{devices.data?.devices.map((device) => <option key={device.id} value={`device:${device.id}`}>{device.friendly_name}</option>)}</select></div>
         <div className="field"><label htmlFor="history-metric">Metric</label><select id="history-metric" value={metric} onChange={(event) => setMetric(event.target.value as typeof metric)}>{metrics.map((entry) => <option key={entry.value} value={entry.value} disabled={Boolean(circuitId && individualOnlyMetrics.has(entry.value))}>{entry.label}{circuitId && individualOnlyMetrics.has(entry.value) ? ' · individual sensors only' : ''}</option>)}</select></div>
-        <div className="field"><label htmlFor="history-timezone">Timezone display</label><select id="history-timezone" value={timezone} onChange={(event) => setTimezone(event.target.value)}><option value="America/Los_Angeles">Home · America/Los_Angeles</option><option value="UTC">UTC</option></select></div>
+        <div className="field"><label htmlFor="history-timezone">Display timezone</label><select id="history-timezone" value={timezone} onChange={(event) => setTimezoneOverride(event.target.value)}><option value={automaticTimezone}>{automaticTimezoneLabel}</option>{automaticTimezone !== 'UTC' && <option value="UTC">UTC · technical view</option>}{history.data?.timezone && history.data.timezone !== automaticTimezone && history.data.timezone !== 'UTC' && <option value={history.data.timezone}>Home · {history.data.timezone}</option>}</select></div>
       </div>
       {preset === 'Custom' && <form className="custom-range" onSubmit={applyCustom}><div className="field"><label htmlFor="custom-from">From</label><input id="custom-from" type="datetime-local" value={custom.from} max={custom.to} onChange={(event) => setCustom((value) => ({ ...value, from: event.target.value }))} required /></div><div className="field"><label htmlFor="custom-to">To</label><input id="custom-to" type="datetime-local" value={custom.to} min={custom.from} max={inputDateTime(endOfDay(new Date(browserNow)))} onChange={(event) => setCustom((value) => ({ ...value, to: event.target.value }))} required /></div><button className="button button-primary" type="submit"><CalendarRange aria-hidden="true" /> Apply range</button></form>}
     </Card>
@@ -175,10 +199,13 @@ export function HistoryPage() {
       <Notice>Showing readings for {deviceId ? devices.data?.devices.find((device) => device.id === deviceId)?.friendly_name ?? 'the selected sensor' : circuits.data?.circuits.find((circuit) => circuit.id === circuitId)?.name ?? 'the selected service branch'}. Sensors that measure the same electricity are never added together.</Notice>
       {recoveredGapEnergy !== null && recoveredGapEnergy > 0 && <Notice kind="info">Energy was recovered from the meter total, but the exact power pattern during the connection gap is unavailable.</Notice>}
       <Card title={`${metricDefinition.label} over time`} eyebrow={`${history.data.resolution_seconds}s aggregation · display ${timezone}`} action={<span className="chart-instruction"><ZoomIn aria-hidden="true" /> Drag the handles to zoom</span>} className="history-chart-card">
-        {!hasCommittedPoint ? <EmptyState title="No readings were received during this time." detail="Choose another time range or check the sensor connection." /> : <div className="history-chart" data-testid="history-chart" data-missing-gap-style="unshaded"><ResponsiveContainer width="100%" height="100%">{metric === 'power' || metric === 'energy' || metric === 'cost' ? <AreaChart title={`${metricDefinition.label} over time`} desc="Accepted sensor readings. Times without a reading render as unshaded gaps." data={chartData} margin={{ top: 18, right: 18, bottom: 12, left: 2 }}><defs><linearGradient id="historyFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#65e692" stopOpacity={.5} /><stop offset="100%" stopColor="#65e692" stopOpacity={.02} /></linearGradient></defs><CartesianGrid stroke="#33413c" strokeDasharray="3 5" vertical={false} /><XAxis dataKey="epoch" type="number" domain={[displayRange.from.getTime(), displayRange.to.getTime()]} ticks={timeAxisTicks} scale="time" minTickGap={80} interval="preserveStartEnd" tickFormatter={(value: number) => chartTick(value, rangeHours, timezone)} tick={{ fill: '#aab5b1', fontSize: 12 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#aab5b1', fontSize: 12 }} axisLine={false} tickLine={false} width={58} unit={metric === 'cost' ? '$' : metricDefinition.unit ? ` ${metricDefinition.unit}` : ''} /><Tooltip content={({ active, payload }) => {
+        {!hasCommittedPoint ? <EmptyState title="No readings were received during this time." detail="Choose another time range or check the sensor connection." /> : <div className="history-chart" data-testid="history-chart" data-missing-gap-style="unshaded"><ResponsiveContainer width="100%" height="100%">{metric === 'power' || metric === 'energy' || metric === 'cost' ? <AreaChart title={`${metricDefinition.label} over time`} desc="Accepted sensor readings. Times without a reading remain unshaded breaks in the line." data={chartData} margin={{ top: 18, right: 18, bottom: 12, left: 8 }}><defs><linearGradient id="historyFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#65e692" stopOpacity={.5} /><stop offset="100%" stopColor="#65e692" stopOpacity={.02} /></linearGradient></defs><CartesianGrid stroke="#33413c" strokeDasharray="3 5" vertical={false} /><XAxis dataKey="epoch" type="number" domain={[displayRange.from.getTime(), displayRange.to.getTime()]} ticks={timeAxisTicks} scale="time" minTickGap={80} interval="preserveStartEnd" tickFormatter={(value: number) => chartTick(value, rangeHours, timezone)} tick={{ fill: '#aab5b1', fontSize: 12 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#aab5b1', fontSize: 12 }} tickFormatter={historyAxis.tick} axisLine={false} tickLine={false} width={historyAxis.width} /><Tooltip content={({ active, payload }) => {
           const point = payload?.[0]?.payload as (typeof chartData)[number] | undefined;
           return active && point ? <div className="chart-tooltip"><strong>{dateTime(point.timestamp, timezone)}</strong><span>{metric === 'cost' ? money(point.cost) : numeric(point.value === null ? null : Number(point.value), metricDefinition.unit)}</span>{point.cost !== undefined && metric !== 'cost' && <span>Estimated cost: {money(point.cost)}</span>}<span>Reading coverage: {percent(point.quality === null ? null : Number(point.quality))}</span></div> : null;
-        }} /><Area type="monotone" dataKey="plottedValue" stroke="#65e692" strokeWidth={2} fill="url(#historyFill)" connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom saved History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#141b19" tickFormatter={() => ''} /></AreaChart> : <LineChart title={`${metricDefinition.label} over time`} desc="Saved sensor readings. Missing readings render as unshaded gaps." data={chartData} margin={{ top: 18, right: 18, bottom: 12, left: 2 }}><CartesianGrid stroke="#33413c" strokeDasharray="3 5" vertical={false} /><XAxis dataKey="epoch" type="number" domain={[displayRange.from.getTime(), displayRange.to.getTime()]} ticks={timeAxisTicks} scale="time" minTickGap={80} interval="preserveStartEnd" tickFormatter={(value: number) => chartTick(value, rangeHours, timezone)} tick={{ fill: '#aab5b1', fontSize: 12 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#aab5b1', fontSize: 12 }} axisLine={false} tickLine={false} width={58} unit={metricDefinition.unit ? ` ${metricDefinition.unit}` : ''} /><Tooltip /><Line type="monotone" dataKey="plottedValue" stroke="#65e692" strokeWidth={2} dot={false} connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom saved History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#141b19" tickFormatter={() => ''} /></LineChart>}</ResponsiveContainer></div>}
+        }} /><Area type="monotone" dataKey="plottedValue" stroke="#65e692" strokeWidth={2} fill="url(#historyFill)" connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom saved History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#141b19" tickFormatter={() => ''} /></AreaChart> : <LineChart title={`${metricDefinition.label} over time`} desc="Saved sensor readings. Times without a reading remain unshaded breaks in the line." data={chartData} margin={{ top: 18, right: 18, bottom: 12, left: 8 }}><CartesianGrid stroke="#33413c" strokeDasharray="3 5" vertical={false} /><XAxis dataKey="epoch" type="number" domain={[displayRange.from.getTime(), displayRange.to.getTime()]} ticks={timeAxisTicks} scale="time" minTickGap={80} interval="preserveStartEnd" tickFormatter={(value: number) => chartTick(value, rangeHours, timezone)} tick={{ fill: '#aab5b1', fontSize: 12 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#aab5b1', fontSize: 12 }} tickFormatter={historyAxis.tick} axisLine={false} tickLine={false} width={historyAxis.width} /><Tooltip content={({ active, payload }) => {
+          const point = payload?.[0]?.payload as (typeof chartData)[number] | undefined;
+          return active && point ? <div className="chart-tooltip"><strong>{dateTime(point.timestamp, timezone)}</strong><span>{numeric(point.value === null ? null : Number(point.value), metricDefinition.unit)}</span><span>Reading coverage: {percent(point.quality === null ? null : Number(point.quality))}</span></div> : null;
+        }} /><Line type="monotone" dataKey="plottedValue" stroke="#65e692" strokeWidth={2} dot={false} connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom saved History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#141b19" tickFormatter={() => ''} /></LineChart>}</ResponsiveContainer></div>}
         {preset === 'Live' && <p className="disclosure" data-testid="live-timeline-status" data-view-end={displayRange.to.getTime()}>Timeline ends {dateTime(displayRange.to.toISOString(), timezone)}. Last saved reading: {lastSavedPoint ? dateTime(lastSavedPoint.timestamp, timezone) : 'none in this range'}.</p>}
         <div className="chart-legend"><span><i className="legend-line" />Accepted reading</span><span><i className="legend-gap" />Missing reading</span><span><Info aria-hidden="true" /> A measured zero renders at zero; times without a reading form a gap.</span></div>
       </Card>

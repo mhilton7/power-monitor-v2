@@ -156,12 +156,13 @@ def _fetched(
     *,
     etag: str = '"rate-v1"',
     last_modified: str = "Thu, 13 Aug 2026 18:11:43 GMT",
+    url: str = SCE_TOU_URL,
 ) -> SourceFetch:
     import hashlib
 
     return SourceFetch(
-        requested_url=SCE_TOU_URL,
-        url=SCE_TOU_URL,
+        requested_url=url,
+        url=url,
         status_code=200,
         body=body,
         sha256=hashlib.sha256(body).hexdigest(),
@@ -170,7 +171,7 @@ def _fetched(
         media_type="text/html",
         hops=(
             SourceHop(
-                url=SCE_TOU_URL,
+                url=url,
                 hostname="www.sce.com",
                 resolved_ips=("93.184.216.34",),
                 connected_ip="93.184.216.34",
@@ -821,12 +822,20 @@ async def test_layout_failure_persists_snapshot_failure_evidence_and_alert(
 async def test_weekly_scheduler_checks_only_due_enabled_sources(artifact_dir: Path) -> None:
     now = datetime.now(UTC)
     body = valid_sce_page()
+    catalog_detail_url = (
+        "https://www.sce.com/save-money/rates-financing/residential-rate-plans/tou-d-4-9"
+    )
+    catalog_root = (
+        f'<html><body><a href="{catalog_detail_url}">TOU-D 4 PM to 9 PM</a></body></html>'
+    ).encode()
     calls = 0
 
-    async def fetcher(_url: str, **_kwargs: object) -> SourceFetch:
+    async def fetcher(url: str, **_kwargs: object) -> SourceFetch:
         nonlocal calls
         calls += 1
-        return _fetched(body)
+        if url == rate_sync.SCE_CATALOG_URL:
+            return _fetched(catalog_root, url=url)
+        return _fetched(body, url=url)
 
     async with session_factory() as session:
         source = RateSource(
@@ -853,6 +862,6 @@ async def test_weekly_scheduler_checks_only_due_enabled_sources(artifact_dir: Pa
         )
         await session.commit()
 
-        assert not_due == {"checked": 0, "failed": 0, "review_required": 0, "unchanged": 0}
+        assert not_due == {"checked": 1, "failed": 0, "review_required": 0, "unchanged": 1}
         assert due == {"checked": 1, "failed": 0, "review_required": 1, "unchanged": 0}
-        assert calls == 1
+        assert calls == 3

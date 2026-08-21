@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -17,18 +18,24 @@ from backend.app.models import (
     RateAssignment,
     RateCandidate,
     RateCandidateReview,
+    RateDatedPrice,
+    RateHoliday,
     RatePeriod,
     RatePlan,
     RatePlanVersion,
     RateSource,
     RateSourceRevision,
     RateSyncRun,
+    SceCatalogEntry,
     User,
     UtilityAccount,
+    UtilityAccountTierThreshold,
 )
 from backend.app.schemas.api import ManualRateCandidateRequest
+from backend.app.services import rate_sync as rate_sync_service
 from backend.app.services.rate_sources import SourceFetchError
 from backend.app.services.rate_sync import (
+    SCE_CATALOG_URL,
     SCE_SOURCE_NAME,
     SCE_TOU_URL,
     ensure_default_sce_source,
@@ -36,10 +43,17 @@ from backend.app.services.rate_sync import (
     sync_official_rate_source,
 )
 from backend.app.services.rate_workflow import (
+    _canonical_dated_prices,
+    activate_rate_candidate,
     create_manual_rate_candidate,
     locked_rate_plan_and_next_version,
+    publish_rate_candidate,
     replace_rate_assignment,
+    replace_utility_account_tier_threshold,
+    resolve_utility_account_cycle_tier_threshold,
+    resolve_utility_account_tier_threshold,
 )
+from backend.app.services.sce_rate_parser import ParsedRateCandidate
 from backend.tests.test_rate_source_sync import _fetched, valid_sce_page
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select, text
@@ -76,6 +90,69 @@ def _manual_payload(*, price: str = "0.12345678") -> dict[str, object]:
             }
         ],
     }
+
+
+def _install_authoritative_holiday_calendar_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_parser = rate_sync_service.parse_sce_tou_public_page
+
+    def parse_with_holidays(body: bytes, media_type: str) -> ParsedRateCandidate:
+        parsed = original_parser(body, media_type)
+        normalized = copy.deepcopy(parsed.normalized_rates)
+        normalized["holiday_calendar"] = {
+            "status": "resolved",
+            "authority": "Southern California Edison",
+            "source_url": "https://www.sce.com/residential/rates/holidays",
+            "coverage_start": "2026-01-01",
+            "coverage_end": "2026-12-31",
+            "holidays": [
+                {"local_date": "2026-09-07", "name": "Labor Day"},
+                {"local_date": "2026-11-26", "name": "Thanksgiving Day"},
+                {"local_date": "2026-12-25", "name": "Christmas Day"},
+            ],
+        }
+        return ParsedRateCandidate(
+            normalized_rates=normalized,
+            validation_evidence={
+                **parsed.validation_evidence,
+                "holiday_calendar": "authoritative_bounded_fixture",
+            },
+        )
+
+    monkeypatch.setattr(rate_sync_service, "parse_sce_tou_public_page", parse_with_holidays)
+
+
+@pytest.mark.parametrize(
+    ("second_start", "second_end"),
+    (
+        ("2026-11-01T09:30:00+00:00", "2026-11-01T10:00:00+00:00"),
+        ("2026-11-01T08:30:00+00:00", "2026-11-01T09:30:00+00:00"),
+    ),
+)
+def test_dynamic_hourly_publication_rejects_gaps_and_overlaps(
+    second_start: str, second_end: str
+) -> None:
+    plan = {
+        "dated_prices": [
+            {
+                "start_utc": "2026-11-01T08:00:00+00:00",
+                "end_utc": "2026-11-01T09:00:00+00:00",
+                "price_per_kwh": "0.10000000",
+            },
+            {
+                "start_utc": second_start,
+                "end_utc": second_end,
+                "price_per_kwh": "0.30000000",
+            },
+        ]
+    }
+    with pytest.raises(RateWorkflowConflict, match="gap or overlap"):
+        _canonical_dated_prices(
+            plan,
+            effective_start=datetime(2026, 11, 1, 8, tzinfo=UTC),
+            effective_end=datetime(2026, 11, 1, 10, tzinfo=UTC),
+        )
 
 
 @pytest.mark.asyncio
@@ -251,6 +328,1030 @@ async def test_semantic_tier_candidate_cannot_publish_without_account_baseline(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("unsupported_field", "unsupported_value", "message"),
+    [
+        ("minimum_charge", "1.00", "minimum_charge"),
+        ("meter_charge", "1.00", "meter_charge"),
+        ("other_fixed_charge", "1.00", "other_fixed_charge"),
+        ("season_boundaries", True, "season boundaries"),
+        ("day_type", "event", "day type"),
+        ("day_type", "non_event", "day type"),
+        ("pricing_model", "dynamic_hourly", "dynamic-hourly inputs"),
+        ("missing_seasons", True, "season evidence"),
+    ],
+)
+async def test_unsupported_rate_semantics_fail_closed_without_changing_published_lkg(
+    owner_client: AsyncClient,
+    unsupported_field: str,
+    unsupported_value: object,
+    message: str,
+) -> None:
+    del owner_client
+    normalized: dict[str, object] = {
+        "schema": "sce-rate-candidate/1.0.0",
+        "utility_name": "Southern California Edison",
+        "timezone": "America/Los_Angeles",
+        "currency": "USD",
+        "season_definitions": {
+            "summer": {"start_month": 6, "end_month": 9},
+            "winter": {"start_month": 10, "end_month": 5},
+        },
+        "plans": [
+            {
+                "rate_plan_name": "UNSUPPORTED-SEMANTICS",
+                "rate_class": "residential",
+                "pricing_model": "time_of_use",
+                "daily_fixed_charge": "0",
+                "monthly_fixed_charge": "0",
+                "baseline_credit_per_kwh": "0",
+                "periods": [
+                    {
+                        "season": "all",
+                        "day_type": "all",
+                        "name": "all_day",
+                        "start_minute": 0,
+                        "end_minute": 1440,
+                        "price_per_kwh": "0.20",
+                    }
+                ],
+            }
+        ],
+    }
+    candidate_rates = copy.deepcopy(normalized)
+    plan = candidate_rates["plans"][0]  # type: ignore[index]
+    assert isinstance(plan, dict)
+    if unsupported_field in {"minimum_charge", "meter_charge", "other_fixed_charge"}:
+        plan[unsupported_field] = unsupported_value
+    elif unsupported_field == "season_boundaries":
+        candidate_rates["season_definitions"] = {
+            "summer": {"start_month": 5, "end_month": 10},
+            "winter": {"start_month": 9, "end_month": 4},
+        }
+    elif unsupported_field == "pricing_model":
+        plan["pricing_model"] = unsupported_value
+    elif unsupported_field == "missing_seasons":
+        candidate_rates.pop("season_definitions")
+        plan["pricing_model"] = "seasonal_time_of_use"
+        periods = plan["periods"]
+        assert isinstance(periods, list) and isinstance(periods[0], dict)
+        periods[0]["season"] = "summer"
+    else:
+        periods = plan["periods"]
+        assert isinstance(periods, list) and isinstance(periods[0], dict)
+        if unsupported_field == "day_type":
+            periods[0]["day_type"] = unsupported_value
+        else:
+            raise AssertionError(f"unexpected unsupported field: {unsupported_field}")
+
+    async with session_factory() as session:
+        home_id = await session.scalar(select(Home.id))
+        actor_id = await session.scalar(select(User.id))
+        assert home_id is not None and actor_id is not None
+        published_before = tuple(
+            await session.scalars(
+                select(RatePlanVersion.id)
+                .where(RatePlanVersion.state == "published")
+                .order_by(RatePlanVersion.id)
+            )
+        )
+        assignments_before = tuple(
+            await session.scalars(select(RateAssignment.id).order_by(RateAssignment.id))
+        )
+        candidate = RateCandidate(
+            source_revision_id=str(uuid.uuid4()),
+            normalized_rates=candidate_rates,
+            validation_evidence={"coverage": "complete"},
+            home_id=home_id,
+            canonical_input_sha256=uuid.uuid4().hex * 2,
+        )
+        review = RateCandidateReview(
+            candidate_id=str(uuid.uuid4()),
+            home_id=home_id,
+            selected_plan_name="UNSUPPORTED-SEMANTICS",
+            effective_start=datetime(2026, 8, 1, tzinfo=UTC),
+            state="reviewed",
+            reviewed_by_user_id=actor_id,
+        )
+        with pytest.raises(RateWorkflowConflict, match=message):
+            await publish_rate_candidate(
+                session,
+                candidate=candidate,
+                review=review,
+                actor_user_id=actor_id,
+                correlation_id="unsupported-rate-semantics",
+            )
+        assert (
+            tuple(
+                await session.scalars(
+                    select(RatePlanVersion.id)
+                    .where(RatePlanVersion.state == "published")
+                    .order_by(RatePlanVersion.id)
+                )
+            )
+            == published_before
+        )
+        assert (
+            tuple(await session.scalars(select(RateAssignment.id).order_by(RateAssignment.id)))
+            == assignments_before
+        )
+
+
+@pytest.mark.asyncio
+async def test_publish_supports_custom_seasons_event_override_midnight_and_fixed_semantics(
+    owner_client: AsyncClient,
+) -> None:
+    del owner_client
+    normalized = {
+        "schema": "sce-rate-candidate/1.0.0",
+        "utility_name": "Southern California Edison",
+        "timezone": "America/Los_Angeles",
+        "currency": "USD",
+        "holiday_treatment": "no_special_treatment",
+        "season_definitions": [
+            {
+                "season_name": "warm",
+                "start_month": 5,
+                "start_day": 15,
+                "end_month": 10,
+                "end_day": 14,
+                "source_label": "official warm season",
+            },
+            {
+                "season_name": "cool",
+                "start_month": 10,
+                "start_day": 15,
+                "end_month": 5,
+                "end_day": 14,
+                "source_label": "official cool season",
+            },
+        ],
+        "event_calendar": {
+            "status": "complete",
+            "coverage_start": "2026-08-01",
+            "coverage_end": "2026-08-31",
+            "local_dates": ["2026-08-10"],
+        },
+        "plans": [
+            {
+                "rate_plan_name": "EVENT-MIDNIGHT",
+                "rate_class": "residential",
+                "pricing_model": "critical_peak_pricing",
+                "daily_fixed_charge": "0",
+                "monthly_fixed_charge": "0",
+                "minimum_charge": "0",
+                "meter_charge": "0",
+                "other_fixed_charge": "1.25",
+                "fixed_charges": [
+                    {
+                        "charge": "other_fixed_charge",
+                        "amount": "1.25",
+                        "applies": "per_account_per_cycle",
+                    }
+                ],
+                "baseline_credit_per_kwh": "0",
+                "periods": [
+                    {
+                        "season": "all",
+                        "day_type": "all_days",
+                        "name": "ordinary",
+                        "start_minute": 0,
+                        "end_minute": 1440,
+                        "price_per_kwh": "0.20",
+                    },
+                    {
+                        "season": "warm",
+                        "day_type": "event_day",
+                        "name": "overnight_event",
+                        "start_minute": 1320,
+                        "end_minute": 360,
+                        "price_per_kwh": "0.80",
+                    },
+                ],
+            }
+        ],
+    }
+    async with session_factory() as session:
+        home_id = await session.scalar(select(Home.id))
+        actor_id = await session.scalar(select(User.id))
+        assert home_id is not None and actor_id is not None
+        source = RateSource(
+            name="Exact event publication fixture",
+            source_type="official_https",
+            https_url="https://www.sce.com/regulatory/tariff-books/rates-pricing-choices",
+            enabled=False,
+        )
+        session.add(source)
+        await session.flush()
+        revision = RateSourceRevision(
+            source_id=source.id,
+            artifact_sha256="e" * 64,
+            parser_version="event-publication-test-v1",
+        )
+        session.add(revision)
+        await session.flush()
+        candidate = RateCandidate(
+            source_revision_id=revision.id,
+            normalized_rates=normalized,
+            validation_evidence={"coverage": "complete"},
+            home_id=home_id,
+            canonical_input_sha256="d" * 64,
+        )
+        session.add(candidate)
+        await session.flush()
+        review = RateCandidateReview(
+            candidate_id=candidate.id,
+            home_id=home_id,
+            selected_plan_name="EVENT-MIDNIGHT",
+            effective_start=datetime(2026, 8, 1, 7, tzinfo=UTC),
+            effective_end=datetime(2026, 9, 1, 7, tzinfo=UTC),
+            state="reviewed",
+            reviewed_by_user_id=actor_id,
+        )
+        session.add(review)
+        await session.flush()
+        _plan, version = await publish_rate_candidate(
+            session,
+            candidate=candidate,
+            review=review,
+            actor_user_id=actor_id,
+            correlation_id="event-publication",
+        )
+        periods = (
+            await session.scalars(
+                select(RatePeriod)
+                .where(RatePeriod.rate_plan_version_id == version.id)
+                .order_by(RatePeriod.start_minute, RatePeriod.end_minute)
+            )
+        ).all()
+        assert version.algorithm_version == "cost-v2"
+        assert version.other_fixed_charge == Decimal("1.25")
+        assert (
+            next(
+                item["applies"]
+                for item in version.fixed_charges
+                if item["charge"] == "other_fixed_charge"
+            )
+            == "per_account_per_cycle"
+        )
+        assert version.season_definitions[0]["start_day"] == 15
+        assert any(
+            item.get("evidence_type") == "event_calendar"
+            for item in version.eligibility_evidence
+            if isinstance(item, dict)
+        )
+        event_periods = [period for period in periods if period.day_type == "event_day"]
+        assert [(period.start_minute, period.end_minute) for period in event_periods] == [
+            (0, 360),
+            (1320, 1440),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_publish_preserves_executable_tier_bounds_and_exact_components(
+    owner_client: AsyncClient,
+) -> None:
+    del owner_client
+    normalized = {
+        "schema": "sce-rate-candidate/1.0.0",
+        "utility_name": "Southern California Edison",
+        "timezone": "America/Los_Angeles",
+        "currency": "USD",
+        "holiday_treatment": "not_applicable",
+        "plans": [
+            {
+                "rate_plan_name": "EXACT-TIERED",
+                "rate_class": "residential",
+                "pricing_model": "tiered",
+                "periods": [
+                    {
+                        "season": "all",
+                        "day_type": "all",
+                        "name": "tier_1",
+                        "start_minute": 0,
+                        "end_minute": 1440,
+                        "price_per_kwh": "0.30",
+                        "tier_min_kwh": "0",
+                        "tier_max_kwh": "100",
+                        "boundary_inclusive": True,
+                        "threshold_basis": "exact_cycle_kwh",
+                        "threshold_value": "100",
+                        "rate_components": [
+                            {
+                                "component": "delivery_rate",
+                                "amount_per_kwh": "0.18",
+                                "source_status": "exact",
+                            },
+                            {
+                                "component": "generation_rate",
+                                "amount_per_kwh": "0.12",
+                                "source_status": "exact",
+                            },
+                        ],
+                    },
+                    {
+                        "season": "all",
+                        "day_type": "all",
+                        "name": "tier_2",
+                        "start_minute": 0,
+                        "end_minute": 1440,
+                        "price_per_kwh": "0.40",
+                        "tier_start_kwh": "100",
+                        "tier_end_kwh": None,
+                        "boundary_inclusive": True,
+                        "threshold_basis": "exact_cycle_kwh",
+                        "threshold_value": "100",
+                        "rate_components": [
+                            {
+                                "component": "delivery_rate",
+                                "amount_per_kwh": "0.25",
+                                "source_status": "exact",
+                            },
+                            {
+                                "component": "generation_rate",
+                                "amount_per_kwh": "0.15",
+                                "source_status": "exact",
+                            },
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+    async with session_factory() as session:
+        home_id = await session.scalar(select(Home.id))
+        actor_id = await session.scalar(select(User.id))
+        assert home_id is not None and actor_id is not None
+        source = RateSource(
+            name="Exact tier publication fixture",
+            source_type="official_https",
+            https_url="https://www.sce.com/regulatory/tariff-books/tiered",
+            enabled=False,
+        )
+        session.add(source)
+        await session.flush()
+        revision = RateSourceRevision(
+            source_id=source.id,
+            artifact_sha256="7" * 64,
+            parser_version="exact-tier-test-v1",
+        )
+        session.add(revision)
+        await session.flush()
+        candidate = RateCandidate(
+            source_revision_id=revision.id,
+            normalized_rates=normalized,
+            validation_evidence={"coverage": "complete"},
+            home_id=home_id,
+            canonical_input_sha256="8" * 64,
+        )
+        session.add(candidate)
+        await session.flush()
+        review = RateCandidateReview(
+            candidate_id=candidate.id,
+            home_id=home_id,
+            selected_plan_name="EXACT-TIERED",
+            effective_start=datetime(2026, 8, 1, tzinfo=UTC),
+            state="reviewed",
+            reviewed_by_user_id=actor_id,
+        )
+        session.add(review)
+        await session.flush()
+        _plan, version = await publish_rate_candidate(
+            session,
+            candidate=candidate,
+            review=review,
+            actor_user_id=actor_id,
+            correlation_id="exact-tier-publication",
+        )
+        periods = (
+            await session.scalars(
+                select(RatePeriod)
+                .where(RatePeriod.rate_plan_version_id == version.id)
+                .order_by(RatePeriod.tier_start_kwh)
+            )
+        ).all()
+        assert [(period.tier_start_kwh, period.tier_end_kwh) for period in periods] == [
+            (Decimal("0"), Decimal("100")),
+            (Decimal("100"), None),
+        ]
+        assert periods[0].delivery_per_kwh == Decimal("0.18")
+        assert periods[0].generation_per_kwh == Decimal("0.12")
+        assert periods[0].threshold_basis == "exact_cycle_kwh"
+        assert periods[0].threshold_value == Decimal("100")
+        assert periods[0].rate_components[0]["source_status"] == "exact"
+        assert version.season_definitions[0]["season_name"] == "all_year"
+
+
+@pytest.mark.asyncio
+async def test_publish_resolves_reviewed_daily_tier_threshold_from_exact_evidence(
+    owner_client: AsyncClient,
+) -> None:
+    del owner_client
+    normalized = {
+        "schema": "sce-rate-candidate/1.0.0",
+        "utility_name": "Southern California Edison",
+        "timezone": "America/Los_Angeles",
+        "currency": "USD",
+        "holiday_treatment": "not_applicable",
+        "season_definitions": {
+            "summer": {"start_month": 6, "end_month": 9},
+            "winter": {"start_month": 10, "end_month": 5},
+        },
+        "plans": [
+            {
+                "rate_plan_name": "EXACT-DOMESTIC",
+                "rate_class": "residential",
+                "pricing_model": "seasonal_tiered",
+                "periods": [
+                    {
+                        "season": "all",
+                        "day_type": "all",
+                        "name": "tier_1",
+                        "start_minute": 0,
+                        "end_minute": 1440,
+                        "price_per_kwh": "0.30863",
+                        "tier_min_kwh": "0",
+                        "tier_max_kwh": None,
+                    },
+                    {
+                        "season": "all",
+                        "day_type": "all",
+                        "name": "tier_2",
+                        "start_minute": 0,
+                        "end_minute": 1440,
+                        "price_per_kwh": "0.40962",
+                        "tier_min_kwh": None,
+                        "tier_max_kwh": None,
+                    },
+                ],
+            }
+        ],
+    }
+    async with session_factory() as session:
+        home_id = await session.scalar(select(Home.id))
+        actor_id = await session.scalar(select(User.id))
+        assert home_id is not None and actor_id is not None
+        source = RateSource(
+            name="Exact DOMESTIC tariff fixture",
+            source_type="official_https",
+            https_url="https://www.sce.com/regulatory/tariff-books/domestic",
+            enabled=False,
+        )
+        session.add(source)
+        await session.flush()
+        revision = RateSourceRevision(
+            source_id=source.id,
+            artifact_sha256="4" * 64,
+            parser_version="exact-domestic-v1",
+        )
+        session.add(revision)
+        await session.flush()
+        candidate = RateCandidate(
+            source_revision_id=revision.id,
+            normalized_rates=normalized,
+            validation_evidence={
+                "coverage": "semantic_tier_coverage",
+                "warnings": [],
+            },
+            home_id=home_id,
+            canonical_input_sha256="5" * 64,
+        )
+        session.add(candidate)
+        await session.flush()
+        review = RateCandidateReview(
+            candidate_id=candidate.id,
+            home_id=home_id,
+            selected_plan_name="EXACT-DOMESTIC",
+            effective_start=datetime(2026, 6, 1, 7, tzinfo=UTC),
+            tier_threshold_rule={
+                "rule_type": "daily_allowance",
+                "season": "summer",
+                "kwh_per_day": "19.3",
+                "source_allowance_kwh": "579.0",
+                "source_billing_days": 30,
+                "tier1_boundary_inclusive": True,
+                "source_label": "approved Schedule D baseline table",
+            },
+            state="reviewed",
+            reviewed_by_user_id=actor_id,
+        )
+        session.add(review)
+        await session.flush()
+        rounded_candidate = RateCandidate(
+            source_revision_id=revision.id,
+            normalized_rates=normalized,
+            validation_evidence={
+                "coverage": "semantic_tier_coverage",
+                "warnings": ["PUBLIC_SOURCE_PRICES_ARE_DISPLAY_ROUNDED"],
+            },
+            home_id=home_id,
+            canonical_input_sha256="9" * 64,
+        )
+        with pytest.raises(RateWorkflowConflict, match="exact tariff prices are required"):
+            await publish_rate_candidate(
+                session,
+                candidate=rounded_candidate,
+                review=review,
+                actor_user_id=actor_id,
+                correlation_id="rounded-domestic-review-only",
+            )
+        _plan, version = await publish_rate_candidate(
+            session,
+            candidate=candidate,
+            review=review,
+            actor_user_id=actor_id,
+            correlation_id="exact-domestic-threshold",
+        )
+        periods = (
+            await session.scalars(
+                select(RatePeriod)
+                .where(RatePeriod.rate_plan_version_id == version.id)
+                .order_by(RatePeriod.tier_start_kwh)
+            )
+        ).all()
+        assert version.tier_threshold_kwh_per_day is None
+        assert version.tier_threshold_season is None
+        assert version.tier_threshold_source_kwh is None
+        assert version.tier_threshold_source_days is None
+        assert [(item.tier_start_kwh, item.tier_end_kwh) for item in periods] == [
+            (Decimal("0"), Decimal("1")),
+            (Decimal("1"), None),
+        ]
+        assert {item.threshold_basis for item in periods} == {"account_daily_baseline"}
+        account = await session.scalar(
+            select(UtilityAccount).where(UtilityAccount.home_id == home_id)
+        )
+        assert account is not None
+        await activate_rate_candidate(
+            session,
+            candidate=candidate,
+            review=review,
+            utility_account_id=account.id,
+            actor_user_id=actor_id,
+            correlation_id="activate-first-home-domestic",
+        )
+        first_rule = await resolve_utility_account_tier_threshold(
+            session,
+            utility_account_id=account.id,
+            rate_plan_id=version.rate_plan_id,
+            season="summer",
+            instant=datetime(2026, 6, 15, 7, tzinfo=UTC),
+        )
+        assert first_rule is not None and first_rule.kwh_per_day == Decimal("19.3")
+
+        second_home = Home(name="Second baseline home", timezone="America/Los_Angeles")
+        session.add(second_home)
+        await session.flush()
+        second_account = UtilityAccount(
+            home_id=second_home.id,
+            timezone="America/Los_Angeles",
+            billing_day=15,
+            cost_scope="full_account",
+        )
+        session.add(second_account)
+        await session.flush()
+        await replace_rate_assignment(
+            session,
+            account=second_account,
+            version=version,
+            actor_user_id=actor_id,
+        )
+        for target_account, summer_daily, winter_daily, source_prefix in (
+            (account, Decimal("19.3"), Decimal("10"), "first"),
+            (second_account, Decimal("10"), Decimal("5"), "second"),
+        ):
+            if target_account.id != account.id:
+                await replace_utility_account_tier_threshold(
+                    session,
+                    account=target_account,
+                    rate_plan_id=version.rate_plan_id,
+                    season="summer",
+                    kwh_per_day=summer_daily,
+                    source_allowance_kwh=summer_daily * 30,
+                    source_billing_days=30,
+                    tier1_boundary_inclusive=True,
+                    source_label=f"{source_prefix} home summer evidence",
+                    source_kind="candidate_review",
+                    source_artifact_sha256=revision.artifact_sha256,
+                    effective_start=datetime(2026, 6, 1, 7, tzinfo=UTC),
+                    effective_end=None,
+                    actor_user_id=actor_id,
+                )
+            await replace_utility_account_tier_threshold(
+                session,
+                account=target_account,
+                rate_plan_id=version.rate_plan_id,
+                season="winter",
+                kwh_per_day=winter_daily,
+                source_allowance_kwh=winter_daily * 30,
+                source_billing_days=30,
+                tier1_boundary_inclusive=True,
+                source_label=f"{source_prefix} home winter evidence",
+                source_kind="candidate_review",
+                source_artifact_sha256=revision.artifact_sha256,
+                effective_start=datetime(2026, 6, 1, 7, tzinfo=UTC),
+                effective_end=None,
+                actor_user_id=actor_id,
+            )
+        await replace_utility_account_tier_threshold(
+            session,
+            account=account,
+            rate_plan_id=version.rate_plan_id,
+            season="summer",
+            kwh_per_day=Decimal("20"),
+            source_allowance_kwh=Decimal("600"),
+            source_billing_days=30,
+            tier1_boundary_inclusive=True,
+            source_label="first home effective July evidence",
+            source_kind="candidate_review",
+            source_artifact_sha256=revision.artifact_sha256,
+            effective_start=datetime(2026, 7, 1, 7, tzinfo=UTC),
+            effective_end=None,
+            actor_user_id=actor_id,
+        )
+        first_mixed_effective = await resolve_utility_account_cycle_tier_threshold(
+            session,
+            utility_account_id=account.id,
+            rate_plan_id=version.rate_plan_id,
+            season_definitions=version.season_definitions,
+            timezone=version.timezone,
+            cycle_start=datetime(2026, 6, 15, 7, tzinfo=UTC),
+            cycle_end=datetime(2026, 7, 15, 7, tzinfo=UTC),
+        )
+        first_mixed_season = await resolve_utility_account_cycle_tier_threshold(
+            session,
+            utility_account_id=account.id,
+            rate_plan_id=version.rate_plan_id,
+            season_definitions=version.season_definitions,
+            timezone=version.timezone,
+            cycle_start=datetime(2026, 9, 15, 7, tzinfo=UTC),
+            cycle_end=datetime(2026, 10, 15, 7, tzinfo=UTC),
+        )
+        second_summer = await resolve_utility_account_cycle_tier_threshold(
+            session,
+            utility_account_id=second_account.id,
+            rate_plan_id=version.rate_plan_id,
+            season_definitions=version.season_definitions,
+            timezone=version.timezone,
+            cycle_start=datetime(2026, 7, 1, 7, tzinfo=UTC),
+            cycle_end=datetime(2026, 7, 31, 7, tzinfo=UTC),
+        )
+        second_summer_28 = await resolve_utility_account_cycle_tier_threshold(
+            session,
+            utility_account_id=second_account.id,
+            rate_plan_id=version.rate_plan_id,
+            season_definitions=version.season_definitions,
+            timezone=version.timezone,
+            cycle_start=datetime(2026, 7, 1, 7, tzinfo=UTC),
+            cycle_end=datetime(2026, 7, 29, 7, tzinfo=UTC),
+        )
+        second_summer_31 = await resolve_utility_account_cycle_tier_threshold(
+            session,
+            utility_account_id=second_account.id,
+            rate_plan_id=version.rate_plan_id,
+            season_definitions=version.season_definitions,
+            timezone=version.timezone,
+            cycle_start=datetime(2026, 7, 1, 7, tzinfo=UTC),
+            cycle_end=datetime(2026, 8, 1, 7, tzinfo=UTC),
+        )
+        first_dst_cycle = await resolve_utility_account_cycle_tier_threshold(
+            session,
+            utility_account_id=account.id,
+            rate_plan_id=version.rate_plan_id,
+            season_definitions=version.season_definitions,
+            timezone=version.timezone,
+            cycle_start=datetime(2026, 11, 1, 7, tzinfo=UTC),
+            cycle_end=datetime(2026, 12, 1, 8, tzinfo=UTC),
+        )
+        assert first_mixed_effective is not None
+        assert first_mixed_effective.total_kwh == Decimal("588.8")
+        assert first_mixed_season is not None
+        assert first_mixed_season.total_kwh == Decimal("460")
+        assert second_summer is not None and second_summer.total_kwh == Decimal("300")
+        assert second_summer_28 is not None and second_summer_28.total_kwh == Decimal("280")
+        assert second_summer_31 is not None and second_summer_31.total_kwh == Decimal("310")
+        assert first_dst_cycle is not None and first_dst_cycle.total_kwh == Decimal("300")
+        await session.refresh(version)
+        unchanged_periods = (
+            await session.scalars(
+                select(RatePeriod)
+                .where(RatePeriod.rate_plan_version_id == version.id)
+                .order_by(RatePeriod.tier_start_kwh)
+            )
+        ).all()
+        assert version.tier_threshold_kwh_per_day is None
+        assert [(item.tier_start_kwh, item.tier_end_kwh) for item in unchanged_periods] == [
+            (Decimal("0"), Decimal("1")),
+            (Decimal("1"), None),
+        ]
+        assert (
+            int(await session.scalar(select(func.count(UtilityAccountTierThreshold.id))) or 0) == 5
+        )
+
+
+@pytest.mark.asyncio
+async def test_publish_dynamic_prices_binds_catalog_metadata_and_exact_utc_rows(
+    owner_client: AsyncClient,
+) -> None:
+    del owner_client
+    start = datetime(2026, 11, 1, 8, tzinfo=UTC)
+    end = datetime(2026, 11, 1, 10, tzinfo=UTC)
+    dynamic_plan = {
+        "rate_plan_name": "DYNAMIC-TEST",
+        "rate_class": "residential",
+        "pricing_model": "dynamic_hourly",
+        "description": "Official bounded hourly pilot schedule.",
+        "dated_prices": [
+            {
+                "start_utc": "2026-11-01T08:00:00Z",
+                "end_utc": "2026-11-01T09:00:00Z",
+                "price_per_kwh": "0.10",
+                "rate_components": [
+                    {
+                        "component": "delivery_rate",
+                        "amount_per_kwh": "0.04",
+                        "source_status": "exact",
+                    },
+                    {
+                        "component": "generation_rate",
+                        "amount_per_kwh": "0.06",
+                        "source_status": "exact",
+                    },
+                ],
+                "source_label": "first repeated 1 AM hour",
+            },
+            {
+                "start_utc": "2026-11-01T09:00:00Z",
+                "end_utc": "2026-11-01T10:00:00Z",
+                "price_per_kwh": "0.30",
+                "rate_components": [
+                    {
+                        "component": "delivery_rate",
+                        "amount_per_kwh": "0.12",
+                        "source_status": "exact",
+                    },
+                    {
+                        "component": "generation_rate",
+                        "amount_per_kwh": "0.18",
+                        "source_status": "exact",
+                    },
+                ],
+                "source_label": "second repeated 1 AM hour",
+            },
+        ],
+    }
+    normalized = {
+        "schema": "sce-rate-candidate/1.0.0",
+        "utility_name": "Southern California Edison",
+        "timezone": "America/Los_Angeles",
+        "currency": "USD",
+        "holiday_treatment": "not_applicable",
+        "plans": [dynamic_plan],
+    }
+    async with session_factory() as session:
+        home_id = await session.scalar(select(Home.id))
+        actor_id = await session.scalar(select(User.id))
+        assert home_id is not None and actor_id is not None
+        source = RateSource(
+            name="Official bounded dynamic pilot fixture",
+            source_type="official_https",
+            https_url="https://www.sce.com/regulatory/tariff-books/dynamic-pilot",
+            enabled=False,
+        )
+        session.add(source)
+        await session.flush()
+        revision = RateSourceRevision(
+            source_id=source.id,
+            artifact_sha256="6" * 64,
+            parser_version="dynamic-hourly-v1",
+        )
+        session.add(revision)
+        await session.flush()
+        session.add(
+            SceCatalogEntry(
+                source_revision_id=revision.id,
+                source_url=source.https_url,
+                source_level=1,
+                official_schedule_code="DYNAMIC-PILOT",
+                public_plan_name="SCE Dynamic Hourly Pilot",
+                canonical_name="DYNAMIC-TEST",
+                plan_type="dynamic_hourly",
+                enrollment_status="pilot",
+                eligibility=["approved_pilot_participant"],
+                discovery_state="parsed",
+                normalized_plan=dynamic_plan,
+            )
+        )
+        candidate = RateCandidate(
+            source_revision_id=revision.id,
+            normalized_rates=normalized,
+            validation_evidence={"coverage": "complete"},
+            home_id=home_id,
+            canonical_input_sha256="7" * 64,
+        )
+        session.add(candidate)
+        await session.flush()
+        review = RateCandidateReview(
+            candidate_id=candidate.id,
+            home_id=home_id,
+            selected_plan_name="DYNAMIC-TEST",
+            effective_start=start,
+            effective_end=end,
+            state="reviewed",
+            reviewed_by_user_id=actor_id,
+        )
+        session.add(review)
+        await session.flush()
+        plan, version = await publish_rate_candidate(
+            session,
+            candidate=candidate,
+            review=review,
+            actor_user_id=actor_id,
+            correlation_id="dynamic-hourly-publication",
+        )
+        rows = (
+            await session.scalars(
+                select(RateDatedPrice)
+                .where(RateDatedPrice.rate_plan_version_id == version.id)
+                .order_by(RateDatedPrice.start_utc)
+            )
+        ).all()
+        assert plan.official_schedule_code == "DYNAMIC-PILOT"
+        assert plan.public_plan_name == "SCE Dynamic Hourly Pilot"
+        assert plan.canonical_name == "DYNAMIC-TEST"
+        assert plan.enrollment_status == "pilot"
+        assert plan.eligibility == ["approved_pilot_participant"]
+        assert plan.description == "Official bounded hourly pilot schedule."
+        assert [item.price_per_kwh for item in rows] == [Decimal("0.10"), Decimal("0.30")]
+        metadata = next(
+            item
+            for item in version.eligibility_evidence
+            if isinstance(item, dict) and item.get("evidence_type") == "official_plan_metadata"
+        )
+        assert metadata["catalog_entry_id"]
+        assert metadata["official_schedule_code"] == "DYNAMIC-PILOT"
+
+
+@pytest.mark.asyncio
+async def test_publish_event_schedule_without_bounded_calendar_fails_closed(
+    owner_client: AsyncClient,
+) -> None:
+    del owner_client
+    normalized = {
+        "schema": "sce-rate-candidate/1.0.0",
+        "utility_name": "Southern California Edison",
+        "timezone": "America/Los_Angeles",
+        "currency": "USD",
+        "holiday_treatment": "event_calendar_required",
+        "season_definitions": {
+            "summer": {"start_month": 6, "end_month": 9},
+            "winter": {"start_month": 10, "end_month": 5},
+        },
+        "plans": [
+            {
+                "rate_plan_name": "UNRESOLVED-EVENT",
+                "rate_class": "residential",
+                "pricing_model": "critical_peak_pricing",
+                "periods": [
+                    {
+                        "season": "all",
+                        "day_type": "all",
+                        "name": "ordinary",
+                        "start_minute": 0,
+                        "end_minute": 1440,
+                        "price_per_kwh": "0.20",
+                    },
+                    {
+                        "season": "summer",
+                        "day_type": "event_day",
+                        "name": "event",
+                        "start_minute": 960,
+                        "end_minute": 1260,
+                        "price_per_kwh": "0.80",
+                    },
+                ],
+            }
+        ],
+    }
+    async with session_factory() as session:
+        home_id = await session.scalar(select(Home.id))
+        actor_id = await session.scalar(select(User.id))
+        assert home_id is not None and actor_id is not None
+        candidate = RateCandidate(
+            source_revision_id=str(uuid.uuid4()),
+            normalized_rates=normalized,
+            validation_evidence={"coverage": "complete"},
+            home_id=home_id,
+            canonical_input_sha256=uuid.uuid4().hex * 2,
+        )
+        review = RateCandidateReview(
+            candidate_id=str(uuid.uuid4()),
+            home_id=home_id,
+            selected_plan_name="UNRESOLVED-EVENT",
+            effective_start=datetime(2026, 8, 1, 7, tzinfo=UTC),
+            effective_end=datetime(2026, 9, 1, 7, tzinfo=UTC),
+            state="reviewed",
+            reviewed_by_user_id=actor_id,
+        )
+        with pytest.raises(RateWorkflowConflict, match="event calendar is unresolved"):
+            await publish_rate_candidate(
+                session,
+                candidate=candidate,
+                review=review,
+                actor_user_id=actor_id,
+                correlation_id="unresolved-event",
+            )
+
+
+@pytest.mark.asyncio
+async def test_holiday_sensitive_publication_requires_authoritative_bounded_calendar(
+    owner_client: AsyncClient,
+) -> None:
+    del owner_client
+    normalized: dict[str, object] = {
+        "schema": "sce-rate-candidate/1.0.0",
+        "utility_name": "Southern California Edison",
+        "timezone": "America/Los_Angeles",
+        "currency": "USD",
+        "holiday_treatment": "same_as_weekend",
+        "season_definitions": {"all_year": {"start_month": 1, "end_month": 12}},
+        "plans": [
+            {
+                "rate_plan_name": "HOLIDAY-BOUNDED",
+                "rate_class": "residential",
+                "pricing_model": "time_of_use",
+                "periods": [
+                    {
+                        "season": "all_year",
+                        "day_type": "weekday",
+                        "name": "weekday",
+                        "start_minute": 0,
+                        "end_minute": 1440,
+                        "price_per_kwh": "0.20",
+                    },
+                    {
+                        "season": "all_year",
+                        "day_type": "weekend_holiday",
+                        "name": "weekend_holiday",
+                        "start_minute": 0,
+                        "end_minute": 1440,
+                        "price_per_kwh": "0.10",
+                    },
+                ],
+            }
+        ],
+    }
+    async with session_factory() as session:
+        home_id = await session.scalar(select(Home.id))
+        actor_id = await session.scalar(select(User.id))
+        assert home_id is not None and actor_id is not None
+        candidate = RateCandidate(
+            source_revision_id=str(uuid.uuid4()),
+            normalized_rates=normalized,
+            validation_evidence={"coverage": "complete"},
+            home_id=home_id,
+            canonical_input_sha256=uuid.uuid4().hex * 2,
+        )
+        review = RateCandidateReview(
+            candidate_id=str(uuid.uuid4()),
+            home_id=home_id,
+            selected_plan_name="HOLIDAY-BOUNDED",
+            effective_start=datetime(2026, 8, 1, tzinfo=UTC),
+            effective_end=datetime(2027, 1, 1, tzinfo=UTC),
+            state="reviewed",
+            reviewed_by_user_id=actor_id,
+        )
+        with pytest.raises(RateWorkflowConflict, match="holiday calendar evidence"):
+            await publish_rate_candidate(
+                session,
+                candidate=candidate,
+                review=review,
+                actor_user_id=actor_id,
+                correlation_id="missing-holiday-calendar",
+            )
+        candidate.normalized_rates = {
+            **normalized,
+            "holiday_calendar": {
+                "status": "resolved",
+                "authority": "Southern California Edison",
+                "source_url": "https://www.sce.com/residential/rates/holidays",
+                "coverage_start": "2026-01-01",
+                "coverage_end": "2026-12-31",
+                "holidays": [],
+            },
+        }
+        review.effective_end = None
+        with pytest.raises(RateWorkflowConflict, match="holiday calendar coverage"):
+            await publish_rate_candidate(
+                session,
+                candidate=candidate,
+                review=review,
+                actor_user_id=actor_id,
+                correlation_id="open-holiday-calendar",
+            )
+
+
+@pytest.mark.asyncio
 async def test_official_status_is_not_masked_by_a_later_manual_candidate(
     owner_client: AsyncClient,
 ) -> None:
@@ -368,7 +1469,9 @@ async def test_reject_is_exact_home_terminal_and_audited(owner_client: AsyncClie
 async def test_official_candidate_has_authorized_publish_path_and_cost_compatible_periods(
     owner_client: AsyncClient,
     rate_artifact_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _install_authoritative_holiday_calendar_parser(monkeypatch)
     home_id = (await owner_client.get("/api/v1/home-scopes")).json()["home_scopes"][0]["id"]
     async with session_factory() as session:
         source = RateSource(
@@ -406,6 +1509,7 @@ async def test_official_candidate_has_authorized_publish_path_and_cost_compatibl
         json={
             "selected_plan_name": "TOU-D-4-9PM",
             "effective_start": "2026-08-01T00:00:00-07:00",
+            "effective_end": "2027-01-01T00:00:00-08:00",
             "administrator_confirmed_effective_date": True,
             "administrator_confirmed_provenance": True,
         },
@@ -431,6 +1535,27 @@ async def test_official_candidate_has_authorized_publish_path_and_cost_compatibl
             "all",
         }
         assert all(period.price_per_kwh > 0 for period in periods)
+        holidays = (
+            await session.scalars(
+                select(RateHoliday)
+                .where(RateHoliday.rate_plan_version_id == version_id)
+                .order_by(RateHoliday.local_date)
+            )
+        ).all()
+        assert [(holiday.local_date.isoformat(), holiday.name) for holiday in holidays] == [
+            ("2026-09-07", "Labor Day"),
+            ("2026-11-26", "Thanksgiving Day"),
+            ("2026-12-25", "Christmas Day"),
+        ]
+        version = await session.get(RatePlanVersion, version_id)
+        assert version is not None
+        holiday_evidence = [
+            item
+            for item in version.eligibility_evidence
+            if isinstance(item, dict) and item.get("evidence_type") == "holiday_calendar"
+        ]
+        assert len(holiday_evidence) == 1
+        assert holiday_evidence[0]["coverage_end"] == "2026-12-31"
 
 
 @pytest.mark.asyncio
@@ -709,7 +1834,9 @@ async def test_configured_sce_url_is_strict_and_updates_the_managed_source_in_pl
 async def test_new_diff_uses_last_published_candidate_not_newer_unapproved_candidate(
     owner_client: AsyncClient,
     rate_artifact_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _install_authoritative_holiday_calendar_parser(monkeypatch)
     home_id = (await owner_client.get("/api/v1/home-scopes")).json()["home_scopes"][0]["id"]
     settings = Settings(
         env="test",
@@ -747,6 +1874,7 @@ async def test_new_diff_uses_last_published_candidate_not_newer_unapproved_candi
         json={
             "selected_plan_name": "TOU-D-4-9PM",
             "effective_start": "2026-08-01T00:00:00-07:00",
+            "effective_end": "2027-01-01T00:00:00-08:00",
             "administrator_confirmed_effective_date": True,
             "administrator_confirmed_provenance": True,
         },
@@ -1221,11 +2349,19 @@ async def test_scheduled_sync_projects_one_network_result_to_each_home(
         rate_source_retry_backoff_seconds=0,
     )
     calls = 0
+    catalog_detail_url = (
+        "https://www.sce.com/save-money/rates-financing/residential-rate-plans/tou-d-4-9"
+    )
+    catalog_root = (
+        f'<html><body><a href="{catalog_detail_url}">TOU-D 4 PM to 9 PM</a></body></html>'
+    ).encode()
 
-    async def fetch_once(*_args: object, **_kwargs: object):  # type: ignore[no-untyped-def]
+    async def fetch_once(url: str, **_kwargs: object):  # type: ignore[no-untyped-def]
         nonlocal calls
         calls += 1
-        return _fetched(valid_sce_page())
+        if url == SCE_CATALOG_URL:
+            return _fetched(catalog_root, url=url)
+        return _fetched(valid_sce_page(), url=url)
 
     async with session_factory() as session:
         session.add_all(
@@ -1236,10 +2372,10 @@ async def test_scheduled_sync_projects_one_network_result_to_each_home(
         )
         await session.flush()
         result = await sync_due_rate_sources(session, settings, fetcher=fetch_once)
-        assert result == {"checked": 1, "failed": 0, "review_required": 1, "unchanged": 0}
-        assert calls == 1
+        assert result == {"checked": 2, "failed": 0, "review_required": 1, "unchanged": 1}
+        assert calls == 3
         runs = (await session.scalars(select(RateSyncRun))).all()
-        assert len(runs) == 2
+        assert len(runs) == 4
         assert {run.home_id for run in runs} == set((await session.scalars(select(Home.id))).all())
         assert all(run.evidence["initiator"] == "scheduled_worker" for run in runs)
         assert all(run.home_id is not None for run in runs)

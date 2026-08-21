@@ -6,16 +6,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from backend.app.config import Settings, get_settings
+from backend.app.errors import RateWorkflowConflict
 from backend.app.models import (
     Alert,
     AlertConditionState,
     AlertEvent,
     AlertMaintenanceWindow,
     ApplicationLog,
+    BillingCycleAdjustment,
     BillingEstimate,
     BillingEstimateSelection,
     CalculationRun,
@@ -35,6 +37,7 @@ from backend.app.models import (
     RateAssignment,
     RateCandidate,
     RateCandidateReview,
+    RateDatedPrice,
     RateHoliday,
     RatePeriod,
     RatePlanVersion,
@@ -43,18 +46,36 @@ from backend.app.models import (
     RawReading,
     Rollup,
     StatelessTelemetrySample,
+    TelemetryEnergyEvent,
     UtilityAccount,
     aware_utc,
 )
-from backend.app.services.commands import create_command, expire_prepare_tokens
+from backend.app.services.commands import expire_prepare_tokens
 from backend.app.services.cost_engine import (
     CostContext,
+    DatedPrice,
     PricePeriod,
     RateVersion,
+    event_calendar_from_evidence,
     fixed_charge_microdollars,
+    fixed_charges_from_storage,
+    holiday_calendar_from_evidence,
     price_sensor_interval,
+    season_definitions_from_storage,
+    season_for_local,
+)
+from backend.app.services.firmware_deployments import (
+    advance_next_staged_firmware_deployment as advance_next_staged_firmware_deployment,
+)
+from backend.app.services.firmware_deployments import (
+    apply_firmware_deployment_retention,
+    reconcile_firmware_artifact_quarantines,
+    reconcile_firmware_version_heartbeat,
 )
 from backend.app.services.rate_sync import sync_due_rate_sources
+from backend.app.services.rate_workflow import (
+    resolve_assigned_utility_account_cycle_tier_threshold,
+)
 from backend.app.services.stateless_telemetry import (
     apply_stateless_history_retention,
     finalize_stateless_history,
@@ -115,7 +136,7 @@ async def cleanup_nonces(session: AsyncSession) -> int:
 async def _rate_for_interval(
     session: AsyncSession, interval: NormalizedInterval
 ) -> tuple[RateVersion, UtilityAccount, str, tuple[str, ...]] | None:
-    row = (
+    rows = (
         await session.execute(
             select(RatePlanVersion, UtilityAccount, Device)
             .join(RateAssignment, RateAssignment.rate_plan_version_id == RatePlanVersion.id)
@@ -136,15 +157,22 @@ async def _rate_for_interval(
                 ),
             )
             .order_by(RateAssignment.effective_start.desc())
-            .limit(1)
+            .limit(2)
         )
-    ).one_or_none()
-    if row is None:
+    ).all()
+    if len(rows) != 1:
         return None
-    version, account, device = row
+    version, account, device = rows[0]
     periods = (
         await session.scalars(
             select(RatePeriod).where(RatePeriod.rate_plan_version_id == version.id)
+        )
+    ).all()
+    dated_prices = (
+        await session.scalars(
+            select(RateDatedPrice)
+            .where(RateDatedPrice.rate_plan_version_id == version.id)
+            .order_by(RateDatedPrice.start_utc)
         )
     ).all()
     holidays = frozenset(
@@ -154,32 +182,54 @@ async def _rate_for_interval(
             )
         ).all()
     )
+    holiday_calendar = holiday_calendar_from_evidence(version.eligibility_evidence)
+    if holiday_calendar is not None and holiday_calendar.local_dates != holidays:
+        raise ValueError("stored holiday calendar does not match its persisted holiday rows")
     domain = RateVersion(
         id=version.id,
+        rate_plan_id=version.rate_plan_id,
         timezone=version.timezone,
         effective_start=aware_utc(version.effective_start),
         effective_end=aware_utc(version.effective_end) if version.effective_end else None,
         periods=tuple(
             PricePeriod(
-                season=period.season,  # type: ignore[arg-type]
-                day_type=period.day_type,  # type: ignore[arg-type]
+                season=period.season,
+                day_type=period.day_type,
                 name=period.period_name,
                 start_minute=period.start_minute,
                 end_minute=period.end_minute,
                 price_per_kwh=period.price_per_kwh,
                 tier_start_kwh=period.tier_start_kwh,
                 tier_end_kwh=period.tier_end_kwh,
+                boundary_inclusive=period.boundary_inclusive,
+                threshold_basis=period.threshold_basis,
             )
             for period in periods
         ),
+        dated_prices=tuple(
+            DatedPrice(
+                start_utc=aware_utc(item.start_utc),
+                end_utc=aware_utc(item.end_utc),
+                name=item.source_label,
+                price_per_kwh=item.price_per_kwh,
+            )
+            for item in dated_prices
+        ),
+        season_definitions=season_definitions_from_storage(version.season_definitions),
+        holiday_treatment=version.holiday_treatment,
+        holiday_calendar=holiday_calendar,
+        event_calendar=event_calendar_from_evidence(version.eligibility_evidence),
         baseline_credit_per_kwh=version.baseline_credit_per_kwh,
         tier_threshold_kwh_per_day=version.tier_threshold_kwh_per_day,
-        tier_threshold_season=cast(
-            Literal["summer", "winter"] | None, version.tier_threshold_season
-        ),
+        tier_threshold_season=version.tier_threshold_season,
         tier_threshold_source_kwh=version.tier_threshold_source_kwh,
+        tier1_boundary_inclusive=version.tier1_boundary_inclusive,
         daily_fixed_charge=version.daily_fixed_charge,
         monthly_fixed_charge=version.monthly_fixed_charge,
+        minimum_charge=version.minimum_charge,
+        meter_charge=version.meter_charge,
+        other_fixed_charge=version.other_fixed_charge,
+        fixed_charges=fixed_charges_from_storage(version.fixed_charges),
         cca_adjustment_per_kwh=version.cca_adjustment_per_kwh,
         surcharge_percent=version.surcharge_percent,
         algorithm_version=version.algorithm_version,
@@ -356,6 +406,14 @@ def _billing_cycle_days(cycle_start: datetime, account: UtilityAccount) -> int:
     return (local_end.date() - local_start.date()).days
 
 
+def _billing_cycle_end(cycle_start: datetime, account: UtilityAccount) -> datetime:
+    zone = ZoneInfo(account.timezone)
+    local_start = aware_utc(cycle_start).astimezone(zone)
+    year = local_start.year + (1 if local_start.month == 12 else 0)
+    month = 1 if local_start.month == 12 else local_start.month + 1
+    return datetime(year, month, account.billing_day, tzinfo=zone).astimezone(UTC)
+
+
 async def _cost_context(
     session: AsyncSession,
     interval: NormalizedInterval,
@@ -363,8 +421,43 @@ async def _cost_context(
     rate: RateVersion,
     member_ids: tuple[str, ...],
     effective_scope: str,
-) -> CostContext:
+) -> CostContext | None:
     cycle_start = _billing_cycle_start(interval.start_utc, account)
+    cycle_end = _billing_cycle_end(cycle_start, account)
+    interval_start = aware_utc(interval.start_utc)
+    automatic_start = cycle_start
+    seed_mwh = 0
+    seed = await session.scalar(
+        select(BillingCycleAdjustment).where(
+            BillingCycleAdjustment.utility_account_id == account.id,
+            BillingCycleAdjustment.cycle_start_utc == cycle_start,
+            BillingCycleAdjustment.reason == "verified_cycle_to_date_seed",
+        )
+    )
+    if seed is not None:
+        through_value = seed.evidence.get("through_utc")
+        if not isinstance(through_value, str):
+            return None
+        try:
+            through = datetime.fromisoformat(through_value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if through.utcoffset() is None:
+            return None
+        automatic_start = through.astimezone(UTC)
+        if not cycle_start <= automatic_start <= interval_start:
+            return None
+        seed_mwh = seed.energy_mwh
+        crossing_seed = await session.scalar(
+            select(func.count(NormalizedInterval.id)).where(
+                NormalizedInterval.device_id.in_(member_ids),
+                NormalizedInterval.start_utc < automatic_start,
+                NormalizedInterval.end_utc > automatic_start,
+                NormalizedInterval.source_authenticated.is_(True),
+            )
+        )
+        if int(crossing_seed or 0):
+            return None
     prior_mwh = int(
         await session.scalar(
             select(func.sum(NormalizedInterval.energy_mwh))
@@ -376,19 +469,65 @@ async def _cost_context(
                     NormalizedInterval.source_kind == "stateless_v2",
                     RawReading.reset_generation == Device.reset_generation,
                 ),
-                NormalizedInterval.start_utc >= cycle_start,
-                NormalizedInterval.end_utc <= interval.start_utc,
+                NormalizedInterval.start_utc >= automatic_start,
+                NormalizedInterval.end_utc <= interval_start,
                 NormalizedInterval.source_authenticated.is_(True),
             )
         )
         or 0
     )
-    cumulative = Decimal(prior_mwh) / Decimal(1_000_000)
+    recovered_mwh = int(
+        await session.scalar(
+            select(func.sum(TelemetryEnergyEvent.recovered_energy_mwh)).where(
+                TelemetryEnergyEvent.device_id.in_(member_ids),
+                TelemetryEnergyEvent.event_type == "connection_gap_recovered",
+                TelemetryEnergyEvent.billing_status == "included",
+                TelemetryEnergyEvent.gap_end_utc > automatic_start,
+                TelemetryEnergyEvent.gap_end_utc <= interval_start,
+            )
+        )
+        or 0
+    )
+    unresolved_events = await session.scalar(
+        select(func.count(TelemetryEnergyEvent.id)).where(
+            TelemetryEnergyEvent.device_id.in_(member_ids),
+            TelemetryEnergyEvent.billing_status == "unresolved",
+            or_(
+                TelemetryEnergyEvent.gap_end_utc.is_(None),
+                TelemetryEnergyEvent.gap_end_utc > automatic_start,
+            ),
+            or_(
+                TelemetryEnergyEvent.gap_start_utc.is_(None),
+                TelemetryEnergyEvent.gap_start_utc < interval_start,
+            ),
+        )
+    )
+    if int(unresolved_events or 0):
+        return None
+    cumulative = Decimal(seed_mwh + prior_mwh + recovered_mwh) / Decimal(1_000_000)
     allocation = account.baseline_allocation_kwh or Decimal("0")
+    try:
+        threshold = await resolve_assigned_utility_account_cycle_tier_threshold(
+            session,
+            utility_account_id=account.id,
+            timezone=account.timezone,
+            cycle_start=cycle_start,
+            cycle_end=cycle_end,
+        )
+    except (RateWorkflowConflict, ValueError):
+        return None
+    if threshold is None and any(
+        period.threshold_basis == "account_daily_baseline" for period in rate.periods
+    ):
+        return None
+    local = aware_utc(interval.start_utc).astimezone(ZoneInfo(rate.timezone))
     return CostContext(
         cumulative_cycle_kwh_before=cumulative,
         baseline_remaining_kwh=max(Decimal("0"), allocation - cumulative),
         billing_cycle_days=_billing_cycle_days(cycle_start, account),
+        tier_threshold_cycle_kwh=threshold.total_kwh if threshold else None,
+        tier_threshold_season=season_for_local(rate, local) if threshold else None,
+        tier1_boundary_inclusive=(threshold.tier1_boundary_inclusive if threshold else True),
         scope=effective_scope,  # type: ignore[arg-type]
         holidays=rate.holidays,
     )
@@ -482,6 +621,8 @@ async def calculate_pending_costs(session: AsyncSession, limit: int = 1000) -> i
             if already_selected:
                 continue
         context = await _cost_context(session, interval, account, rate, member_ids, effective_scope)
+        if context is None:
+            continue
         combined_energy = sum(int(item.energy_mwh or 0) for item in group)
         result = price_sensor_interval(
             start_utc=aware_utc(interval.start_utc),
@@ -537,34 +678,53 @@ async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | 
     accounts = (await session.scalars(select(UtilityAccount))).all()
     created = 0
     for account in accounts:
-        assignment = await session.scalar(
-            select(RateAssignment)
-            .join(
-                RatePlanVersion,
-                RatePlanVersion.id == RateAssignment.rate_plan_version_id,
+        assignments = (
+            await session.scalars(
+                select(RateAssignment)
+                .join(
+                    RatePlanVersion,
+                    RatePlanVersion.id == RateAssignment.rate_plan_version_id,
+                )
+                .where(
+                    RateAssignment.utility_account_id == account.id,
+                    RateAssignment.effective_start <= instant,
+                    (
+                        RateAssignment.effective_end.is_(None)
+                        | (RateAssignment.effective_end > instant)
+                    ),
+                    RatePlanVersion.state == "published",
+                    RatePlanVersion.effective_start <= instant,
+                    (
+                        RatePlanVersion.effective_end.is_(None)
+                        | (RatePlanVersion.effective_end > instant)
+                    ),
+                )
+                .order_by(RateAssignment.effective_start.desc())
+                .limit(2)
             )
-            .where(
-                RateAssignment.utility_account_id == account.id,
-                RateAssignment.effective_start <= instant,
-                (RateAssignment.effective_end.is_(None) | (RateAssignment.effective_end > instant)),
-                RatePlanVersion.state == "published",
-                RatePlanVersion.effective_start <= instant,
-                (
-                    RatePlanVersion.effective_end.is_(None)
-                    | (RatePlanVersion.effective_end > instant)
-                ),
+        ).all()
+        if len(assignments) != 1:
+            await session.execute(
+                delete(BillingEstimateSelection).where(
+                    BillingEstimateSelection.utility_account_id == account.id,
+                    BillingEstimateSelection.estimate_kind == "billing_cycle_to_date",
+                )
             )
-            .order_by(RateAssignment.effective_start.desc())
-            .limit(1)
-        )
-        if assignment is None:
             continue
+        assignment = assignments[0]
         version = await session.get(RatePlanVersion, assignment.rate_plan_version_id)
         if version is None:
             continue
         periods = (
             await session.scalars(
                 select(RatePeriod).where(RatePeriod.rate_plan_version_id == version.id)
+            )
+        ).all()
+        dated_prices = (
+            await session.scalars(
+                select(RateDatedPrice)
+                .where(RateDatedPrice.rate_plan_version_id == version.id)
+                .order_by(RateDatedPrice.start_utc)
             )
         ).all()
         holidays = frozenset(
@@ -576,39 +736,110 @@ async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | 
                 )
             ).all()
         )
+        holiday_calendar = holiday_calendar_from_evidence(version.eligibility_evidence)
+        if holiday_calendar is not None and holiday_calendar.local_dates != holidays:
+            raise ValueError("stored holiday calendar does not match its persisted holiday rows")
         rate = RateVersion(
             id=version.id,
+            rate_plan_id=version.rate_plan_id,
             timezone=version.timezone,
             effective_start=aware_utc(version.effective_start),
             effective_end=aware_utc(version.effective_end) if version.effective_end else None,
             periods=tuple(
                 PricePeriod(
-                    season=period.season,  # type: ignore[arg-type]
-                    day_type=period.day_type,  # type: ignore[arg-type]
+                    season=period.season,
+                    day_type=period.day_type,
                     name=period.period_name,
                     start_minute=period.start_minute,
                     end_minute=period.end_minute,
                     price_per_kwh=period.price_per_kwh,
                     tier_start_kwh=period.tier_start_kwh,
                     tier_end_kwh=period.tier_end_kwh,
+                    boundary_inclusive=period.boundary_inclusive,
+                    threshold_basis=period.threshold_basis,
                 )
                 for period in periods
             ),
+            dated_prices=tuple(
+                DatedPrice(
+                    start_utc=aware_utc(item.start_utc),
+                    end_utc=aware_utc(item.end_utc),
+                    name=item.source_label,
+                    price_per_kwh=item.price_per_kwh,
+                )
+                for item in dated_prices
+            ),
+            season_definitions=season_definitions_from_storage(version.season_definitions),
+            holiday_treatment=version.holiday_treatment,
+            holiday_calendar=holiday_calendar,
+            event_calendar=event_calendar_from_evidence(version.eligibility_evidence),
             baseline_credit_per_kwh=version.baseline_credit_per_kwh,
             tier_threshold_kwh_per_day=version.tier_threshold_kwh_per_day,
-            tier_threshold_season=cast(
-                Literal["summer", "winter"] | None, version.tier_threshold_season
-            ),
+            tier_threshold_season=version.tier_threshold_season,
             tier_threshold_source_kwh=version.tier_threshold_source_kwh,
+            tier1_boundary_inclusive=version.tier1_boundary_inclusive,
             daily_fixed_charge=version.daily_fixed_charge,
             monthly_fixed_charge=version.monthly_fixed_charge,
+            minimum_charge=version.minimum_charge,
+            meter_charge=version.meter_charge,
+            other_fixed_charge=version.other_fixed_charge,
+            fixed_charges=fixed_charges_from_storage(version.fixed_charges),
             cca_adjustment_per_kwh=version.cca_adjustment_per_kwh,
             surcharge_percent=version.surcharge_percent,
             algorithm_version=version.algorithm_version,
             holidays=holidays,
         )
         cycle_start = _billing_cycle_start(instant, account)
+        if (
+            aware_utc(assignment.effective_start) > cycle_start
+            or aware_utc(version.effective_start) > cycle_start
+        ):
+            # A single-version estimate cannot retroactively apply current fixed
+            # charges to the earlier segment of a split billing cycle. Clear a
+            # formerly selected estimate so readers fail closed instead of
+            # continuing to display stale pre-transition billing.
+            await session.execute(
+                delete(BillingEstimateSelection).where(
+                    BillingEstimateSelection.utility_account_id == account.id,
+                    BillingEstimateSelection.estimate_kind == "billing_cycle_to_date",
+                )
+            )
+            continue
         for scope_kind, scope_id, member_ids in await _billing_scope_groups(session, account):
+            recovered_energy_mwh = int(
+                await session.scalar(
+                    select(func.sum(TelemetryEnergyEvent.recovered_energy_mwh)).where(
+                        TelemetryEnergyEvent.device_id.in_(member_ids),
+                        TelemetryEnergyEvent.billing_status == "included",
+                        TelemetryEnergyEvent.gap_end_utc > cycle_start,
+                        TelemetryEnergyEvent.gap_end_utc <= scope_end,
+                    )
+                )
+                or 0
+            )
+            verified_seed_mwh = int(
+                await session.scalar(
+                    select(func.sum(BillingCycleAdjustment.energy_mwh)).where(
+                        BillingCycleAdjustment.utility_account_id == account.id,
+                        BillingCycleAdjustment.cycle_start_utc == cycle_start,
+                        BillingCycleAdjustment.reason == "verified_cycle_to_date_seed",
+                    )
+                )
+                or 0
+            )
+            if recovered_energy_mwh or verified_seed_mwh:
+                # These authoritative totals participate in cumulative tier
+                # usage, but have no immutable interval price selection. Do not
+                # understate a money estimate by silently omitting them.
+                await session.execute(
+                    delete(BillingEstimateSelection).where(
+                        BillingEstimateSelection.utility_account_id == account.id,
+                        BillingEstimateSelection.estimate_kind == "billing_cycle_to_date",
+                        BillingEstimateSelection.scope_kind == scope_kind,
+                        BillingEstimateSelection.scope_id == scope_id,
+                    )
+                )
+                continue
             cost_rows = (
                 await session.execute(
                     select(NormalizedInterval, IntervalCost)
@@ -636,6 +867,19 @@ async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | 
                     .order_by(NormalizedInterval.start_utc, NormalizedInterval.device_id)
                 )
             ).all()
+            if any(cost.rate_plan_version_id != version.id for _interval, cost in cost_rows):
+                # Preserve already-priced immutable interval costs, but do not
+                # combine their variable totals with one version's fixed charges
+                # or leave a formerly selected estimate visible.
+                await session.execute(
+                    delete(BillingEstimateSelection).where(
+                        BillingEstimateSelection.utility_account_id == account.id,
+                        BillingEstimateSelection.estimate_kind == "billing_cycle_to_date",
+                        BillingEstimateSelection.scope_kind == scope_kind,
+                        BillingEstimateSelection.scope_id == scope_id,
+                    )
+                )
+                continue
             energy_mwh = sum(int(interval.energy_mwh or 0) for interval, _cost in cost_rows)
             energy_cost = sum(cost.energy_cost_microdollars for _interval, cost in cost_rows)
             credits = sum(cost.credit_microdollars for _interval, cost in cost_rows)
@@ -656,6 +900,11 @@ async def calculate_billing_estimates(session: AsyncSession, *, now: datetime | 
                 local_start,
                 local_end_exclusive,
                 scope=scope_kind,
+                # One UtilityAccount is unique per home and its verified Main-service
+                # billing source represents one utility billing meter.  Sensor/CT
+                # membership is deliberately never used as the meter multiplier.
+                meter_count=1,
+                variable_charge_microdollars=max(0, energy_cost - credits),
             )
             input_document = {
                 "schema": "pm-billing-estimate-input/1.0.0",
@@ -1351,61 +1600,53 @@ async def evaluate_firmware_deployments(session: AsyncSession) -> int:
             if heartbeat is not None
             else None
         )
-        if heartbeat is not None and reading is not None:
-            deployment.state = "succeeded"
-            deployment.progress_percent = 100
-            deployment.completed_at = datetime.now(UTC)
-            deployment.evidence = {
-                **deployment.evidence,
-                "healthy_heartbeat_at": heartbeat.received_at.isoformat(),
-                "post_boot_reading_id": reading,
-            }
-            completed += 1
+        telemetry_state = await session.scalar(
+            select(DeviceTelemetryState).where(
+                DeviceTelemetryState.device_id == deployment.device_id,
+                DeviceTelemetryState.latest_server_received_at > deployment.created_at,
+            )
+        )
+        identity_matches_version = (
+            telemetry_state is not None
+            and telemetry_state.firmware_version.removeprefix("v")
+            == release.semantic_version.removeprefix("v")
+        )
+        if (
+            heartbeat is not None
+            and reading is not None
+            and telemetry_state is not None
+            and identity_matches_version
+        ):
+            # Confirmation and staged-rollout advancement share the service's
+            # row-locking path. A concurrent cancel/failure can therefore make
+            # this a no-op instead of being overwritten as succeeded here.
+            completed += len(
+                await reconcile_firmware_version_heartbeat(
+                    session,
+                    device_id=deployment.device_id,
+                    firmware_version=telemetry_state.firmware_version,
+                    firmware_build_id=telemetry_state.firmware_build_id,
+                    now=datetime.now(UTC),
+                )
+            )
     return completed
 
 
 async def advance_staged_rollouts(session: AsyncSession) -> int:
-    staged = (
+    release_ids = (
         await session.scalars(
-            select(FirmwareDeployment)
+            select(FirmwareDeployment.firmware_release_id)
             .where(FirmwareDeployment.state == "staged")
-            .order_by(FirmwareDeployment.created_at)
+            .order_by(FirmwareDeployment.created_at, FirmwareDeployment.id)
         )
     ).all()
-    advanced = 0
-    for deployment in staged:
-        active = await session.scalar(
-            select(FirmwareDeployment.id).where(
-                FirmwareDeployment.firmware_release_id == deployment.firmware_release_id,
-                FirmwareDeployment.state.in_(("queued", "downloading", "validating")),
-            )
-        )
-        if active is not None:
-            continue
-        prior_failure = await session.scalar(
-            select(FirmwareDeployment.id).where(
-                FirmwareDeployment.firmware_release_id == deployment.firmware_release_id,
-                FirmwareDeployment.state.in_(("failed", "rolled_back")),
-            )
-        )
-        if prior_failure is not None:
-            continue
-        issued_by = deployment.evidence.get("issued_by_user_id")
-        manifest = deployment.evidence.get("manifest")
-        if not isinstance(issued_by, str) or not isinstance(manifest, dict):
-            continue
-        await create_command(
-            session,
-            device_id=deployment.device_id,
-            command_type="ota_install",
-            issued_by_user_id=issued_by,
-            idempotency_key=f"ota:{deployment.id}",
-            payload=manifest,
-        )
-        deployment.state = "queued"
-        advanced += 1
-        break
-    return advanced
+    for release_id in dict.fromkeys(release_ids):
+        # The shared service locks the release, rechecks active deployments,
+        # then locks the staged row. It cannot resurrect a concurrently
+        # cancelled deployment from this stale worker scan.
+        if await advance_next_staged_firmware_deployment(session, release_id) is not None:
+            return 1
+    return 0
 
 
 async def run_jobs(
@@ -1416,7 +1657,16 @@ async def run_jobs(
 ) -> dict[str, int]:
     if not await acquire_worker_lease(session):
         return {"lease_busy": 1}
-    rate_sync = await sync_due_rate_sources(session, settings or get_settings())
+    effective_settings = settings or get_settings()
+    artifact_reconciliation = await reconcile_firmware_artifact_quarantines(
+        session,
+        firmware_dir=effective_settings.firmware_dir,
+        apply=True,
+    )
+    restored_artifacts = artifact_reconciliation["restored_release_ids"]
+    purged_artifacts = artifact_reconciliation["purged_release_ids"]
+    promoted_uploads = artifact_reconciliation["promoted_upload_release_ids"]
+    rate_sync = await sync_due_rate_sources(session, effective_settings)
     stateless_finalized = await finalize_stateless_history(session)
     result = {
         "rate_sources_checked": rate_sync["checked"],
@@ -1432,6 +1682,18 @@ async def run_jobs(
             session, status_dir=backup_status_dir
         ),
         "firmware_completed": await evaluate_firmware_deployments(session),
+        "firmware_deployment_history_retained_cleanup": len(
+            await apply_firmware_deployment_retention(session)
+        ),
+        "firmware_artifact_quarantines_restored": len(restored_artifacts)
+        if isinstance(restored_artifacts, list)
+        else 0,
+        "firmware_artifact_quarantines_purged": len(purged_artifacts)
+        if isinstance(purged_artifacts, list)
+        else 0,
+        "firmware_artifact_uploads_promoted": len(promoted_uploads)
+        if isinstance(promoted_uploads, list)
+        else 0,
         "staged_rollouts_advanced": await advance_staged_rollouts(session),
         "prepare_tokens_expired": await expire_prepare_tokens(session),
         "nonces_removed": await cleanup_nonces(session),

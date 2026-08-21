@@ -1,6 +1,6 @@
 # Upgrade PowerMeter V2 on TrueNAS
 
-> This UI-only flow is prepared for the complete signed v0.1.0-rc.21 release
+> This UI-only flow is prepared for the complete signed v0.1.0-rc.22 release
 > asset set. Public rc.16 and earlier releases retain their attached
 > procedures. Never mix release asset sets.
 
@@ -23,8 +23,10 @@ Never edit one image tag/digest, accept a generic image-update suggestion, use
    `Apps/PowerMeterV2` named with the old version and UTC time. A snapshot
    supplements rather than replaces the verified logical backup.
 
-The coordinated rc.19 release extends the migration chain to Alembic head
-`20260818_0017`. Revision 0017 adds independently accepted stateless telemetry,
+The coordinated rc.22 release extends the migration chain to Alembic head
+`20260820_0018`. Revision 0018 adds official-rate catalog evidence and explicit
+firmware/deployment lifecycle state while preserving all prior telemetry,
+History, rate, artifact, and OTA evidence. Revision 0017 adds independently accepted stateless telemetry,
 server-owned current History buckets, server-managed cadence and retention,
 per-sensor cutover and cumulative-energy gap evidence, billing adjustments, and
 an explicit Main service billing-source designation. Revision 0016 generalizes
@@ -40,7 +42,7 @@ that evidence automatically. It also stops if a legacy database row references
 a retained original bill document; the new runtime forbids all persistent
 original-bill storage, including encrypted storage, and does not silently
 delete an operator's legacy file. Complete and verify the backup and snapshot
-above before applying rc.19. If either preflight stops, leave the prior datasets
+above before applying rc.22. If either preflight stops, leave the prior datasets
 intact and preserve the exact failure for reviewed recovery; do not edit
 evidence or delete a referenced file merely to make the migration pass.
 

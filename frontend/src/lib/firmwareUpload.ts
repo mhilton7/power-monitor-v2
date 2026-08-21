@@ -3,7 +3,7 @@ import { z } from 'zod';
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 const semanticVersionSchema = z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/);
 
-const firmwareReleaseManifestSchema = z.object({
+const firmwareReleaseManifestV1Schema = z.object({
   schema: z.literal('pm-firmware-release/1.0.0'),
   version: semanticVersionSchema,
   build_number: z.number().int().min(1).max(4_294_967_295),
@@ -26,6 +26,14 @@ const firmwareReleaseManifestSchema = z.object({
   git_commit: z.string().regex(/^[0-9a-f]{40}$/),
 }).strict();
 
+const firmwareReleaseManifestSchema = z.union([
+  firmwareReleaseManifestV1Schema,
+  firmwareReleaseManifestV1Schema.extend({
+    schema: z.literal('pm-firmware-release/1.1.0'),
+    firmware_build_id: sha256Schema,
+  }).strict(),
+]);
+
 export interface FirmwareUploadFields {
   semantic_version: string;
   build_number: number;
@@ -33,6 +41,7 @@ export interface FirmwareUploadFields {
   minimum_boot_version: number;
   minimum_config_version: number;
   expected_sha256: string;
+  firmware_build_id?: string;
   release_notes: string;
 }
 
@@ -116,6 +125,7 @@ export async function prepareFirmwareUpload(
       minimum_boot_version: manifest.minimum_boot_version,
       minimum_config_version: manifest.minimum_config_version,
       expected_sha256: manifest.image_sha256,
+      ...('firmware_build_id' in manifest ? { firmware_build_id: manifest.firmware_build_id } : {}),
       release_notes: releaseNotes,
     },
     imageSize: manifest.image_size,

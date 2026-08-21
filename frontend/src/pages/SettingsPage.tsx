@@ -3,7 +3,7 @@ import { Activity, ArchiveRestore, ChevronRight, Cpu, Download, FileClock, HardD
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { api } from '../api';
 import { isForbidden } from '../api/client';
-import type { Circuit, DeviceDetail, FirmwareDeploymentBatch, FirmwareRelease, User as UserType } from '../api/schemas';
+import type { Circuit, DeviceDetail, FirmwareDeploymentBatch, FirmwareRelease, FirmwareReleaseList, User as UserType } from '../api/schemas';
 import { PermissionGate } from '../auth/PermissionGate';
 import { useSession } from '../auth/SessionContext';
 import { SensorDrawer } from '../components/SensorDrawer';
@@ -47,7 +47,7 @@ export function SettingsPage() {
   const roles = useQuery({ queryKey: ['roles'], queryFn: api.roles, enabled: can('users.view') });
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, enabled: can('system.view'), refetchInterval: 60_000 });
   const backups = useQuery({ queryKey: ['backups'], queryFn: api.backups, enabled: can('backups.view'), refetchInterval: 60_000 });
-  const firmware = useQuery({ queryKey: ['firmware-releases'], queryFn: api.firmwareReleases, enabled: can('firmware.view'), refetchInterval: 5_000 });
+  const firmware = useQuery({ queryKey: ['firmware-releases'], queryFn: () => api.firmwareReleases(), enabled: can('firmware.view'), refetchInterval: 5_000 });
   if (visible.length === 0) return <div className="page"><h1 className="sr-only">Settings</h1><EmptyState title="No settings available" detail="Your role does not include access to any settings area." /></div>;
   const selected = visible.some((section) => section.id === active) ? active : visible[0]!.id;
   return <div className="page settings-page">
@@ -57,7 +57,7 @@ export function SettingsPage() {
       {selected === 'sensors' && <SensorSettings homeScopes={selectedHome ? [selectedHome] : []} devices={devices.data?.devices ?? []} loading={homeScope.isLoading || devices.isLoading} error={homeScope.error ?? devices.error} />}
       {selected === 'users' && <UserSettings users={users.data?.users ?? []} roles={roles.data?.roles ?? []} loading={users.isLoading || roles.isLoading} error={users.error ?? roles.error} />}
       {selected === 'rates' && <RateSettings homeId={selectedHomeId} />}
-      {selected === 'firmware' && <FirmwareSettings devices={devices.data?.devices ?? []} releases={firmware.data?.releases ?? []} loading={firmware.isLoading} error={firmware.error} />}
+      {selected === 'firmware' && <FirmwareSettings devices={devices.data?.devices ?? []} releases={firmware.data?.releases ?? []} reconciliation={firmware.data?.reconciliation} loading={firmware.isLoading} error={firmware.error} />}
       {selected === 'backups' && <BackupSettings backup={backups.data} loading={backups.isLoading} error={backups.error} />}
       {selected === 'appearance' && <AppearanceSettings />}
       {selected === 'privacy' && <DataPrivacySettings />}
@@ -103,7 +103,8 @@ function HomeSettings() {
     <div className="filter-row"><div className="field"><label htmlFor="home-setting-scope">Cost scope</label><select id="home-setting-scope" name="costScope" value={scope} onChange={(event) => setScopeOverride({ homeId: selectedHomeId, value: event.target.value })} disabled={!can('system.manage')}><option value="energy_only">Energy charges only</option><option value="allocated_account">Allocated account</option><option value="full_account">Full account</option></select></div><div className="field"><label htmlFor="home-setting-baseline">Baseline allocation (kWh)</label><input id="home-setting-baseline" name="baselineAllocation" inputMode="decimal" defaultValue={query.data.utility.baseline_allocation_kwh === null ? '' : String(query.data.utility.baseline_allocation_kwh)} disabled={!can('system.manage')} /></div><div className="field"><label htmlFor="home-setting-cca">CCA provider</label><input id="home-setting-cca" name="ccaProvider" defaultValue={query.data.utility.cca_provider ?? ''} maxLength={120} disabled={!can('system.manage')} /></div></div>
     {scope === 'full_account' && <div className="field"><label htmlFor="full-account-confirmation">Type I UNDERSTAND FULL ACCOUNT SCOPE</label><input id="full-account-confirmation" name="fullAccountConfirmation" required pattern="I UNDERSTAND FULL ACCOUNT SCOPE" autoComplete="off" disabled={!can('system.manage')} /><small>Full-account estimates remain sensor-derived; this confirmation changes only which reviewed cost rules may be allocated.</small></div>}
     {scope === 'allocated_account' && <div className="field"><label htmlFor="allocated-account-confirmation">Type I VERIFIED THIS ALLOCATION SCOPE</label><input id="allocated-account-confirmation" name="allocatedAccountConfirmation" required pattern="I VERIFIED THIS ALLOCATION SCOPE" autoComplete="off" disabled={!can('system.manage')} /><small>Allocated-account pricing is applied only to sensors whose matching allocation scope was explicitly verified.</small></div>}
-    <Notice>Usage source: {query.data.usage_source}. Authoritative timestamps remain UTC; SCE schedules evaluate in {query.data.home.timezone}.</Notice>
+    <Notice>Usage comes from accepted sensor readings. SCE schedules evaluate in {query.data.home.timezone}.</Notice>
+    <details className="technical-details"><summary>Technical details</summary><p>Server source: {query.data.usage_source}. Timestamps are stored as UTC instants.</p></details>
     {update.isError && <Notice kind="warning">{update.error instanceof Error ? update.error.message : 'Settings could not be saved.'}</Notice>}
     {update.isSuccess && <Notice kind="success">Home and utility settings were saved by the server.</Notice>}
     {can('system.manage') && <button type="submit" className="button button-primary" disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save home settings'}</button>}
@@ -231,15 +232,34 @@ function UserSettings({ users, roles, loading, error }: { users: UserType[]; rol
 function RateSettings({ homeId }: { homeId: string }) {
   const queryClient = useQueryClient();
   const check = useMutation({ mutationFn: () => api.checkRates(homeId), onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['rate-source-status', homeId] }); void queryClient.invalidateQueries({ queryKey: ['rate-source-candidates', homeId] }); } });
-  return <Card title="Rates & data sources" eyebrow="Official allowlisted sources and reviewed versions"><div className="settings-callout"><FileClock aria-hidden="true" /><div><h3>Southern California Edison</h3><p>Server-side checks retain immutable source artifacts and create review candidates for the active home when verified pricing changes.</p></div><button type="button" className="button button-secondary" onClick={() => check.mutate()} disabled={check.isPending || !homeId}><RefreshCw className={check.isPending ? 'spin' : ''} aria-hidden="true" /> {check.isPending ? 'Checking…' : 'Check now'}</button></div>{!homeId && <Notice kind="warning">Choose an active home before starting a rate-source check.</Notice>}{check.data?.state === 'review_required' && <Notice kind="success">Check completed. Candidate {check.data.candidate_id ?? 'identifier unavailable'} requires review; it is not published or active.</Notice>}{check.data?.state === 'unchanged' && <Notice>Check completed. The verified source is unchanged; no candidate or rate assignment changed.</Notice>}{check.data?.state === 'failed' && <Notice kind="warning">Check completed with failure {check.data.error_code ?? check.data.event_code}. No success was recorded and no rate changed.</Notice>}{check.isError && <Notice kind="warning">Check request failed: {check.error instanceof Error ? check.error.message : 'the server did not complete the request'}.</Notice>}<Notice>Utility PDF processing is a rate-source workflow only. It cannot import consumption or create History.</Notice><a className="button button-primary inline-button" href="/billing">Open Billing & rate library</a></Card>;
+  return <Card title="Rates & data sources" eyebrow="Official sources and reviewed versions"><div className="settings-callout"><FileClock aria-hidden="true" /><div><h3>Southern California Edison</h3><p>Official SCE rate checks preserve the source record and create a review item when verified pricing changes.</p></div><button type="button" className="button button-secondary" onClick={() => check.mutate()} disabled={check.isPending || !homeId}><RefreshCw className={check.isPending ? 'spin' : ''} aria-hidden="true" /> {check.isPending ? 'Checking…' : 'Check now'}</button></div>{!homeId && <Notice kind="warning">Choose an active home before starting a rate-source check.</Notice>}{check.data?.state === 'review_required' && <Notice kind="success">Check completed. A rate update requires review; it is not published or active.</Notice>}{check.data?.state === 'unchanged' && <Notice>Check completed. The official source is unchanged; no rate changed.</Notice>}{check.data?.state === 'failed' && <Notice kind="warning">The official rate check failed. No success was recorded and no rate changed.</Notice>}{check.isError && <Notice kind="warning">Check request failed: {check.error instanceof Error ? check.error.message : 'the server did not complete the request'}.</Notice>}<Notice>Utility PDF processing extracts rate information only. It cannot import consumption or create History.</Notice><a className="button button-primary inline-button" href="/billing">Open Billing & rate library</a></Card>;
 }
 
 function otaStageLabel(state: string) {
   return ({
     staged: 'Waiting to start', queued: 'Waiting for sensor', downloading: 'Downloading or installing',
     rebooting: 'Restarting', validating: 'Confirming version', succeeded: 'Updated', failed: 'Update failed',
-    rolled_back: 'Rolled back', timed_out: 'Timed out', cancelled: 'Canceled',
+    rolled_back: 'Rolled back', timed_out: 'Timed out', cancelled: 'Canceled', canceled: 'Canceled', archived: 'Archived', deleted: 'Deleted',
   } as Record<string, string>)[state] ?? state.replaceAll('_', ' ');
+}
+
+function firmwareReleaseState(release: FirmwareRelease): 'draft' | 'validating' | 'available' | 'current' | 'archived' | 'rejected' | 'deleted' {
+  if (release.release_state) return release.release_state;
+  if (!release.artifact_available) return 'archived';
+  return release.candidate ? 'validating' : 'available';
+}
+
+function firmwareProtectionLabel(reason: string): string {
+  return ({
+    current_recommended_release: 'Current recommended release',
+    active_or_pending_deployment: 'An update is active or waiting',
+    reported_by_sensor: 'A sensor currently reports this version',
+    pinned_for_rollback: 'Pinned for rollback',
+    deployment_not_terminal: 'Deployment is still active',
+    troubleshooting_hold: 'Troubleshooting hold is active',
+    archive_required_before_deletion: 'Archive the deployment first',
+    already_deleted: 'Already deleted',
+  } as Record<string, string>)[reason] ?? reason.replaceAll('_', ' ');
 }
 
 function FirmwareBatchStatus({
@@ -248,45 +268,98 @@ function FirmwareBatchStatus({
   retryPending,
   onRetry,
   onCancel,
+  onArchive,
+  onRestore,
+  onDelete,
 }: {
   batch: FirmwareDeploymentBatch;
   canManage: boolean;
   retryPending: boolean;
   onRetry: (deviceId: string) => void;
   onCancel: () => void;
+  onArchive: () => void;
+  onRestore: () => void;
+  onDelete: () => void;
 }) {
   const canCancel = batch.jobs.some((job) => job.cancel_eligible);
+  const displayState = batch.deployment_state ?? batch.state;
+  const resultState = batch.result_state ?? batch.state;
   return <section className="settings-callout" aria-label={`Deployment ${batch.id}`}>
     <RefreshCw aria-hidden="true" />
     <div>
       <h3>{batch.targeted} sensors targeted · {batch.succeeded} updated · {batch.failed} failed · {batch.pending} pending</h3>
-      <p>{batch.rollout === 'retry' ? 'Retry' : `${batch.rollout} rollout`} · last changed {dateTime(batch.updated_at)}</p>
-      <div className="release-list">
-        {batch.jobs.map((job) => <article key={job.id}>
+      <p>{batch.rollout === 'retry' ? 'Retry' : `${batch.rollout} rollout`}{displayState === 'archived' ? ` · archived · final result ${otaStageLabel(resultState)}` : ''} · last changed {dateTime(batch.updated_at)}</p>
+      <details className="firmware-sensor-results"><summary>View sensor results</summary><div className="release-list">
+        {batch.jobs.map((job) => {
+          const attemptState = job.attempt_state ?? job.state;
+          return <article key={job.id}>
           <Wifi aria-hidden="true" />
           <div>
             <strong>{job.device_name}</strong>
-            <span>{job.current_version ?? 'version unavailable'} → {job.target_version} · {otaStageLabel(job.state)} · {job.progress_percent}%</span>
+            <span>{job.current_version ?? 'version unavailable'} → {job.target_version} · {otaStageLabel(attemptState)} · {job.progress_percent}%</span>
             <small>{job.error_message ?? (job.state === 'succeeded' ? `Confirmed by heartbeat ${job.confirmation_heartbeat_at ? dateTime(job.confirmation_heartbeat_at) : ''}` : `Attempt ${job.attempt} · updated ${dateTime(job.updated_at)}`)}</small>
             {(job.error_code || job.reported_firmware_after_reboot) && <details><summary>Technical details</summary><code>{job.error_code ?? 'VERSION_EVIDENCE'}{job.reported_firmware_after_reboot ? ` · reported ${job.reported_firmware_after_reboot}` : ''}</code></details>}
           </div>
-          <StatusPill state={job.state} label={otaStageLabel(job.state)} />
+          <StatusPill state={attemptState} label={otaStageLabel(attemptState)} />
           {canManage && job.retry_eligible && <button type="button" className="button button-secondary" disabled={retryPending} onClick={() => onRetry(job.device_id)}>{retryPending ? 'Retrying…' : 'Retry sensor'}</button>}
-        </article>)}
-      </div>
+        </article>; })}
+      </div></details>
     </div>
-    <StatusPill state={batch.state} label={batch.state === 'partial' ? 'Partially completed' : otaStageLabel(batch.state)} />
+    <StatusPill state={displayState} label={displayState === 'partial' ? 'Partially completed' : otaStageLabel(displayState)} />
     {canManage && canCancel && <button type="button" className="button button-danger" onClick={onCancel}>Cancel waiting jobs</button>}
+    {canManage && batch.archive_eligible && <button type="button" className="button button-secondary" onClick={onArchive}><ArchiveRestore aria-hidden="true" /> Archive deployment</button>}
+    {canManage && batch.restore_eligible && <button type="button" className="button button-secondary" onClick={onRestore}><RotateCcw aria-hidden="true" /> Restore deployment</button>}
+    {canManage && batch.delete_eligibility && <button type="button" className="button button-danger" onClick={onDelete} disabled={!batch.delete_eligibility.eligible} title={batch.delete_eligibility.eligible ? undefined : batch.delete_eligibility.protection_reasons.map(firmwareProtectionLabel).join('. ')}><Trash2 aria-hidden="true" /> Delete deployment record</button>}
   </section>;
 }
 
-function FirmwareSettings({ devices, releases, loading, error }: { devices: DeviceDetail[]; releases: FirmwareRelease[]; loading: boolean; error: unknown }) {
+function FirmwareReleaseRow({ release, devices, canManage, retryPending, onDeploy, onMakeCurrent, onToggleRollback, onArchive, onRestore, onDelete, onRetry, onCancel, onArchiveBatch, onRestoreBatch, onDeleteBatch }: {
+  release: FirmwareRelease;
+  devices: DeviceDetail[];
+  canManage: boolean;
+  retryPending: boolean;
+  onDeploy: () => void;
+  onMakeCurrent: () => void;
+  onToggleRollback: () => void;
+  onArchive: () => void;
+  onRestore: () => void;
+  onDelete: () => void;
+  onRetry: (batchId: string, deviceId: string) => void;
+  onCancel: (batch: FirmwareDeploymentBatch) => void;
+  onArchiveBatch: (batch: FirmwareDeploymentBatch) => void;
+  onRestoreBatch: (batch: FirmwareDeploymentBatch) => void;
+  onDeleteBatch: (batch: FirmwareDeploymentBatch) => void;
+}) {
+  const state = firmwareReleaseState(release);
+  const needsReconciliation = release.consistency?.status === 'attention_required';
+  const deployable = release.deploy_eligible ?? ((state === 'available' || state === 'current') && release.artifact_available);
+  const deleteEligibility = release.delete_eligibility;
+  const deploymentCount = release.deployment_count ?? release.deployment_batches.reduce((count, batch) => count + batch.targeted, 0);
+  return <div className="firmware-release-item">
+    <article className="firmware-release-row"><Cpu aria-hidden="true" /><div><strong>{release.semantic_version} · build {release.build_number}</strong><span>{release.board_profile} · {bytes(release.image_size)}</span><small>Validation {release.validation_status ?? (release.artifact_available ? 'ready' : 'unavailable')} · {deploymentCount} deployment record{deploymentCount === 1 ? '' : 's'}</small>{release.rollback_pinned && <small>Protected for rollback</small>}{needsReconciliation && <small>Lifecycle consistency needs administrator attention.</small>}{deleteEligibility && !deleteEligibility.eligible && <small>Protected: {deleteEligibility.protection_reasons.map(firmwareProtectionLabel).join(', ')}</small>}</div><StatusPill state={needsReconciliation ? 'warning' : state === 'available' || state === 'current' ? 'approved' : state === 'validating' ? 'warning' : state === 'rejected' || state === 'deleted' ? 'offline' : 'neutral'} label={needsReconciliation ? 'Needs reconciliation' : state.replaceAll('_', ' ')} />{canManage && <div className="release-actions">{deployable && !needsReconciliation && <button type="button" className="button button-primary" onClick={onDeploy} disabled={devices.length === 0}>Deploy</button>}{state === 'available' && release.artifact_available && !needsReconciliation && <button type="button" className="button button-secondary" onClick={onMakeCurrent}>Make current</button>}{((state === 'available' && release.artifact_available) || release.rollback_pinned) && <button type="button" className="button button-secondary" onClick={onToggleRollback}>{release.rollback_pinned ? 'Remove rollback protection' : 'Protect for rollback'}</button>}{release.archive_eligible && <button type="button" className="button button-secondary" onClick={onArchive}><ArchiveRestore aria-hidden="true" /> Archive release</button>}{release.restore_eligible && <button type="button" className="button button-secondary" onClick={onRestore}><RotateCcw aria-hidden="true" /> Restore release</button>}{deleteEligibility && state !== 'deleted' && <button type="button" className="button button-danger" onClick={onDelete} disabled={!deleteEligibility.eligible} title={deleteEligibility.eligible ? undefined : deleteEligibility.protection_reasons.map(firmwareProtectionLabel).join('. ')}><Trash2 aria-hidden="true" /> Delete permanently</button>}</div>}</article>
+    <details className="technical-details firmware-release-technical"><summary>Technical details</summary><dl><div><dt>Project / chip</dt><dd>{release.project_name} · {release.target_chip}</dd></div><div><dt>SHA-256</dt><dd><code>{release.sha256}</code></dd></div><div><dt>Minimum protocol</dt><dd>{release.minimum_protocol}</dd></div><div><dt>Minimum boot / config</dt><dd>{release.minimum_boot_version} / {release.minimum_config_version}</dd></div><div><dt>Physical certification</dt><dd>{release.physical_certification ?? 'Not reported'}</dd></div><div><dt>Release notes</dt><dd>{release.release_notes || 'None'}</dd></div><div><dt>Release ID</dt><dd><code>{release.release_id}</code></dd></div>{release.consistency && <div><dt>Lifecycle consistency</dt><dd>{release.consistency.status === 'consistent' ? 'Consistent' : release.consistency.issues.map(firmwareProtectionLabel).join(', ')}</dd></div>}</dl></details>
+    {release.deployment_batches.length > 0 && <details className="firmware-deployments"><summary>Deployment summary ({release.deployment_batches.length})</summary>{release.deployment_batches.map((batch) => <FirmwareBatchStatus key={batch.id} batch={batch} canManage={canManage} retryPending={retryPending} onRetry={(deviceId) => onRetry(batch.id, deviceId)} onCancel={() => onCancel(batch)} onArchive={() => onArchiveBatch(batch)} onRestore={() => onRestoreBatch(batch)} onDelete={() => onDeleteBatch(batch)} />)}</details>}
+  </div>;
+}
+
+function FirmwareSettings({ devices, releases, reconciliation, loading, error }: { devices: DeviceDetail[]; releases: FirmwareRelease[]; reconciliation?: FirmwareReleaseList['reconciliation']; loading: boolean; error: unknown }) {
   const { can } = useSession();
   const queryClient = useQueryClient();
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [showDeploymentHistory, setShowDeploymentHistory] = useState(false);
   const [deployTarget, setDeployTarget] = useState<FirmwareRelease>();
   const [cancelBatchTarget, setCancelBatchTarget] = useState<FirmwareDeploymentBatch>();
   const [deleteArtifactTarget, setDeleteArtifactTarget] = useState<FirmwareRelease>();
+  const [makeCurrentTarget, setMakeCurrentTarget] = useState<FirmwareRelease>();
+  const [rollbackProtectionTarget, setRollbackProtectionTarget] = useState<FirmwareRelease>();
+  const [archiveReleaseTarget, setArchiveReleaseTarget] = useState<FirmwareRelease>();
+  const [archiveBatchTarget, setArchiveBatchTarget] = useState<FirmwareDeploymentBatch>();
+  const [deleteBatchTarget, setDeleteBatchTarget] = useState<FirmwareDeploymentBatch>();
+  const [deleteReleaseConfirmation, setDeleteReleaseConfirmation] = useState('');
+  const [deleteBatchConfirmation, setDeleteBatchConfirmation] = useState('');
+  const [retentionDraft, setRetentionDraft] = useState<string>();
+  const [retentionConfirmOpen, setRetentionConfirmOpen] = useState(false);
   const [selectedDevices, setSelectedDevices] = useState<string[]>([]);
   const [rollout, setRollout] = useState<'immediate' | 'staged'>('staged');
   const [firmwareImage, setFirmwareImage] = useState<File>();
@@ -296,15 +369,51 @@ function FirmwareSettings({ devices, releases, loading, error }: { devices: Devi
   const [preparationError, setPreparationError] = useState<string>();
   const [preparingUpload, setPreparingUpload] = useState(false);
   const preparationGeneration = useRef(0);
+  const expandedFirmware = useQuery({
+    queryKey: ['firmware-releases', 'expanded', showArchived, showDeploymentHistory],
+    queryFn: () => api.firmwareReleases({ showArchived, showDeploymentHistory }),
+    enabled: showArchived || showDeploymentHistory,
+    refetchInterval: 5_000,
+  });
+  const lifecycleSettings = useQuery({ queryKey: ['firmware-lifecycle-settings'], queryFn: api.firmwareLifecycleSettings, retry: false });
+  const sourceReleases = expandedFirmware.data?.releases ?? releases;
+  const lifecycleReconciliation = expandedFirmware.data?.reconciliation ?? reconciliation;
+  const displayedReleases = sourceReleases.filter((release) => {
+    const state = firmwareReleaseState(release);
+    return state !== 'deleted' && (showArchived || state !== 'archived');
+  });
+  const retentionValue = retentionDraft ?? (lifecycleSettings.data ? lifecycleSettings.data.deployment_retention_days === null ? 'indefinitely' : String(lifecycleSettings.data.deployment_retention_days) : '');
+  const savedRetentionValue = lifecycleSettings.data ? lifecycleSettings.data.deployment_retention_days === null ? 'indefinitely' : String(lifecycleSettings.data.deployment_retention_days) : '';
   const refreshFirmware = () => { void queryClient.invalidateQueries({ queryKey: ['firmware-releases'] }); void queryClient.invalidateQueries({ queryKey: ['devices'] }); };
   const upload = useMutation({ mutationFn: ({ file, fields }: { file: File; fields: FirmwareUploadFields }) => api.uploadFirmware(file, fields), onSuccess: () => { closeUpload(); refreshFirmware(); } });
   const deploy = useMutation({ mutationFn: () => api.deployFirmware(deployTarget?.release_id ?? '', selectedDevices, rollout), onSuccess: () => { setDeployTarget(undefined); refreshFirmware(); } });
   const retry = useMutation({ mutationFn: ({ batchId, deviceId }: { batchId: string; deviceId: string }) => api.retryFirmwareBatch(batchId, [deviceId]), onSuccess: refreshFirmware });
   const cancel = useMutation({ mutationFn: () => api.cancelFirmwareBatch(cancelBatchTarget?.id ?? ''), onSuccess: () => { setCancelBatchTarget(undefined); refreshFirmware(); } });
+  const archiveRelease = useMutation({ mutationFn: () => api.archiveFirmwareRelease(archiveReleaseTarget?.release_id ?? ''), onSuccess: () => { setArchiveReleaseTarget(undefined); refreshFirmware(); } });
+  const restoreRelease = useMutation({ mutationFn: (releaseId: string) => api.restoreFirmwareRelease(releaseId), onSuccess: refreshFirmware });
+  const makeCurrent = useMutation({ mutationFn: () => {
+    if (!makeCurrentTarget) throw new Error('Choose a firmware release first.');
+    return api.makeFirmwareReleaseCurrent(makeCurrentTarget);
+  }, onSuccess: () => { setMakeCurrentTarget(undefined); refreshFirmware(); } });
+  const updateRollbackProtection = useMutation({ mutationFn: () => {
+    if (!rollbackProtectionTarget) throw new Error('Choose a firmware release first.');
+    return api.updateFirmwareRollbackProtection(rollbackProtectionTarget.release_id, !rollbackProtectionTarget.rollback_pinned);
+  }, onSuccess: () => { setRollbackProtectionTarget(undefined); refreshFirmware(); } });
+  const archiveBatch = useMutation({ mutationFn: () => api.archiveFirmwareDeployment(archiveBatchTarget?.id ?? ''), onSuccess: () => { setArchiveBatchTarget(undefined); refreshFirmware(); } });
+  const restoreBatch = useMutation({ mutationFn: (batchId: string) => api.restoreFirmwareDeployment(batchId), onSuccess: refreshFirmware });
+  const deleteBatch = useMutation({ mutationFn: () => api.deleteFirmwareDeploymentPermanently(deleteBatchTarget?.id ?? ''), onSuccess: () => { setDeleteBatchTarget(undefined); setDeleteBatchConfirmation(''); refreshFirmware(); } });
+  const updateRetention = useMutation({
+    mutationFn: () => api.updateFirmwareLifecycleSettings(retentionValue === 'indefinitely' ? null : Number(retentionValue) as 90 | 180 | 365),
+    onSuccess: () => { setRetentionDraft(undefined); setRetentionConfirmOpen(false); void queryClient.invalidateQueries({ queryKey: ['firmware-lifecycle-settings'] }); },
+  });
   const deleteArtifact = useMutation({
-    mutationFn: () => api.deleteFirmwareArtifact(deleteArtifactTarget?.release_id ?? ''),
+    mutationFn: () => {
+      if (!deleteArtifactTarget) throw new Error('Choose a firmware release first.');
+      return api.deleteFirmwareReleasePermanently(deleteArtifactTarget);
+    },
     onSuccess: () => {
       setDeleteArtifactTarget(undefined);
+      setDeleteReleaseConfirmation('');
       refreshFirmware();
     },
   });
@@ -327,18 +436,30 @@ function FirmwareSettings({ devices, releases, loading, error }: { devices: Devi
   function prepareDeploy(release: FirmwareRelease) { const eligible = devices.filter((device) => firmwareUpgradeAvailable(device.firmware_version, release.semantic_version)); setDeployTarget(release); setSelectedDevices(eligible[0] ? [eligible[0].id] : []); setRollout('staged'); deploy.reset(); }
   if (loading) return <Card title="Firmware"><Loading /></Card>;
   if (error) return <ErrorState error={error} />;
-  return <><Card title="Firmware" eyebrow="Signed, compatible, authenticated OTA releases" action={can('firmware.manage') ? <button type="button" className="button button-primary" onClick={() => setUploadOpen(true)}><UploadCloud aria-hidden="true" /> Upload release</button> : undefined}>
-    {releases.length === 0 ? <EmptyState title="No firmware releases" detail="No signed server-side release manifest is available. Sensors remain on their installed firmware." /> : <div className="release-list">{releases.map((release) => <div key={release.release_id}>
-      <article><Cpu aria-hidden="true" /><div><strong>{release.semantic_version} · build {release.build_number}</strong><span>{release.project_name} · {release.board_profile} · {bytes(release.image_size)} · SHA-256 {release.sha256.slice(0, 12)}…</span><small>Upload {release.upload_status ?? (release.artifact_available ? 'uploaded' : 'archived')} · validation {release.validation_status ?? (release.artifact_available ? 'ready' : 'archived')} · {release.release_notes || 'No release notes'} · physical certification {release.physical_certification ?? 'not reported'}</small></div><StatusPill state={release.artifact_available ? (release.candidate ? 'warning' : 'approved') : 'neutral'} label={release.artifact_available ? (release.candidate ? 'Candidate' : 'Release') : 'Removed'} />{can('firmware.manage') && <button type="button" className="button button-secondary" onClick={() => prepareDeploy(release)} disabled={devices.length === 0 || !release.artifact_available}>Deploy</button>}{can('firmware.manage') && release.artifact_available && <button type="button" className="button button-danger" onClick={() => { deleteArtifact.reset(); setDeleteArtifactTarget(release); }}><Trash2 aria-hidden="true" /> Remove artifact</button>}</article>
-      {release.deployment_batches.map((batch) => <FirmwareBatchStatus key={batch.id} batch={batch} canManage={can('firmware.manage')} retryPending={retry.isPending} onRetry={(deviceId) => retry.mutate({ batchId: batch.id, deviceId })} onCancel={() => { cancel.reset(); setCancelBatchTarget(batch); }} />)}
-    </div>)}</div>}
+  return <><Card title="Firmware" eyebrow="Signed releases and confirmed sensor updates" action={<div className="card-actions"><button type="button" className="button button-secondary" aria-pressed={showArchived} onClick={() => setShowArchived((current) => !current)}>{showArchived ? 'Hide archived' : 'Show archived'}</button><button type="button" className="button button-secondary" aria-pressed={showDeploymentHistory} onClick={() => setShowDeploymentHistory((current) => !current)}>{showDeploymentHistory ? 'Hide deployment history' : 'Show deployment history'}</button>{can('firmware.manage') && <button type="button" className="button button-primary" onClick={() => setUploadOpen(true)}><UploadCloud aria-hidden="true" /> Upload release</button>}</div>}>
+    {expandedFirmware.isLoading && <Loading label="Loading firmware archive" />}
+    {expandedFirmware.isError && <ErrorState error={expandedFirmware.error} retry={() => void expandedFirmware.refetch()} />}
+    {lifecycleReconciliation && lifecycleReconciliation.inconsistent_release_ids.length > 0 && <Notice kind="warning">{lifecycleReconciliation.inconsistent_release_ids.length} firmware lifecycle record{lifecycleReconciliation.inconsistent_release_ids.length === 1 ? '' : 's'} need administrator attention. No record was silently deleted.</Notice>}
+    {!expandedFirmware.isLoading && displayedReleases.length === 0 ? <EmptyState title={showArchived ? 'No archived firmware releases' : 'No current firmware releases'} detail={showArchived ? 'No archived release is available to restore.' : 'No signed server-side release manifest is available. Sensors remain on their installed firmware.'} /> : <div className="release-list">{displayedReleases.map((release) => <FirmwareReleaseRow key={release.release_id} release={release} devices={devices} canManage={can('firmware.manage')} retryPending={retry.isPending} onDeploy={() => prepareDeploy(release)} onMakeCurrent={() => { makeCurrent.reset(); setMakeCurrentTarget(release); }} onToggleRollback={() => { updateRollbackProtection.reset(); setRollbackProtectionTarget(release); }} onArchive={() => { archiveRelease.reset(); setArchiveReleaseTarget(release); }} onRestore={() => restoreRelease.mutate(release.release_id)} onDelete={() => { deleteArtifact.reset(); setDeleteReleaseConfirmation(''); setDeleteArtifactTarget(release); }} onRetry={(batchId, deviceId) => retry.mutate({ batchId, deviceId })} onCancel={(batch) => { cancel.reset(); setCancelBatchTarget(batch); }} onArchiveBatch={(batch) => { archiveBatch.reset(); setArchiveBatchTarget(batch); }} onRestoreBatch={(batch) => restoreBatch.mutate(batch.id)} onDeleteBatch={(batch) => { deleteBatch.reset(); setDeleteBatchConfirmation(''); setDeleteBatchTarget(batch); }} />)}</div>}
     {retry.isError && <Notice kind="warning">{retry.error instanceof Error ? retry.error.message : 'The selected sensor could not be retried.'}</Notice>}
-    <Notice>Candidate status never means physical hardware certification is complete. OTA completion requires authenticated deployment, reboot, firmware-version heartbeat and reading evidence. Firmware bytes can be removed after every intended sensor finishes; release identity, hashes and audit evidence remain.</Notice>
+    {restoreRelease.isError && <Notice kind="warning">{restoreRelease.error instanceof Error ? restoreRelease.error.message : 'The archived release could not be restored.'}</Notice>}
+    {restoreBatch.isError && <Notice kind="warning">{restoreBatch.error instanceof Error ? restoreBatch.error.message : 'The archived deployment could not be restored.'}</Notice>}
+    {makeCurrent.isError && <Notice kind="warning">{makeCurrent.error instanceof Error ? makeCurrent.error.message : 'The current firmware release could not be changed.'}</Notice>}
+    {updateRollbackProtection.isError && <Notice kind="warning">{updateRollbackProtection.error instanceof Error ? updateRollbackProtection.error.message : 'Rollback protection could not be changed.'}</Notice>}
+    <Notice>Hardware certification remains separate from release validation. An update is complete only after the targeted sensor restarts and reports the expected version and build. Archived releases are hidden by default and cannot be deployed.</Notice>
+    {lifecycleReconciliation && <details className="technical-details"><summary>Lifecycle reconciliation report</summary><dl><div><dt>Strategy</dt><dd>{lifecycleReconciliation.strategy.replaceAll('_', ' ')}</dd></div><div><dt>Records needing attention</dt><dd>{lifecycleReconciliation.inconsistent_release_ids.length > 0 ? lifecycleReconciliation.inconsistent_release_ids.join(', ') : 'None'}</dd></div><div><dt>Silent deletion performed</dt><dd>{lifecycleReconciliation.silent_deletion_performed ? 'Yes' : 'No'}</dd></div></dl></details>}
+    <section className="firmware-retention" aria-labelledby="firmware-retention-heading"><div><h3 id="firmware-retention-heading">Deployment history retention</h3><p>Cleanup applies only to archived, terminal deployment details. Firmware files and active updates are never removed by this setting.</p></div>{lifecycleSettings.isLoading ? <Loading label="Loading deployment retention" /> : lifecycleSettings.isError ? <Notice>Deployment retention controls are not available from this server version.</Notice> : <div className="firmware-retention-controls"><div className="field"><label htmlFor="firmware-retention-days">Keep archived deployment details</label><select id="firmware-retention-days" value={retentionValue} onChange={(event) => setRetentionDraft(event.target.value)}><option value="90">90 days</option><option value="180">180 days</option><option value="365">1 year</option><option value="indefinitely">Indefinitely</option></select></div>{can('firmware.manage') && <button type="button" className="button button-secondary" disabled={!retentionValue || retentionValue === savedRetentionValue} onClick={() => setRetentionConfirmOpen(true)}>Review retention change</button>}</div>}</section>
     <div className="release-list">{devices.map((device) => <article key={device.id}><Wifi aria-hidden="true" /><div><strong>{device.friendly_name}</strong><span>Installed {device.firmware_version ?? 'version unavailable'} · {device.last_command?.type === 'ota_install' ? `${device.last_command.state} ${device.last_command.progress_percent}%${device.last_command.result_code ? ` · ${device.last_command.result_code}` : ''}` : 'no OTA command in progress'}</span></div><StatusPill state={device.last_command?.type === 'ota_install' ? device.last_command.state : 'neutral'} /></article>)}</div>
   </Card>
   <Dialog open={uploadOpen} title="Upload a firmware release" description="Select firmware.bin and manifest.json from the same official release. Version, build, board, compatibility and SHA-256 are filled and verified automatically before upload." onClose={closeUpload}><form className="settings-form" onSubmit={submitUpload}><div className="field"><label htmlFor="firmware-image">Firmware binary</label><input id="firmware-image" type="file" accept="application/octet-stream,.bin" required onChange={(event) => { const file = event.target.files?.[0]; setFirmwareImage(file); prepareSelectedFiles(file, firmwareManifest, firmwareNotes); }} /></div><div className="field"><label htmlFor="firmware-manifest">Release manifest</label><input id="firmware-manifest" type="file" accept="application/json,.json" required onChange={(event) => { const file = event.target.files?.[0]; setFirmwareManifest(file); prepareSelectedFiles(firmwareImage, file, firmwareNotes); }} /><small>Use manifest.json from the same GitHub firmware release. The browser verifies the exact image size and SHA-256; the server verifies them again.</small></div><div className="field"><label htmlFor="firmware-notes-file">Release notes (optional)</label><input id="firmware-notes-file" type="file" accept="text/markdown,text/plain,.md,.txt" onChange={(event) => { const file = event.target.files?.[0]; setFirmwareNotes(file); prepareSelectedFiles(firmwareImage, firmwareManifest, file); }} /><small>If omitted, release notes are generated from the verified manifest identity.</small></div>{preparingUpload && <Notice>Reading and verifying the selected release files…</Notice>}{preparationError && <Notice kind="warning">{preparationError}</Notice>}{preparedUpload && <><Notice kind="success">Release files match. All OTA metadata has been filled automatically.</Notice><dl><div><dt>Version / build</dt><dd>{preparedUpload.fields.semantic_version} · {preparedUpload.fields.build_number}</dd></div><div><dt>Target</dt><dd>{preparedUpload.projectName} · {preparedUpload.targetChip}</dd></div><div><dt>Board profile</dt><dd>{preparedUpload.fields.board_profile}</dd></div><div><dt>Minimum boot / config</dt><dd>{preparedUpload.fields.minimum_boot_version} / {preparedUpload.fields.minimum_config_version}</dd></div><div><dt>Image</dt><dd>{bytes(preparedUpload.imageSize)} · SHA-256 {preparedUpload.fields.expected_sha256.slice(0, 16)}…</dd></div><div><dt>Hardware certification</dt><dd>{preparedUpload.hardwareCertification}</dd></div></dl></>}{upload.isError && <Notice kind="warning">{upload.error instanceof Error ? upload.error.message : 'Firmware upload failed.'}</Notice>}<div className="dialog-actions"><button type="button" className="button button-secondary" onClick={closeUpload}>Cancel</button><button type="submit" className="button button-primary" disabled={upload.isPending || preparingUpload || !preparedUpload}>{upload.isPending ? 'Uploading…' : 'Upload verified candidate'}</button></div></form></Dialog>
   <ConfirmDialog open={Boolean(deployTarget)} title={`Deploy firmware ${deployTarget?.semantic_version ?? ''}?`} description={<div><p>Choose authenticated target sensors and rollout mode. A staged rollout queues the first target and holds later targets; an immediate rollout queues every selected target.</p><div className="permission-grid">{devices.map((device) => { const eligible = !deployTarget || firmwareUpgradeAvailable(device.firmware_version, deployTarget.semantic_version); return <label key={device.id}><input type="checkbox" checked={selectedDevices.includes(device.id)} disabled={!eligible} onChange={(event) => setSelectedDevices((current) => event.target.checked ? [...current, device.id] : current.filter((id) => id !== device.id))} /><span><strong>{device.friendly_name}</strong><small>{eligible ? `Installed ${device.firmware_version ?? 'unknown'}` : `Already on ${device.firmware_version}; OTA accepts upgrades only`}</small></span></label>; })}</div><div className="appearance-options"><label><input type="radio" name="rollout" checked={rollout === 'staged'} onChange={() => setRollout('staged')} /><span><strong>Staged</strong><small>Queue one target first</small></span></label><label><input type="radio" name="rollout" checked={rollout === 'immediate'} onChange={() => setRollout('immediate')} /><span><strong>Immediate</strong><small>Queue all selected targets</small></span></label></div>{deployTarget && devices.every((device) => !firmwareUpgradeAvailable(device.firmware_version, deployTarget.semantic_version)) && <Notice>Every selected-home sensor already has this version or a newer version. The firmware intentionally rejects same-version and downgrade OTA attempts.</Notice>}{deploy.isError && <Notice kind="warning">{deploy.error instanceof Error ? deploy.error.message : 'Deployment failed.'}</Notice>}</div>} confirmLabel="Queue deployment" busy={deploy.isPending} confirmDisabled={selectedDevices.length === 0} onCancel={() => setDeployTarget(undefined)} onConfirm={() => { if (selectedDevices.length > 0) deploy.mutate(); }} tone="warning" />
-  <ConfirmDialog open={Boolean(deleteArtifactTarget)} title={`Remove firmware ${deleteArtifactTarget?.semantic_version ?? ''} bytes?`} description={<div><p>The stored binary will be permanently removed after the server confirms there are no queued, staged, downloading or validating deployments.</p><p>Release metadata, SHA-256, deployment outcomes and audit evidence remain. This version cannot be deployed to another sensor afterward.</p>{deleteArtifact.isError && <Notice kind="warning">{deleteArtifact.error instanceof Error ? deleteArtifact.error.message : 'The firmware artifact could not be removed.'}</Notice>}</div>} confirmLabel="Remove firmware artifact" busy={deleteArtifact.isPending} onCancel={() => setDeleteArtifactTarget(undefined)} onConfirm={() => deleteArtifact.mutate()} tone="danger" />
+  <ConfirmDialog open={Boolean(archiveReleaseTarget)} title={`Archive firmware ${archiveReleaseTarget?.semantic_version ?? ''}?`} description={<div><p>This release will disappear from the default list and cannot start new deployments. Its artifact, deployment history, and audit record remain available.</p>{archiveRelease.isError && <Notice kind="warning">{archiveRelease.error instanceof Error ? archiveRelease.error.message : 'The release could not be archived.'}</Notice>}</div>} confirmLabel="Archive release" busy={archiveRelease.isPending} onCancel={() => setArchiveReleaseTarget(undefined)} onConfirm={() => archiveRelease.mutate()} tone="warning" />
+  <ConfirmDialog open={Boolean(makeCurrentTarget)} title={`Make firmware ${makeCurrentTarget?.semantic_version ?? ''} current?`} description={<div><p>This selects the release for new firmware updates. The server verifies its exact version, digest, available artifact, and lifecycle state. The previous current release is retained and protected for rollback.</p></div>} confirmLabel="Make current firmware" busy={makeCurrent.isPending} onCancel={() => setMakeCurrentTarget(undefined)} onConfirm={() => makeCurrent.mutate()} tone="warning" />
+  <ConfirmDialog open={Boolean(rollbackProtectionTarget)} title={`${rollbackProtectionTarget?.rollback_pinned ? 'Remove rollback protection from' : 'Protect'} firmware ${rollbackProtectionTarget?.semantic_version ?? ''}?`} description={<div><p>{rollbackProtectionTarget?.rollback_pinned ? 'Removing this protection may make the release eligible for archival or permanent deletion when no other safety rule protects it.' : 'Rollback protection prevents permanent deletion while this artifact may be needed for recovery.'}</p></div>} confirmLabel={rollbackProtectionTarget?.rollback_pinned ? 'Remove rollback protection' : 'Protect for rollback'} busy={updateRollbackProtection.isPending} onCancel={() => setRollbackProtectionTarget(undefined)} onConfirm={() => updateRollbackProtection.mutate()} tone="warning" />
+  <ConfirmDialog open={Boolean(deleteArtifactTarget)} title={`Delete firmware ${deleteArtifactTarget?.semantic_version ?? ''} permanently?`} description={<div><p>This action is irreversible. The server will recheck every deployment, sensor report, rollback pin, and artifact reference inside the deletion transaction.</p>{deleteArtifactTarget && <dl><div><dt>Version / build</dt><dd>{deleteArtifactTarget.semantic_version} · {deleteArtifactTarget.build_number}</dd></div><div><dt>Digest</dt><dd>{deleteArtifactTarget.sha256.slice(0, 16)}…</dd></div><div><dt>Deployment records</dt><dd>{deleteArtifactTarget.deployment_count ?? deleteArtifactTarget.deployment_batches.length}</dd></div><div><dt>Sensors reporting version</dt><dd>{deleteArtifactTarget.sensor_reported_count ?? 'Not reported'}</dd></div><div><dt>Audit information retained</dt><dd>Version, build, digest, deletion actor, time, and result</dd></div></dl>}<div className="field"><label htmlFor="delete-release-confirmation">Type DELETE RELEASE PERMANENTLY</label><input id="delete-release-confirmation" value={deleteReleaseConfirmation} onChange={(event) => setDeleteReleaseConfirmation(event.target.value)} autoComplete="off" /></div>{deleteArtifact.isError && <Notice kind="warning">{deleteArtifact.error instanceof Error ? deleteArtifact.error.message : 'The firmware release could not be deleted.'}</Notice>}</div>} confirmLabel="Delete release permanently" busy={deleteArtifact.isPending} confirmDisabled={deleteReleaseConfirmation !== 'DELETE RELEASE PERMANENTLY'} onCancel={() => { setDeleteArtifactTarget(undefined); setDeleteReleaseConfirmation(''); }} onConfirm={() => deleteArtifact.mutate()} tone="danger" />
+  <ConfirmDialog open={Boolean(archiveBatchTarget)} title="Archive this completed deployment?" description={<div><p>The deployment will move to deployment history. Final sensor results, security evidence, audit records, and its firmware release remain intact.</p>{archiveBatch.isError && <Notice kind="warning">{archiveBatch.error instanceof Error ? archiveBatch.error.message : 'The deployment could not be archived.'}</Notice>}</div>} confirmLabel="Archive deployment" busy={archiveBatch.isPending} onCancel={() => setArchiveBatchTarget(undefined)} onConfirm={() => archiveBatch.mutate()} tone="warning" />
+  <ConfirmDialog open={Boolean(deleteBatchTarget)} title="Delete this deployment record?" description={<div><p>Only archived, terminal deployment details without a troubleshooting hold can be deleted. A compact audit event remains, and the firmware artifact is not removed.</p>{deleteBatchTarget && <div className="field"><label htmlFor="delete-deployment-confirmation">Type deployment ID {deleteBatchTarget.id}</label><input id="delete-deployment-confirmation" value={deleteBatchConfirmation} onChange={(event) => setDeleteBatchConfirmation(event.target.value)} autoComplete="off" /></div>}{deleteBatch.isError && <Notice kind="warning">{deleteBatch.error instanceof Error ? deleteBatch.error.message : 'The deployment record could not be deleted.'}</Notice>}</div>} confirmLabel="Delete deployment record" busy={deleteBatch.isPending} confirmDisabled={!deleteBatchTarget || deleteBatchConfirmation !== deleteBatchTarget.id} onCancel={() => { setDeleteBatchTarget(undefined); setDeleteBatchConfirmation(''); }} onConfirm={() => deleteBatch.mutate()} tone="danger" />
+  <ConfirmDialog open={retentionConfirmOpen} title="Change deployment history retention?" description={<div><p>{retentionValue === 'indefinitely' ? 'Archived deployment details will be kept indefinitely.' : `Archived terminal deployment details older than ${retentionValue} days may be reduced to audit tombstones.`}</p><p>Firmware artifacts and active deployments are not affected.</p>{updateRetention.isError && <Notice kind="warning">{updateRetention.error instanceof Error ? updateRetention.error.message : 'Retention could not be updated.'}</Notice>}</div>} confirmLabel="Save retention policy" busy={updateRetention.isPending} onCancel={() => setRetentionConfirmOpen(false)} onConfirm={() => updateRetention.mutate()} tone="warning" />
   <ConfirmDialog open={Boolean(cancelBatchTarget)} title="Cancel waiting firmware jobs?" description={<div><p>Only jobs that have not been delivered will be canceled. An update already downloading, installing, restarting, or confirming cannot be reversed safely.</p>{cancel.isError && <Notice kind="warning">{cancel.error instanceof Error ? cancel.error.message : 'The deployment could not be canceled.'}</Notice>}</div>} confirmLabel="Cancel waiting jobs" busy={cancel.isPending} onCancel={() => setCancelBatchTarget(undefined)} onConfirm={() => cancel.mutate()} tone="danger" />
   </>;
 }
@@ -360,7 +481,7 @@ function AppearanceSettings() {
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
-  function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = new FormData(event.currentTarget); mutation.mutate({ dashboard_range: formString(form, 'dashboardRange') as 'today' | 'week' | 'month', history_range: formString(form, 'historyRange') as 'day' | 'week' | 'month' | 'billing_cycle', refresh_seconds: Number(formString(form, 'refreshSeconds')) as 15 | 30 | 60 | 120 | 300, power_unit: formString(form, 'powerUnit') as 'auto' | 'W' | 'kW', energy_unit: formString(form, 'energyUnit') as 'auto' | 'Wh' | 'kWh', date_format: formString(form, 'dateFormat') as 'iso' | 'us', time_format: formString(form, 'timeFormat') as '12h' | '24h', decimal_precision: Number(formString(form, 'decimalPrecision')), density: formString(form, 'density') as 'comfortable' | 'compact', dashboard_cards: form.getAll('dashboardCards').map(String) as Array<'live_power' | 'energy' | 'cost' | 'completeness' | 'alerts'> }); }
+  function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = new FormData(event.currentTarget); mutation.mutate({ dashboard_range: formString(form, 'dashboardRange') as 'today' | 'week' | 'month', history_range: formString(form, 'historyRange') as 'day' | 'week' | 'month' | 'billing_cycle', refresh_seconds: Number(formString(form, 'refreshSeconds')) as 15 | 30 | 60 | 120 | 300, power_unit: formString(form, 'powerUnit') as 'auto' | 'W' | 'kW', energy_unit: formString(form, 'energyUnit') as 'auto' | 'Wh' | 'kWh', date_format: formString(form, 'dateFormat') as 'iso' | 'us', time_format: formString(form, 'timeFormat') as '12h' | '24h', decimal_precision: Number(formString(form, 'decimalPrecision')), density: formString(form, 'density') as 'comfortable' | 'compact', dashboard_cards: form.getAll('dashboardCards').map(String) as Array<'live_power' | 'energy' | 'cost' | 'completeness' | 'alerts'>, ...(query.data?.display_timezone ? { display_timezone: query.data.display_timezone } : {}) }); }
   if (query.isLoading) return <Card title="Display & units"><Loading label="Loading display preferences" /></Card>;
   if (query.isError || !query.data) return <ErrorState error={query.error ?? new Error('Display preferences are unavailable.')} retry={() => void query.refetch()} />;
   const value = query.data;
@@ -368,7 +489,7 @@ function AppearanceSettings() {
 }
 
 function DataPrivacySettings() {
-  return <><Card title="Data retention & sources" eyebrow="Explicit privacy boundaries"><dl><div><dt>Electrical History</dt><dd>Authenticated PZEM readings and connection-gap evidence only; a bill never supplies History.</dd></div><div><dt>Bill uploads</dt><dd>Processed in bounded temporary memory for allowlisted rate facts. Original PDF bytes are never retained; extracted working drafts can be deleted.</dd></div><div><dt>Official SCE evidence</dt><dd>Disposable unpublished or rejected candidates can be deleted. Published rate versions and their source hashes remain immutable provenance.</dd></div><div><dt>Firmware artifacts</dt><dd>Binary bytes can be removed after all intended sensor deployments finish. Version, digest, deployment and audit metadata remain.</dd></div><div><dt>Account security</dt><dd>Passwords are one-way hashed. Password changes, resets, disablement and deletion revoke active sessions.</dd></div></dl><Notice>Sensor readings are sent directly to the server. History retention is controlled in Sensors settings.</Notice></Card><Card title="Exports & audit evidence"><div className="dialog-actions"><PermissionGate permission="history.export"><a className="button button-secondary" href="/history">Open History export</a></PermissionGate><PermissionGate permission="logs.view"><a className="button button-secondary" href="/settings?section=logs">Open audit diagnostics</a></PermissionGate><PermissionGate permission="rates.bill_import"><a className="button button-secondary" href="/billing">Open rate-only bill import</a></PermissionGate></div></Card></>;
+  return <><Card title="Data retention & sources" eyebrow="Clear privacy boundaries"><dl><div><dt>Electrical History</dt><dd>Accepted PZEM readings and connection gaps only; a bill never supplies History.</dd></div><div><dt>Bill uploads</dt><dd>Processed in temporary memory for approved rate fields. Original PDF bytes are never retained; extracted working drafts can be deleted.</dd></div><div><dt>Official SCE rate records</dt><dd>Unpublished or rejected review items can be deleted. Published rate versions and their source records remain protected.</dd></div><div><dt>Firmware releases</dt><dd>Eligible old releases can be archived or permanently deleted after every protected deployment and rollback use has ended.</dd></div><div><dt>Account security</dt><dd>Passwords are one-way hashed. Password changes, resets, disablement and deletion revoke active sessions.</dd></div></dl><Notice>Sensor readings are sent directly to the server. History retention is controlled in Sensors settings.</Notice></Card><Card title="Exports & audit records"><div className="dialog-actions"><PermissionGate permission="history.export"><a className="button button-secondary" href="/history">Open History export</a></PermissionGate><PermissionGate permission="logs.view"><a className="button button-secondary" href="/settings?section=logs">Open audit diagnostics</a></PermissionGate><PermissionGate permission="rates.bill_import"><a className="button button-secondary" href="/billing">Open rate-only bill import</a></PermissionGate></div></Card></>;
 }
 
 function abbreviated(value: string | null | undefined): string {

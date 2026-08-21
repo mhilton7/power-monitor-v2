@@ -230,12 +230,13 @@ jobs:
           --build-time 1970-01-01T00:00:00Z
           --frontend-version 0.1.0-rc.1
           --frontend-asset-id "ci-${GITHUB_SHA:0:16}"
-          --database-revision 20260818_0017
-          --firmware-release-url https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.21
-          --firmware-tag v0.1.0-rc.21
+          --database-revision 20260820_0018
+          --firmware-release-url https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.22
+          --firmware-tag v0.1.0-rc.22
           --firmware-revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           --firmware-image-sha256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-          --firmware-build-id 20
+          --firmware-build-number 25
+          --firmware-build-id cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
       - run: docker compose -f release/power-monitor-v2-ci.yaml config --quiet
       - run: python scripts/verify_release_artifacts.py --manifest release/release-manifest-ci.json
 

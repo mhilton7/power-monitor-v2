@@ -40,6 +40,15 @@ def new_uuid() -> str:
     return str(uuid.uuid4())
 
 
+def _lowercase_hex_64_check(column_name: str) -> str:
+    """Portable SQLite/PostgreSQL check expression for a lowercase SHA-256 value."""
+
+    remainder = column_name
+    for character in "0123456789abcdef":
+        remainder = f"replace({remainder}, '{character}', '')"
+    return f"{column_name} IS NULL OR (length({column_name}) = 64 AND length({remainder}) = 0)"
+
+
 def aware_utc(value: datetime) -> datetime:
     """Normalize database timestamps; SQLite drops offsets in local test runs."""
 
@@ -601,11 +610,50 @@ class FirmwareRelease(Base):
     minimum_config_version: Mapped[int] = mapped_column(Integer)
     image_size: Mapped[int] = mapped_column(BigInteger)
     sha256: Mapped[str] = mapped_column(String(64), unique=True)
+    firmware_build_id: Mapped[str | None] = mapped_column(String(64))
     image_path: Mapped[str] = mapped_column(String(500))
     release_notes: Mapped[str] = mapped_column(Text)
     manifest_signature: Mapped[str] = mapped_column(String(256))
     candidate: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    lifecycle_state: Mapped[str] = mapped_column(String(24), default="available", nullable=False)
+    rollback_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    artifact_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "lifecycle_state IN "
+            "('draft','validating','available','current','archived','rejected','deleted')",
+            name="lifecycle_state",
+        ),
+        CheckConstraint(
+            "(lifecycle_state <> 'archived' OR archived_at IS NOT NULL) AND "
+            "(lifecycle_state <> 'deleted' OR deleted_at IS NOT NULL)",
+            name="lifecycle_evidence",
+        ),
+        CheckConstraint(
+            _lowercase_hex_64_check("firmware_build_id"),
+            name="firmware_build_id",
+        ),
+        Index(
+            "uq_firmware_releases_one_current",
+            "lifecycle_state",
+            unique=True,
+            postgresql_where=text("lifecycle_state = 'current'"),
+            sqlite_where=text("lifecycle_state = 'current'"),
+        ),
+        Index("ix_firmware_releases_lifecycle_state", "lifecycle_state"),
+    )
 
 
 class FirmwareDeploymentBatch(Base):
@@ -624,6 +672,33 @@ class FirmwareDeploymentBatch(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    archived_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    troubleshooting_hold: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+
+class FirmwareLifecycleSetting(Base):
+    __tablename__ = "firmware_lifecycle_settings"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True, default="global")
+    deployment_retention_days: Mapped[int | None] = mapped_column(Integer, default=365)
+    updated_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "deployment_retention_days IS NULL OR deployment_retention_days IN (90,180,365)",
+            name="retention_days",
+        ),
+    )
 
 
 class FirmwareDeployment(Base):
@@ -876,6 +951,61 @@ class RateSyncRun(Base):
     evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
 
 
+class SceCatalogEntry(Base):
+    """One explicit result from a captured official SCE catalog revision.
+
+    Every discovered plan is represented as parsed, requires_parser, or
+    explicitly excluded.  The row contains public tariff metadata only; it can
+    never contain customer or bill data.
+    """
+
+    __tablename__ = "sce_catalog_entries"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    source_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("rate_source_revisions.id", ondelete="RESTRICT"), index=True
+    )
+    source_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_level: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    official_schedule_code: Mapped[str | None] = mapped_column(String(80))
+    public_plan_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    canonical_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    plan_type: Mapped[str] = mapped_column(String(48), default="unknown", nullable=False)
+    enrollment_status: Mapped[str] = mapped_column(String(40), default="unknown", nullable=False)
+    eligibility: Mapped[list[dict[str, Any] | str]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    discovery_state: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    exclusion_reason: Mapped[str | None] = mapped_column(String(300))
+    normalized_plan: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    __table_args__ = (
+        UniqueConstraint(
+            "source_revision_id",
+            "canonical_name",
+            name="uq_sce_catalog_revision_canonical_name",
+        ),
+        CheckConstraint(
+            "discovery_state IN ('parsed','requires_parser','excluded')",
+            name="discovery_state",
+        ),
+        CheckConstraint(
+            "plan_type IN "
+            "('flat','tiered','seasonal_tiered','time_of_use','seasonal_time_of_use',"
+            "'time_of_use_with_baseline_credit','critical_peak_pricing','dynamic_hourly',"
+            "'unknown')",
+            name="plan_type",
+        ),
+        CheckConstraint(
+            "discovery_state <> 'excluded' OR exclusion_reason IS NOT NULL",
+            name="exclusion_reason",
+        ),
+        CheckConstraint("source_level BETWEEN 1 AND 4", name="source_level"),
+    )
+
+
 class RateCandidate(Base):
     __tablename__ = "rate_candidates"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
@@ -914,6 +1044,7 @@ class RateCandidateReview(Base):
     selected_plan_name: Mapped[str | None] = mapped_column(String(120))
     effective_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     effective_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tier_threshold_rule: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     state: Mapped[str] = mapped_column(String(24), nullable=False, default="reviewed")
     reviewed_by_user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
@@ -964,8 +1095,29 @@ class RatePlan(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     utility_name: Mapped[str] = mapped_column(String(120), nullable=False)
     rate_class: Mapped[str] = mapped_column(String(80), nullable=False)
+    utility_code: Mapped[str] = mapped_column(String(20), default="SCE", nullable=False)
+    official_schedule_code: Mapped[str | None] = mapped_column(String(80))
+    public_plan_name: Mapped[str | None] = mapped_column(String(160))
+    canonical_name: Mapped[str | None] = mapped_column(String(160))
+    plan_type: Mapped[str] = mapped_column(String(48), default="unknown", nullable=False)
+    enrollment_status: Mapped[str] = mapped_column(String(40), default="unknown", nullable=False)
+    eligibility: Mapped[list[dict[str, Any] | str]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    description: Mapped[str | None] = mapped_column(Text)
+    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    energy_unit: Mapped[str] = mapped_column(String(12), default="kWh", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    __table_args__ = (UniqueConstraint("name", "utility_name", "rate_class"),)
+    __table_args__ = (
+        UniqueConstraint("name", "utility_name", "rate_class"),
+        CheckConstraint(
+            "plan_type IN "
+            "('flat','tiered','seasonal_tiered','time_of_use','seasonal_time_of_use',"
+            "'time_of_use_with_baseline_credit','critical_peak_pricing','dynamic_hourly',"
+            "'unknown')",
+            name="plan_type",
+        ),
+    )
 
 
 class RatePlanVersion(Base):
@@ -979,8 +1131,23 @@ class RatePlanVersion(Base):
     effective_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     timezone: Mapped[str] = mapped_column(String(80), nullable=False)
     pricing_model: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_version: Mapped[str | None] = mapped_column(String(120))
+    holiday_treatment: Mapped[str] = mapped_column(String(40), default="unresolved", nullable=False)
+    season_definitions: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    fixed_charges: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    price_components: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    eligibility_evidence: Mapped[list[dict[str, Any] | str]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
     daily_fixed_charge: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal("0"))
     monthly_fixed_charge: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal("0"))
+    minimum_charge: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal("0"))
+    meter_charge: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal("0"))
+    other_fixed_charge: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal("0"))
     baseline_credit_per_kwh: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal("0"))
     tier_threshold_kwh_per_day: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
     tier_threshold_season: Mapped[str | None] = mapped_column(String(20))
@@ -1011,12 +1178,49 @@ class RatePeriod(Base):
     price_per_kwh: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
     delivery_per_kwh: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal("0"))
     generation_per_kwh: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal("0"))
+    rate_components: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    baseline_credit_per_kwh: Mapped[Decimal] = mapped_column(
+        Numeric(18, 8), default=Decimal("0"), nullable=False
+    )
     tier_start_kwh: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=Decimal("0"))
     tier_end_kwh: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    boundary_inclusive: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    threshold_basis: Mapped[str | None] = mapped_column(String(80))
+    threshold_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    source_label: Mapped[str | None] = mapped_column(String(160))
     __table_args__ = (
         CheckConstraint("start_minute >= 0 AND start_minute < 1440", name="start_minute"),
         CheckConstraint("end_minute > 0 AND end_minute <= 1440", name="end_minute"),
         CheckConstraint("end_minute > start_minute", name="period_order"),
+    )
+
+
+class RateDatedPrice(Base):
+    """One exact UTC price interval owned by an immutable rate version."""
+
+    __tablename__ = "rate_dated_prices"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    rate_plan_version_id: Mapped[str] = mapped_column(
+        ForeignKey("rate_plan_versions.id", ondelete="CASCADE"), index=True
+    )
+    start_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    price_per_kwh: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    delivery_per_kwh: Mapped[Decimal] = mapped_column(
+        Numeric(18, 8), default=Decimal("0"), nullable=False
+    )
+    generation_per_kwh: Mapped[Decimal] = mapped_column(
+        Numeric(18, 8), default=Decimal("0"), nullable=False
+    )
+    rate_components: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    source_label: Mapped[str] = mapped_column(String(160), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("rate_plan_version_id", "start_utc"),
+        CheckConstraint("end_utc > start_utc", name="interval_order"),
     )
 
 
@@ -1048,6 +1252,67 @@ class RateAssignment(Base):
         CheckConstraint(
             "effective_end IS NULL OR effective_end > effective_start",
             name="effective_range",
+        ),
+    )
+
+
+class UtilityAccountTierThreshold(Base):
+    """Effective-dated, account-owned daily Tier-1 allowance evidence.
+
+    This is deliberately separate from ``UtilityAccount.baseline_allocation_kwh``:
+    that legacy field is a cycle-total baseline-credit allocation, while this
+    table drives the seasonal DOMESTIC tier boundary for one utility account.
+    """
+
+    __tablename__ = "utility_account_tier_thresholds"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    utility_account_id: Mapped[str] = mapped_column(
+        ForeignKey("utility_accounts.id", ondelete="CASCADE"), index=True
+    )
+    rate_plan_id: Mapped[str] = mapped_column(
+        ForeignKey("rate_plans.id", ondelete="RESTRICT"), index=True
+    )
+    season: Mapped[str] = mapped_column(String(30), nullable=False)
+    kwh_per_day: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    source_allowance_kwh: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    source_billing_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    tier1_boundary_inclusive: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    source_label: Mapped[str] = mapped_column(String(160), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_artifact_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    effective_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    effective_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint(
+            "utility_account_id",
+            "rate_plan_id",
+            "season",
+            "effective_start",
+            name="uq_utility_account_tier_thresholds_account_plan_season_start",
+        ),
+        CheckConstraint("kwh_per_day > 0", name="positive_kwh_per_day"),
+        CheckConstraint("source_allowance_kwh > 0", name="positive_source_allowance"),
+        CheckConstraint(
+            "source_billing_days >= 1 AND source_billing_days <= 62",
+            name="source_billing_days",
+        ),
+        CheckConstraint(
+            "effective_end IS NULL OR effective_end > effective_start",
+            name="effective_range",
+        ),
+        CheckConstraint(
+            "source_kind IN ('candidate_review','bill_rate_import')",
+            name="source_kind",
+        ),
+        CheckConstraint(
+            _lowercase_hex_64_check("source_artifact_sha256"),
+            name="source_artifact_sha256",
         ),
     )
 
@@ -1423,6 +1688,7 @@ def _published_rate_candidate_review_immutable(
             "selected_plan_name",
             "effective_start",
             "effective_end",
+            "tier_threshold_rule",
             "state",
             "reviewed_by_user_id",
             "reviewed_at",
@@ -1445,6 +1711,7 @@ def _published_rate_candidate_review_immutable(
             "selected_plan_name",
             "effective_start",
             "effective_end",
+            "tier_threshold_rule",
             "reviewed_by_user_id",
             "reviewed_at",
         }:
@@ -1487,7 +1754,9 @@ def _used_rate_not_deletable(_mapper: object, _connection: object, target: RateP
 
 
 def _published_rate_child_immutable(
-    _mapper: object, connection: Connection, target: RatePeriod | RateHoliday
+    _mapper: object,
+    connection: Connection,
+    target: RatePeriod | RateDatedPrice | RateHoliday,
 ) -> None:
     state = connection.scalar(
         select(RatePlanVersion.state).where(RatePlanVersion.id == target.rate_plan_version_id)
@@ -1496,7 +1765,7 @@ def _published_rate_child_immutable(
         raise ValueError("children of published rate-plan versions are immutable")
 
 
-for _rate_child in (RatePeriod, RateHoliday):
+for _rate_child in (RatePeriod, RateDatedPrice, RateHoliday):
     event.listen(_rate_child, "before_insert", _published_rate_child_immutable)
     event.listen(_rate_child, "before_update", _published_rate_child_immutable)
     event.listen(_rate_child, "before_delete", _published_rate_child_immutable)

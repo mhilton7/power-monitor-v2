@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from backend.app.services.cost_engine import (
     CostContext,
+    DatedPrice,
+    EventCalendar,
+    FixedCharge,
     PricePeriod,
     RateVersion,
+    SeasonDefinition,
     fixed_charge_microdollars,
     price_sensor_interval,
+    resolve_price_period,
 )
 
 
@@ -50,6 +56,59 @@ def test_fall_back_repeated_times_are_distinct_utc_energy() -> None:
     )
     assert result.energy_mwh == 2_000_000
     assert result.total_microdollars == 600_000
+
+
+def test_dynamic_prices_distinguish_both_fall_back_hours_in_utc() -> None:
+    version = rate(
+        (),
+        dated_prices=(
+            DatedPrice(
+                datetime(2026, 11, 1, 8, tzinfo=UTC),
+                datetime(2026, 11, 1, 9, tzinfo=UTC),
+                "first-1am-pdt",
+                Decimal("0.10"),
+            ),
+            DatedPrice(
+                datetime(2026, 11, 1, 9, tzinfo=UTC),
+                datetime(2026, 11, 1, 10, tzinfo=UTC),
+                "second-1am-pst",
+                Decimal("0.30"),
+            ),
+        ),
+    )
+    result = price_sensor_interval(
+        start_utc=datetime(2026, 11, 1, 8, 30, tzinfo=UTC),
+        end_utc=datetime(2026, 11, 1, 9, 30, tzinfo=UTC),
+        energy_mwh=1_000_000,
+        rate=version,
+    )
+    first_hour = [item for item in result.slices if item.period_name == "first-1am-pdt"]
+    second_hour = [item for item in result.slices if item.period_name == "second-1am-pst"]
+    assert sum(item.energy_mwh for item in first_hour) == 500_000
+    assert sum(item.energy_mwh for item in second_hour) == 500_000
+    assert len(first_hour) == len(second_hour) == 1
+    assert result.total_microdollars == 200_000
+
+
+def test_dynamic_price_gap_fails_closed() -> None:
+    version = rate(
+        (),
+        dated_prices=(
+            DatedPrice(
+                datetime(2026, 8, 1, 0, tzinfo=UTC),
+                datetime(2026, 8, 1, 0, 30, tzinfo=UTC),
+                "known",
+                Decimal("0.10"),
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="resolved to 0 prices"):
+        price_sensor_interval(
+            start_utc=datetime(2026, 8, 1, 0, 30, tzinfo=UTC),
+            end_utc=datetime(2026, 8, 1, 1, tzinfo=UTC),
+            energy_mwh=500_000,
+            rate=version,
+        )
 
 
 def test_baseline_credit_and_fixed_charge_only_for_full_account() -> None:
@@ -120,7 +179,6 @@ def test_energy_is_split_exactly_at_tier_threshold() -> None:
 
 
 def _sce_domestic_rate() -> RateVersion:
-    source_threshold = Decimal("579.0")
     return rate(
         (
             PricePeriod(
@@ -130,7 +188,9 @@ def _sce_domestic_rate() -> RateVersion:
                 0,
                 1440,
                 Decimal("0.30863"),
-                tier_end_kwh=source_threshold,
+                tier_end_kwh=Decimal("1"),
+                boundary_inclusive=True,
+                threshold_basis="account_daily_baseline",
             ),
             PricePeriod(
                 "summer",
@@ -139,13 +199,23 @@ def _sce_domestic_rate() -> RateVersion:
                 0,
                 1440,
                 Decimal("0.40962"),
-                tier_start_kwh=source_threshold,
+                tier_start_kwh=Decimal("1"),
+                boundary_inclusive=True,
+                threshold_basis="account_daily_baseline",
             ),
         ),
+        daily_fixed_charge=Decimal("0.769"),
+    )
+
+
+def _sce_context(days: int, *, cumulative: Decimal = Decimal("0")) -> CostContext:
+    return CostContext(
+        cumulative_cycle_kwh_before=cumulative,
+        billing_cycle_days=days,
+        tier_threshold_cycle_kwh=Decimal("19.3") * days,
         tier_threshold_kwh_per_day=Decimal("19.3"),
         tier_threshold_season="summer",
-        tier_threshold_source_kwh=source_threshold,
-        daily_fixed_charge=Decimal("0.769"),
+        tier1_boundary_inclusive=True,
     )
 
 
@@ -157,7 +227,7 @@ def test_sce_daily_allowance_prorates_and_keeps_the_boundary_in_tier_one() -> No
             end_utc=datetime(2026, 7, 1, 0, 1, tzinfo=UTC),
             energy_mwh=int(threshold * Decimal(1_000_000)),
             rate=version,
-            context=CostContext(billing_cycle_days=days),
+            context=_sce_context(days),
         )
         assert {item.period_name for item in exact.slices} == {"tier-one"}
         crossing = price_sensor_interval(
@@ -165,10 +235,7 @@ def test_sce_daily_allowance_prorates_and_keeps_the_boundary_in_tier_one() -> No
             end_utc=datetime(2026, 7, 1, 0, 1, tzinfo=UTC),
             energy_mwh=100_000,
             rate=version,
-            context=CostContext(
-                cumulative_cycle_kwh_before=threshold,
-                billing_cycle_days=days,
-            ),
+            context=_sce_context(days, cumulative=threshold),
         )
         assert {item.period_name for item in crossing.slices} == {"tier-two"}
 
@@ -180,7 +247,7 @@ def test_sce_source_bill_reconciles_through_the_existing_cost_engine() -> None:
         end_utc=datetime(2026, 7, 1, 0, 1, tzinfo=UTC),
         energy_mwh=951_000_000,
         rate=version,
-        context=CostContext(billing_cycle_days=30),
+        context=_sce_context(30),
     )
     fixed = fixed_charge_microdollars(
         version, date(2026, 6, 22), date(2026, 7, 22), scope="full_account"
@@ -201,7 +268,7 @@ def test_sce_579_point_1_kwh_places_only_point_1_in_tier_two() -> None:
         end_utc=datetime(2026, 7, 1, 0, 1, tzinfo=UTC),
         energy_mwh=579_100_000,
         rate=_sce_domestic_rate(),
-        context=CostContext(billing_cycle_days=30),
+        context=_sce_context(30),
     )
     assert [item.energy_mwh for item in result.slices] == [579_000_000, 100_000]
     assert [item.period_name for item in result.slices] == ["tier-one", "tier-two"]
@@ -209,6 +276,25 @@ def test_sce_579_point_1_kwh_places_only_point_1_in_tier_two() -> None:
         Decimal("0.30863"),
         Decimal("0.40962"),
     ]
+
+
+def test_account_threshold_boundary_resolves_tier_one_then_tier_two() -> None:
+    version = _sce_domestic_rate()
+    context = _sce_context(30)
+    at_boundary = resolve_price_period(
+        version,
+        datetime(2026, 7, 1, tzinfo=UTC),
+        Decimal("579.0"),
+        context,
+    )
+    above_boundary = resolve_price_period(
+        version,
+        datetime(2026, 7, 1, tzinfo=UTC),
+        Decimal("579.000001"),
+        context,
+    )
+    assert at_boundary.name == "tier-one"
+    assert above_boundary.name == "tier-two"
 
 
 def test_cca_adjustment_and_surcharge_use_decimal_arithmetic() -> None:
@@ -242,3 +328,226 @@ def test_specific_schedule_overrides_an_all_day_fallback_deterministically() -> 
     )
     assert result.total_microdollars == 400_000
     assert {item.period_name for item in result.slices} == {"summer-weekday"}
+
+
+def test_version_owned_season_boundary_splits_exactly_at_local_midnight() -> None:
+    version = rate(
+        (
+            PricePeriod("warm", "all", "warm", 0, 1440, Decimal("0.50")),
+            PricePeriod("cool", "all", "cool", 0, 1440, Decimal("0.10")),
+        ),
+        season_definitions=(
+            SeasonDefinition("warm", 5, 15, 10, 14),
+            SeasonDefinition("cool", 10, 15, 5, 14),
+        ),
+    )
+    result = price_sensor_interval(
+        # 07:00 UTC is local midnight at the May 15 season boundary.
+        start_utc=datetime(2026, 5, 15, 6, 59, 30, tzinfo=UTC),
+        end_utc=datetime(2026, 5, 15, 7, 0, 30, tzinfo=UTC),
+        energy_mwh=1_000_000,
+        rate=version,
+    )
+    assert [item.period_name for item in result.slices] == ["cool", "warm"]
+    assert [item.energy_mwh for item in result.slices] == [500_000, 500_000]
+    assert result.total_microdollars == 300_000
+
+
+def test_event_override_and_holiday_mapping_are_local_date_exact() -> None:
+    event_date = date(2026, 8, 13)
+    periods = (
+        PricePeriod("all", "weekday", "weekday", 0, 1440, Decimal("0.20")),
+        PricePeriod("all", "weekend", "weekend", 0, 1440, Decimal("0.10")),
+        PricePeriod("all", "event_day", "event", 16 * 60, 21 * 60, Decimal("0.80")),
+    )
+    version = rate(
+        periods,
+        holiday_treatment="same_as_weekend",
+        holiday_calendar=EventCalendar(
+            local_dates=frozenset({date(2026, 8, 14)}),
+            coverage_start=event_date,
+            coverage_end=date(2026, 8, 14),
+        ),
+        event_calendar=EventCalendar(
+            local_dates=frozenset({event_date}),
+            coverage_start=event_date,
+            coverage_end=date(2026, 8, 14),
+        ),
+    )
+    event = price_sensor_interval(
+        start_utc=datetime(2026, 8, 14, 0, 0, tzinfo=UTC),
+        end_utc=datetime(2026, 8, 14, 0, 1, tzinfo=UTC),
+        energy_mwh=1_000_000,
+        rate=version,
+    )
+    ordinary = price_sensor_interval(
+        start_utc=datetime(2026, 8, 13, 19, 0, tzinfo=UTC),
+        end_utc=datetime(2026, 8, 13, 19, 1, tzinfo=UTC),
+        energy_mwh=1_000_000,
+        rate=version,
+    )
+    holiday = price_sensor_interval(
+        start_utc=datetime(2026, 8, 14, 22, 0, tzinfo=UTC),
+        end_utc=datetime(2026, 8, 14, 22, 1, tzinfo=UTC),
+        energy_mwh=1_000_000,
+        rate=version,
+    )
+    assert event.total_microdollars == 800_000
+    assert ordinary.total_microdollars == 200_000
+    assert holiday.total_microdollars == 100_000
+
+
+def test_holiday_sensitive_schedule_requires_bounded_calendar_coverage() -> None:
+    periods = (
+        PricePeriod("all", "weekday", "weekday", 0, 1440, Decimal("0.20")),
+        PricePeriod("all", "weekend", "weekend", 0, 1440, Decimal("0.10")),
+    )
+    unresolved = rate(periods, holiday_treatment="same_as_weekend")
+    with pytest.raises(ValueError, match="holiday calendar is unresolved"):
+        price_sensor_interval(
+            start_utc=datetime(2026, 8, 13, 19, 0, tzinfo=UTC),
+            end_utc=datetime(2026, 8, 13, 19, 1, tzinfo=UTC),
+            energy_mwh=1_000_000,
+            rate=unresolved,
+        )
+    bounded = rate(
+        periods,
+        holiday_treatment="same_as_weekend",
+        holiday_calendar=EventCalendar(
+            local_dates=frozenset({date(2026, 8, 13)}),
+            coverage_start=date(2026, 8, 13),
+            coverage_end=date(2026, 8, 14),
+        ),
+    )
+    holiday = price_sensor_interval(
+        start_utc=datetime(2026, 8, 13, 19, 0, tzinfo=UTC),
+        end_utc=datetime(2026, 8, 13, 19, 1, tzinfo=UTC),
+        energy_mwh=1_000_000,
+        rate=bounded,
+    )
+    assert holiday.total_microdollars == 100_000
+    with pytest.raises(ValueError, match="does not cover"):
+        price_sensor_interval(
+            start_utc=datetime(2026, 8, 15, 19, 0, tzinfo=UTC),
+            end_utc=datetime(2026, 8, 15, 19, 1, tzinfo=UTC),
+            energy_mwh=1_000_000,
+            rate=bounded,
+        )
+
+
+def test_event_schedule_without_exact_calendar_fails_closed() -> None:
+    version = rate(
+        (
+            PricePeriod("all", "all", "ordinary", 0, 1440, Decimal("0.20")),
+            PricePeriod("all", "event_day", "event", 960, 1260, Decimal("0.80")),
+        ),
+        event_calendar=None,
+    )
+    with pytest.raises(ValueError, match="event calendar is unresolved"):
+        price_sensor_interval(
+            start_utc=datetime(2026, 8, 14, 0, 0, tzinfo=UTC),
+            end_utc=datetime(2026, 8, 14, 0, 1, tzinfo=UTC),
+            energy_mwh=1_000_000,
+            rate=version,
+        )
+
+
+def test_event_calendar_fails_closed_before_and_after_its_bounded_coverage() -> None:
+    version = rate(
+        (
+            PricePeriod("all", "all", "ordinary", 0, 1440, Decimal("0.20")),
+            PricePeriod("all", "event_day", "event", 0, 1440, Decimal("0.80")),
+        ),
+        event_calendar=EventCalendar(
+            local_dates=frozenset({date(2026, 8, 13)}),
+            coverage_start=date(2026, 8, 13),
+            coverage_end=date(2026, 8, 14),
+        ),
+    )
+    inside = price_sensor_interval(
+        start_utc=datetime(2026, 8, 13, 19, 0, tzinfo=UTC),
+        end_utc=datetime(2026, 8, 13, 19, 1, tzinfo=UTC),
+        energy_mwh=1_000_000,
+        rate=version,
+    )
+    assert inside.total_microdollars == 800_000
+    for instant in (
+        datetime(2026, 8, 12, 19, 0, tzinfo=UTC),
+        datetime(2026, 8, 15, 19, 0, tzinfo=UTC),
+    ):
+        with pytest.raises(ValueError, match="does not cover"):
+            price_sensor_interval(
+                start_utc=instant,
+                end_utc=instant + timedelta(minutes=1),
+                energy_mwh=1_000_000,
+                rate=version,
+            )
+
+
+def test_fixed_charge_recurrences_minimum_floor_and_meter_count_are_exact() -> None:
+    version = rate(
+        (PricePeriod("all", "all", "flat", 0, 1440, Decimal("0.20")),),
+        fixed_charges=(
+            FixedCharge("daily_fixed_charge", Decimal("0.50"), "per_account_per_day"),
+            FixedCharge("meter_charge", Decimal("2"), "per_meter_per_cycle"),
+            FixedCharge("minimum_charge", Decimal("20"), "per_account_per_cycle"),
+        ),
+    )
+    fixed = fixed_charge_microdollars(
+        version,
+        date(2026, 6, 22),
+        date(2026, 6, 24),
+        scope="full_account",
+        meter_count=1,
+        variable_charge_microdollars=10_000_000,
+    )
+    # $1 daily + $2 meter + $7 minimum top-up; variable plus fixed is exactly $20.
+    assert fixed == 10_000_000
+    with pytest.raises(ValueError, match="utility meter count"):
+        fixed_charge_microdollars(
+            version,
+            date(2026, 6, 22),
+            date(2026, 6, 24),
+            scope="full_account",
+            variable_charge_microdollars=10_000_000,
+        )
+
+
+def test_monthly_charge_counts_each_touched_calendar_month_at_boundaries() -> None:
+    version = rate(
+        (PricePeriod("all", "all", "flat", 0, 1440, Decimal("0.20")),),
+        fixed_charges=(
+            FixedCharge(
+                "monthly_fixed_charge",
+                Decimal("3.25"),
+                "per_account_per_month",
+            ),
+        ),
+    )
+    assert (
+        fixed_charge_microdollars(
+            version,
+            date(2026, 6, 1),
+            date(2026, 7, 1),
+            scope="full_account",
+        )
+        == 3_250_000
+    )
+    assert (
+        fixed_charge_microdollars(
+            version,
+            date(2026, 6, 22),
+            date(2026, 6, 24),
+            scope="full_account",
+        )
+        == 3_250_000
+    )
+    assert (
+        fixed_charge_microdollars(
+            version,
+            date(2026, 6, 22),
+            date(2026, 7, 22),
+            scope="full_account",
+        )
+        == 6_500_000
+    )

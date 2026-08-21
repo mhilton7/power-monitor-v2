@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import shutil
+import sys
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -12,7 +13,15 @@ import pytest
 import yaml
 from scripts.redact_deployment_logs import LOG_EVENTS as SANITIZED_LOG_EVENTS
 from scripts.redact_deployment_logs import MAX_LOG_LINES, sanitize_stream
-from scripts.render_truenas_release import ReleaseError, load_yaml, render, validate_compose
+from scripts.render_truenas_release import (
+    ReleaseError,
+    load_yaml,
+    render,
+    validate_compose,
+)
+from scripts.render_truenas_release import (
+    main as render_release_main,
+)
 from scripts.validate_deployment_evidence import (
     FAILURE_DIAGNOSTICS,
     SUCCESS_CHECKS,
@@ -34,7 +43,8 @@ DIGEST_C = "sha256:" + "3" * 64
 DIGEST_D = "sha256:" + "4" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
-VERSION = "0.1.0-rc.21"
+FIRMWARE_BUILD_ID = "c" * 64
+VERSION = "0.1.0-rc.22"
 
 
 @pytest.fixture
@@ -67,13 +77,13 @@ def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]
     compose_path = directory / "power-monitor-v2-test.yaml"
     compose_path.write_text(compose_text, encoding="utf-8")
     manifest: dict[str, object] = {
-        "schema": "pm-server-release/1.0.0",
+        "schema": "pm-server-release/1.1.0",
         "protocol": "pm-protocol/1.0.0",
         "telemetry_protocol": "pm-telemetry/2.0.0",
         "version": VERSION,
         "revision": COMMIT,
         "release_status": "candidate_physical_certification_pending",
-        "database": {"expected_migration": "20260818_0017"},
+        "database": {"expected_migration": "20260820_0018"},
         "frontend": {
             "version": VERSION,
             "revision": COMMIT,
@@ -81,13 +91,14 @@ def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]
             "build_time": "2026-08-17T00:00:00Z",
         },
         "firmware_release_url": (
-            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.21"
+            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.22"
         ),
         "firmware": {
             "repository": "https://github.com/mhilton7/power-monitor-sensor-headless",
-            "tag": "v0.1.0-rc.21",
+            "tag": "v0.1.0-rc.22",
             "revision": COMMIT,
-            "build_id": 20,
+            "build_number": 25,
+            "firmware_build_id": FIRMWARE_BUILD_ID,
             "image_sha256": IMAGE,
             "protocol": "pm-protocol/1.0.0",
             "telemetry_protocol": "pm-telemetry/2.0.0",
@@ -552,7 +563,7 @@ def test_gateway_enforces_ingress_body_limits_before_api_buffering() -> None:
 
 def certification() -> dict[str, object]:
     value: dict[str, object] = {
-        "schema": "pm-hardware-certification/1.0.0",
+        "schema": "pm-hardware-certification/2.0.0",
         "evidence_id": "123e4567-e89b-12d3-a456-426614174000",
         "generated_at": "2026-08-13T00:00:00Z",
         "result": "pass",
@@ -565,6 +576,7 @@ def certification() -> dict[str, object]:
             "target": "esp32s3",
             "board_profile": "esp32-s3-devkitc-n16r8-reference/1",
             "protocol": "pm-protocol/1.0.0",
+            "telemetry_protocol": "pm-telemetry/2.0.0",
         },
         "marked_unit": {
             "unit_id": "marked-fixture-1",
@@ -573,7 +585,6 @@ def certification() -> dict[str, object]:
             "pzem_revision_marking": "V4.0",
             "pzem_terminal_labels": "5V RX TX GND",
             "ct_marking": "100A/50mA",
-            "sd_module_marking": "3.3V SPI",
             "photo_sha256": ["c" * 64],
         },
         "electrical": {
@@ -594,14 +605,21 @@ def certification() -> dict[str, object]:
                 "pzem_authenticated_samples",
                 "crc_rejection",
                 "wrong_slave_rejection",
-                "sd_recovery",
-                "sequence_monotonic",
-                "ack_replay",
+                "no_sd_runtime_access",
+                "no_telemetry_nvs_writes",
+                "independent_sample_acceptance",
+                "later_sample_after_gap",
+                "latest_value_after_outage",
+                "wifi_recovery",
+                "server_recovery",
+                "identity_preserved",
+                "configuration_preserved",
                 "https_chain",
                 "https_hostname",
                 "hmac_replay",
                 "ota_success",
                 "ota_rollback",
+                "ota_identity_confirmed",
                 "com_recovery",
                 "watchdog_recovery",
             }
@@ -615,7 +633,9 @@ def certification() -> dict[str, object]:
             "reboots": 4,
             "unexplained_reboots": 0,
             "data_gaps": 0,
-            "sequence_regressions": 0,
+            "maximum_resident_telemetry_samples": 2,
+            "identity_changes": 0,
+            "configuration_losses": 0,
             "pass": True,
         },
         "signoff": {"operator": "Operator", "reviewer": "Reviewer", "record_sha256": ""},
@@ -632,7 +652,7 @@ def test_release_template_requires_exact_sentinels_and_real_digests() -> None:
     assert "UNPUBLISHED" not in output
     assert f'PM_RELEASE_VERSION: "{VERSION}"' in output
     assert f'PM_RELEASE_REVISION: "{"0" * 40}"' in output
-    assert 'PM_EXPECTED_DATABASE_REVISION: "20260818_0017"' in output
+    assert 'PM_EXPECTED_DATABASE_REVISION: "20260820_0018"' in output
     validate_compose(load_yaml(output), published=True)
     with pytest.raises(ReleaseError):
         render(
@@ -697,6 +717,130 @@ def test_release_artifact_verifier_accepts_exact_four_image_binding(
 ) -> None:
     manifest_path, _ = _candidate_release_bundle(evidence_dir)
     verify_release_artifacts(manifest_path)
+
+
+def test_release_renderer_separates_firmware_build_number_and_exact_build_id(
+    evidence_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = evidence_dir / "power-monitor-v2-v0.1.0-rc.22.yaml"
+    manifest_path = evidence_dir / "release-manifest.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "render_truenas_release.py",
+            "--template",
+            str(ROOT / "deploy/truenas/power-monitor-v2.yaml"),
+            "--output",
+            str(output),
+            "--manifest",
+            str(manifest_path),
+            "--version",
+            VERSION,
+            "--revision",
+            COMMIT,
+            "--api-digest",
+            DIGEST_A,
+            "--frontend-digest",
+            DIGEST_B,
+            "--gateway-digest",
+            DIGEST_D,
+            "--backup-digest",
+            DIGEST_C,
+            "--build-time",
+            "2026-08-17T00:00:00Z",
+            "--frontend-asset-id",
+            f"{VERSION}-{COMMIT[:16]}",
+            "--firmware-release-url",
+            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.22",
+            "--firmware-tag",
+            "v0.1.0-rc.22",
+            "--firmware-revision",
+            COMMIT,
+            "--firmware-image-sha256",
+            IMAGE,
+            "--firmware-build-number",
+            "25",
+            "--firmware-build-id",
+            FIRMWARE_BUILD_ID,
+        ],
+    )
+
+    assert render_release_main() == 0
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schema"] == "pm-server-release/1.1.0"
+    assert manifest["firmware"]["build_number"] == 25
+    assert manifest["firmware"]["firmware_build_id"] == FIRMWARE_BUILD_ID
+    assert "build_id" not in manifest["firmware"]
+    verify_release_artifacts(manifest_path)
+
+
+def test_release_artifact_verifier_intentionally_accepts_legacy_server_manifest(
+    evidence_dir: Path,
+) -> None:
+    manifest_path, manifest = _candidate_release_bundle(evidence_dir)
+    manifest["schema"] = "pm-server-release/1.0.0"
+    firmware = manifest["firmware"]
+    assert isinstance(firmware, dict)
+    firmware.pop("build_number")
+    firmware.pop("firmware_build_id")
+    firmware["build_id"] = 25
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    verify_release_artifacts(manifest_path)
+
+
+def test_release_artifact_verifier_rejects_schema_downgrade_with_new_identity_fields(
+    evidence_dir: Path,
+) -> None:
+    manifest_path, manifest = _candidate_release_bundle(evidence_dir)
+    manifest["schema"] = "pm-server-release/1.0.0"
+    firmware = manifest["firmware"]
+    assert isinstance(firmware, dict)
+    firmware["build_id"] = 25
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mixes incompatible"):
+        verify_release_artifacts(manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("build_number", 0),
+        ("build_number", "25"),
+        ("firmware_build_id", "c" * 63),
+        ("firmware_build_id", "C" * 64),
+        ("firmware_build_id", 25),
+    ],
+)
+def test_release_artifact_verifier_rejects_conflated_or_invalid_firmware_identity(
+    evidence_dir: Path,
+    field: str,
+    value: object,
+) -> None:
+    manifest_path, manifest = _candidate_release_bundle(evidence_dir)
+    firmware = manifest["firmware"]
+    assert isinstance(firmware, dict)
+    firmware[field] = value
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="firmware build"):
+        verify_release_artifacts(manifest_path)
+
+
+def test_release_artifact_verifier_rejects_legacy_field_in_new_manifest(
+    evidence_dir: Path,
+) -> None:
+    manifest_path, manifest = _candidate_release_bundle(evidence_dir)
+    firmware = manifest["firmware"]
+    assert isinstance(firmware, dict)
+    firmware["build_id"] = 25
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="ambiguous legacy"):
+        verify_release_artifacts(manifest_path)
 
 
 @pytest.mark.parametrize("field", ["database", "frontend", "firmware"])
@@ -820,6 +964,63 @@ def test_hardware_certification_happy_path_and_fail_closed_cases() -> None:
                 expected_image_sha256=IMAGE,
                 expected_version=VERSION,
             )
+
+
+def test_hardware_certification_rejects_legacy_stateful_schema() -> None:
+    evidence = certification()
+    evidence["schema"] = "pm-hardware-certification/1.0.0"
+    evidence["signoff"]["record_sha256"] = canonical_record_sha256(evidence)  # type: ignore[index]
+
+    with pytest.raises(ValueError, match="physical schema"):
+        verify(
+            evidence,
+            expected_commit=COMMIT,
+            expected_image_sha256=IMAGE,
+            expected_version=VERSION,
+        )
+
+
+def test_stable_release_artifact_verifier_accepts_stateless_hardware_schema_v2(
+    evidence_dir: Path,
+) -> None:
+    manifest_path, manifest = _candidate_release_bundle(evidence_dir)
+    hardware = certification()
+    evidence_path = evidence_dir / "hardware-certification.json"
+    evidence_path.write_text(json.dumps(hardware, sort_keys=True), encoding="utf-8")
+    manifest["release_status"] = "stable_physical_certification_passed"
+    manifest["hardware_certification"] = {
+        "file": evidence_path.name,
+        "sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+        "status": "passed",
+        "physical": True,
+    }
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    verify_release_artifacts(manifest_path)
+
+
+def test_release_workflows_bind_both_firmware_build_identities() -> None:
+    release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    promotion = (ROOT / ".github/workflows/stable-promotion.yml").read_text(encoding="utf-8")
+
+    assert '.schema == "pm-firmware-release/1.1.0"' in release
+    assert '--argjson firmware_build_number "$build_number"' in release
+    assert '--arg firmware_build_id "$firmware_build_id"' in release
+    assert "--argjson firmware_build_id" not in release
+    assert release.count("--firmware-build-number") == 2
+    assert release.count("--firmware-build-id") == 2
+    assert "pm-cross-repository-contract/1.1.0" in release
+    assert "--firmware-build-number 25" in ci
+    assert f"--firmware-build-id {FIRMWARE_BUILD_ID}" in ci
+
+    assert '.schema == "pm-firmware-release/1.1.0"' in promotion
+    assert "firmware_build_number=\"$(jq -er '.build_number'" in promotion
+    assert "firmware_build_id=\"$(jq -er '.firmware_build_id'" in promotion
+    assert '--firmware-build-number "$firmware_build_number"' in promotion
+    assert '--firmware-build-id "$firmware_build_id"' in promotion
+    assert ".firmware.build_id" not in promotion
+    assert "pm-firmware-compatibility/1.1.0" in promotion
 
 
 def test_nonfinite_certification_json_is_rejected() -> None:

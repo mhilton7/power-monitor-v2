@@ -1,18 +1,16 @@
-# PowerMeter V2 v0.1.0-rc.21
+# PowerMeter V2 v0.1.0-rc.22
 
-RC21 repairs fixed-cadence sensor delivery and History gap rendering for the
-coordinated stateless-telemetry release. Firmware now advances successful
-telemetry from the prior scheduled deadline instead of waiting a full cadence
-after HTTPS completes, so ordinary TLS/request latency no longer creates
-artificially missing samples. History preserves missing values as unshaded
-breaks in the green series rather than covering missing periods with brown
-rectangles. It remains a release candidate: marked-unit hardware certification
-is still pending.
+RC22 completes the server-owned History, billing presentation, official-rate
+catalog evidence, responsive chart, and firmware/deployment lifecycle work for
+the coordinated stateless-telemetry architecture. The already-correct firmware
+runtime remains stateless; this candidate updates its operator evidence and
+release binding without reintroducing storage or backlog behavior. It remains
+a release candidate: marked-unit hardware certification is still pending.
 
-Firmware and server RC20 remain immutable public prereleases. RC21 retains the
-database schema, APIs, protocols, NVS configuration, TLS/HMAC controls, and
-stateless latest-value-wins memory bounds described below. RC17 also remains
-immutable failed-candidate evidence and is never moved or rewritten.
+Firmware and server RC21 remain immutable public prereleases. RC22 retains the
+protocols, NVS configuration, TLS/HMAC controls, and stateless
+latest-value-wins memory bounds described below. RC17 also remains immutable
+failed-candidate evidence and is never moved or rewritten.
 
 ## Stateless sensor telemetry
 
@@ -50,6 +48,11 @@ immutable failed-candidate evidence and is never moved or rewritten.
 - The migration preserves all existing accepted readings, History, rate plans,
   users, homes, devices, firmware evidence, and audit records. Its downgrade
   refuses to remove accepted stateless telemetry or cutover evidence.
+- Additive revision `20260820_0018` adds normalized official-rate catalog
+  evidence plus explicit firmware-release and deployment lifecycle state. It
+  preserves prior History, rates, artifacts, OTA results, and audit evidence;
+  destructive lifecycle actions require authorization, exact confirmation,
+  transactional revalidation, and an audit tombstone.
 
 ## Main service and Billing
 
@@ -83,31 +86,40 @@ immutable failed-candidate evidence and is never moved or rewritten.
   energy separately from the power curve.
 - Billing presents Current Rate Plan, Current Billing Cycle, Tier Breakdown,
   and Cost Summary in plain language on desktop and mobile.
+- Power charts use measured `W`/`kW` axes with sufficient label width, display
+  browser-local PST/PDT timestamps, advance Live labels with one shared browser
+  timer, and leave missing periods as unshaded disconnected gaps.
+- Firmware releases and terminal deployments can be archived and restored.
+  Permanent deletion is available only when current, active, queued, pending,
+  sensor-reported, shared-artifact, and rollback protections all pass.
+- Official SCE discovery follows a bounded allowlisted public-source crawl.
+  Catalog readiness is true only when every in-scope discovered document was
+  parsed or explicitly excluded; a failed check retains last-known-good data.
 - Utility-bill PDFs remain rate-source documents only. Their usage, readings,
   totals, identity, addresses, accounts, meter identifiers, balances, and
   payments are discarded; original bytes/full OCR text are never persisted.
 
 ## Release binding
 
-- Server and frontend version: `0.1.0-rc.21`.
-- Compatible firmware tag: `v0.1.0-rc.21`, build number `24`.
+- Server and frontend version: `0.1.0-rc.22`.
+- Compatible firmware tag: `v0.1.0-rc.22`, build number `25`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
-- Alembic head: `20260818_0017`.
+- Alembic head: `20260820_0018`.
 - Generated contract-document SHA-256:
-  `6d276b738467c867d062ab78b6cdc76d246f15d5aca7e2c505cddabf9b6f2c24`.
+  `f15e5429ca0333dbf5f1defeef01197d8a21d2bc9e684c78463f44e279b03123`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned
-`power-monitor-v2-v0.1.0-rc.21.yaml`, release manifest, migration/security/test
+`power-monitor-v2-v0.1.0-rc.22.yaml`, release manifest, migration/security/test
 evidence, and checksums. The firmware prerelease must be published and
 independently verified first, then the server compatibility variable must be
-set to the exact RC21 firmware tag.
+set to the exact RC22 firmware tag.
 
 ## Deployment boundary
 
-Deploy the server RC21 YAML before applying the firmware RC21 update. Existing
-RC20 sensors remain protocol-compatible throughout. Automated
+Deploy the server RC22 YAML before applying the firmware RC22 update. Existing
+RC21 sensors remain protocol-compatible throughout. Automated
 tests do not install firmware on physical sensors. No card was formatted and no
 NVS namespace was erased while preparing this release.
 

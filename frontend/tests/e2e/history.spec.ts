@@ -10,6 +10,8 @@ test('History renders saved gaps, recovered energy, cost tooltips and non-overla
   await expect(page.getByText(/measured zero renders at zero/)).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Connection gap details' })).toBeVisible();
   await expect(page.getByText(/0.42 kWh recovered/)).toBeVisible();
+  await expect(page.locator('.history-summary-grid').first()).toContainText('PDT');
+  await expect(page.getByRole('heading', { name: 'Active power over time' }).locator('..')).toContainText('display America/Los_Angeles');
   const ticks = page.locator('[data-testid="history-chart"] .recharts-xAxis-tick-labels text');
   await expect(ticks).not.toHaveCount(0);
   expect(await ticks.count()).toBeGreaterThanOrEqual(2);

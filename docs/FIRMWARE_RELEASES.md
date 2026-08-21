@@ -98,18 +98,19 @@ trusted-time synchronization without changing measurement cadence, and binds
 the public server rc.13 contract. Firmware rc.14 and rc.15 remain immutable
 historical releases and must not be moved, rewritten, or relabeled.
 
-Public firmware/server rc.16 and rc.20 remain immutable historical installation
-evidence. Coordinated firmware rc.21 must name server `v0.1.0-rc.21`, retain
+Public firmware/server rc.16, rc.20, and rc.21 remain immutable historical
+installation evidence. Coordinated firmware rc.22 must name server
+`v0.1.0-rc.22`, retain
 `pm-protocol/1.0.0`, declare `pm-telemetry/2.0.0`, and bind generated OpenAPI
 SHA-256
-`6d276b738467c867d062ab78b6cdc76d246f15d5aca7e2c505cddabf9b6f2c24`.
+`f15e5429ca0333dbf5f1defeef01197d8a21d2bc9e684c78463f44e279b03123`.
 Public RC20 build number is 23 and remains immutable historical evidence.
-RC21 firmware retains the stateless runtime, anchors successful telemetry to
+RC22 firmware retains the stateless runtime, anchors successful telemetry to
 fixed cadence deadlines so HTTPS latency does not create artificial missing
 samples, keeps only one in-flight and one newest pending sample in RAM, and
 preserves existing NVS identity/configuration through the schema-v1 layout.
-Its build number is 24. Its metadata and artifacts must be created, signed,
-published, and independently verified before the server rc.21 tag is created.
+Its deterministic build number is 25. Its metadata and artifacts must be created, signed,
+published, and independently verified before the server rc.22 tag is created.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

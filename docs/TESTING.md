@@ -81,7 +81,7 @@ pre-upgrade database into a validated recovery target before binding prior
 digests. Target-TrueNAS execution remains separate physical deployment evidence
 and cannot be inferred from a GitHub-hosted Docker runner.
 
-Firmware host/fault/simulation/HIL tests live in the independent firmware repository. Hardware certification requires actual marked ESP32-S3/PZEM/SD evidence for PZEM readings, endurance sample, AP/server/DNS/TLS outages, physical cycles, USB recovery, OTA/rollback, and 72-hour soak. A passing simulator cannot set hardware status to passed.
+Firmware host/fault/simulation/HIL tests live in the independent firmware repository. Hardware certification requires actual marked ESP32-S3/PZEM evidence for readings; proof that the stateless image never mounts or accesses an inserted microSD card and never persists telemetry in NVS; AP/server/DNS/TLS outages; physical cycles; USB recovery; OTA/rollback; bounded memory; and a 72-hour soak. A passing simulator cannot set hardware status to passed.
 
 Every evidence report records schema, version, full revision, UTC generation time, outcome, exact command/environment, input/output checksums, test counts, failures/skips, and physical/simulated classification. A release gate must not be reported passed from missing, stale, or unparsable evidence.
 
@@ -100,7 +100,25 @@ YAML and rc.4 is not installable. The rc.5 source repaired this check and its
 tagged workflow later published the complete public, installable server rc.5
 asset set.
 
-## Current audit-candidate local evidence
+## Opt-in live official-SCE smoke test
+
+The deterministic catalog and tariff suites use only checked-in, sanitized
+official-source fixtures. They never require the live SCE website. An explicit
+operator-only smoke test can verify that the current public residential catalog
+root remains fetchable and yields bounded crawl links:
+
+```powershell
+$env:PM_RUN_LIVE_SCE_SMOKE = '1'
+.\.venv\Scripts\python.exe -m pytest -q `
+  backend\tests\test_sce_catalog.py::test_live_public_sce_catalog_root_is_fetchable_and_discoverable
+Remove-Item Env:PM_RUN_LIVE_SCE_SMOKE
+```
+
+This smoke reads only public official SCE pages. It does not log into an SCE
+account, write catalog rows, publish a rate, or replace the captured-fixture
+closure tests.
+
+## Historical audit-candidate local evidence
 
 On 2026-08-15, the earlier full backend suite on real PostgreSQL 17 passed 135
 tests with 3 expected environment skips through revision 0011. The current

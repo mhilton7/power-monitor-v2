@@ -1,6 +1,7 @@
 import { screen } from '@testing-library/react';
 import { BillingPage } from '../src/pages/BillingPage';
 import { HistoryPage } from '../src/pages/HistoryPage';
+import { SettingsPage } from '../src/pages/SettingsPage';
 import { installFetchMock, renderWithProviders } from './render';
 
 const prohibitedNormalCopy = [
@@ -38,6 +39,14 @@ describe('Normal user-facing language', () => {
     expect(screen.getByRole('heading', { name: 'Tier Breakdown' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Cost Summary' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'SCE rate update' })).toBeInTheDocument();
+    expectPlainLanguage();
+  });
+
+  it('keeps stateless sensor storage and queue terms out of normal Settings', async () => {
+    window.history.replaceState(null, '', '/settings?section=firmware');
+    installFetchMock();
+    renderWithProviders(<SettingsPage />);
+    expect(await screen.findByRole('heading', { name: 'Firmware' })).toBeInTheDocument();
     expectPlainLanguage();
   });
 });

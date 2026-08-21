@@ -115,7 +115,7 @@ def stateless_telemetry_vector() -> dict[str, Any]:
         "pzem_energy_wh": 123456,
         "pzem_status": "ok",
         "firmware_version": "0.1.0-rc.17",
-        "firmware_build_id": "elf-sha256-example",
+        "firmware_build_id": "0123456789abcdef" * 4,
         "time_status": "trusted",
         "wifi_rssi": -55,
         "command_results": [],

@@ -14,21 +14,29 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-SCHEMA_ID = "pm-hardware-certification/1.0.0"
+SCHEMA_ID = "pm-hardware-certification/2.0.0"
 PROTOCOL_ID = "pm-protocol/1.0.0"
+TELEMETRY_PROTOCOL_ID = "pm-telemetry/2.0.0"
 FIRMWARE_REPOSITORY = "https://github.com/mhilton7/power-monitor-sensor-headless"
 REQUIRED_TESTS = {
     "pzem_authenticated_samples",
     "crc_rejection",
     "wrong_slave_rejection",
-    "sd_recovery",
-    "sequence_monotonic",
-    "ack_replay",
+    "no_sd_runtime_access",
+    "no_telemetry_nvs_writes",
+    "independent_sample_acceptance",
+    "later_sample_after_gap",
+    "latest_value_after_outage",
+    "wifi_recovery",
+    "server_recovery",
+    "identity_preserved",
+    "configuration_preserved",
     "https_chain",
     "https_hostname",
     "hmac_replay",
     "ota_success",
     "ota_rollback",
+    "ota_identity_confirmed",
     "com_recovery",
     "watchdog_recovery",
 }
@@ -100,6 +108,7 @@ def verify(
         "target": "esp32s3",
         "board_profile": "esp32-s3-devkitc-n16r8-reference/1",
         "protocol": PROTOCOL_ID,
+        "telemetry_protocol": TELEMETRY_PROTOCOL_ID,
     }
     for key, value in expected.items():
         if firmware.get(key) != value:
@@ -112,7 +121,6 @@ def verify(
         "pzem_revision_marking",
         "pzem_terminal_labels",
         "ct_marking",
-        "sd_module_marking",
     ):
         nonempty_string(marked.get(key), f"marked_unit.{key}")
     photos = marked.get("photo_sha256")
@@ -144,8 +152,21 @@ def verify(
         raise ValueError("physical soak must span at least 72 hours")
     if soak.get("pass") is not True:
         raise ValueError("physical soak must pass")
-    if soak.get("unexplained_reboots") != 0 or soak.get("sequence_regressions") != 0:
-        raise ValueError("physical soak has an unexplained reboot or sequence regression")
+    if (
+        soak.get("unexplained_reboots") != 0
+        or soak.get("identity_changes") != 0
+        or soak.get("configuration_losses") != 0
+    ):
+        raise ValueError(
+            "physical soak has an unexplained reboot, identity change, or configuration loss"
+        )
+    resident_samples = soak.get("maximum_resident_telemetry_samples")
+    if (
+        not isinstance(resident_samples, int)
+        or isinstance(resident_samples, bool)
+        or not 1 <= resident_samples <= 2
+    ):
+        raise ValueError("physical soak violates the stateless telemetry residency bound")
     attempted = soak.get("samples_attempted")
     authenticated = soak.get("samples_authenticated")
     if (

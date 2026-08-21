@@ -5,7 +5,7 @@ import { mockApi } from './mocks';
 test('official candidate advances through explicit review, publish and exact-account activation', async ({ page }) => {
   await mockApi(page);
   await page.goto('/billing');
-  await page.getByText('Technical details').first().click();
+  await page.getByText('Last accepted rate information').locator('xpath=ancestor::details').getByText('Technical details').click();
   await expect(page.getByText('Last accepted rate information')).toBeVisible();
   await expect(page.getByText(`${rateCandidate.source.name} · official_https · ${rateCandidate.source.url}`)).toBeVisible();
   await expect(page.getByText('Last run source')).toBeVisible();
@@ -15,7 +15,7 @@ test('official candidate advances through explicit review, publish and exact-acc
   await page.getByLabel('Effective start date').fill('2026-08-01');
   await page.getByLabel(/confirmed this exact effective range/).check();
   await page.getByLabel(/confirmed the recorded source/).check();
-  await page.getByRole('button', { name: 'Confirm candidate review' }).click();
+  await page.getByRole('button', { name: 'Apply reviewed rate plan' }).click();
   const reviewed = await reviewRequest;
   expect(new URL(reviewed.url()).searchParams.get('home_id')).toBe(homeScopes[0]!.id);
   expect(reviewed.postDataJSON()).toMatchObject({ selected_plan_name: 'TOU-D-4-9PM', administrator_confirmed_effective_date: true, administrator_confirmed_provenance: true });
@@ -33,7 +33,7 @@ test('official candidate advances through explicit review, publish and exact-acc
   const activated = await activateRequest;
   expect(new URL(activated.url()).searchParams.get('home_id')).toBe(homeScopes[0]!.id);
   expect(activated.postDataJSON()).toEqual({ utility_account_id: billing.accounts[0]!.utility_account_id });
-  await expect(page.getByText(new RegExp(`Active for account ${billing.accounts[0]!.utility_account_id}`))).toBeVisible();
+  await expect(page.getByText(/Active for the selected account/)).toBeVisible();
 });
 
 test('candidate rejection confirms, exposes loading and error, resets, then becomes terminal', async ({ page }) => {

@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SettingsPage } from '../src/pages/SettingsPage';
 import { useHomeScope } from '../src/home/useHomeScope';
-import { apiResponse, device, homeUtility, systemHealth } from './fixtures';
+import { apiResponse, device, firmwareReleases, homeUtility, systemHealth } from './fixtures';
 import { installFetchMock, renderWithProviders } from './render';
 
 describe('Settings', () => {
@@ -274,11 +274,12 @@ describe('Settings', () => {
     expect(screen.getAllByText('v1.2.3 · build not reported')).toHaveLength(2);
   });
 
-  it('removes firmware bytes only after an explicit destructive confirmation', async () => {
-    let deletedRelease = '';
-    installFetchMock((path, method) => {
-      if (path.includes('/firmware/releases/') && method === 'DELETE') {
-        deletedRelease = path;
+  it('permanently deletes an eligible firmware release only after exact confirmation', async () => {
+    let deletion: { path: string; body: Record<string, unknown> } | undefined;
+    installFetchMock((path, method, body) => {
+      if (path.endsWith('/delete-permanently') && method === 'POST') {
+        if (typeof body !== 'string') throw new Error('Expected firmware deletion confirmation JSON.');
+        deletion = { path, body: JSON.parse(body) as Record<string, unknown> };
         return { status: 204 };
       }
       return apiResponse(path, method);
@@ -286,10 +287,103 @@ describe('Settings', () => {
     renderWithProviders(<SettingsPage />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Firmware' }));
-    await userEvent.click(await screen.findByRole('button', { name: 'Remove artifact' }));
-    expect(screen.getByRole('dialog', { name: /Remove firmware .* bytes\?/ })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Remove firmware artifact' }));
-    await waitFor(() => expect(deletedRelease).toContain('/firmware/releases/'));
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete permanently' }));
+    expect(screen.getByRole('dialog', { name: /Delete firmware .* permanently\?/ })).toBeInTheDocument();
+    const confirm = screen.getByRole('button', { name: 'Delete release permanently' });
+    expect(confirm).toBeDisabled();
+    await userEvent.type(screen.getByLabelText('Type DELETE RELEASE PERMANENTLY'), 'DELETE RELEASE PERMANENTLY');
+    await userEvent.click(confirm);
+    await waitFor(() => expect(deletion).toMatchObject({
+      path: expect.stringContaining('/firmware/releases/00000000-0000-0000-0000-000000000030/delete-permanently'),
+      body: { confirmation: 'DELETE RELEASE PERMANENTLY', semantic_version: '1.2.4', build_number: '851', sha256: 'b'.repeat(64) },
+    }));
+  });
+
+  it('hides archived releases by default and restores them without offering Deploy', async () => {
+    const archived = {
+      ...firmwareReleases.releases[0]!,
+      release_id: '00000000-0000-0000-0000-000000000034',
+      semantic_version: '1.2.2',
+      release_state: 'archived',
+      deploy_eligible: false,
+      archive_eligible: false,
+      restore_eligible: true,
+      delete_eligibility: { eligible: true, protection_reasons: [] },
+      deployment_batches: [],
+    };
+    let restored = '';
+    installFetchMock((path, method) => {
+      const pathname = new URL(path, 'http://frontend.test').pathname;
+      if (pathname.endsWith('/firmware/releases') && method === 'GET') return { status: 200, body: { releases: [...firmwareReleases.releases, archived] } };
+      if (pathname.endsWith('/restore') && method === 'POST') { restored = path; return { status: 200, body: { ...archived, release_state: 'available', restore_eligible: false, archive_eligible: true, deploy_eligible: true } }; }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<SettingsPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Firmware' }));
+    expect(await screen.findByText('1.2.4 · build 851')).toBeInTheDocument();
+    expect(screen.queryByText('1.2.2 · build 851')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Show archived' }));
+    const archivedHeading = await screen.findByText('1.2.2 · build 851');
+    const archivedCard = archivedHeading.closest('.firmware-release-item');
+    expect(archivedCard).not.toBeNull();
+    expect(within(archivedCard as HTMLElement).queryByRole('button', { name: 'Deploy' })).not.toBeInTheDocument();
+    expect(within(archivedCard as HTMLElement).queryByRole('button', { name: 'Protect for rollback' })).not.toBeInTheDocument();
+    await userEvent.click(within(archivedCard as HTMLElement).getByRole('button', { name: 'Restore release' }));
+    await waitFor(() => expect(restored).toContain('/firmware/releases/00000000-0000-0000-0000-000000000034/restore'));
+  });
+
+  it('archives terminal deployments and confirms bounded history retention', async () => {
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+    installFetchMock((path, method, body) => {
+      if ((path.endsWith('/archive') || path.endsWith('/firmware/lifecycle-settings')) && (method === 'POST' || method === 'PATCH')) {
+        if (typeof body !== 'string') throw new Error('Expected lifecycle request JSON.');
+        requests.push({ path, body: JSON.parse(body) as Record<string, unknown> });
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<SettingsPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Firmware' }));
+    await userEvent.click(await screen.findByText('Deployment summary (1)'));
+    await userEvent.click(screen.getByRole('button', { name: 'Archive deployment' }));
+    await userEvent.click(within(screen.getByRole('dialog', { name: 'Archive this completed deployment?' }))
+      .getByRole('button', { name: 'Archive deployment' }));
+    await waitFor(() => expect(requests[0]).toMatchObject({ body: { confirmation: 'ARCHIVE DEPLOYMENT RECORD' } }));
+
+    await userEvent.selectOptions(await screen.findByLabelText('Keep archived deployment details'), '90');
+    await userEvent.click(screen.getByRole('button', { name: 'Review retention change' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save retention policy' }));
+    await waitFor(() => expect(requests[1]).toMatchObject({ body: { deployment_retention_days: 90, confirmation: 'DELETE EXPIRED DEPLOYMENT HISTORY' } }));
+  });
+
+  it('makes an eligible release current and changes rollback protection only after confirmation', async () => {
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+    installFetchMock((path, method, body) => {
+      if ((path.endsWith('/make-current') && method === 'POST') || (path.endsWith('/rollback-pin') && method === 'PATCH')) {
+        if (typeof body !== 'string') throw new Error('Expected firmware lifecycle JSON.');
+        requests.push({ path, body: JSON.parse(body) as Record<string, unknown> });
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<SettingsPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Firmware' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Make current' }));
+    const currentDialog = screen.getByRole('dialog', { name: 'Make firmware 1.2.4 current?' });
+    await userEvent.click(within(currentDialog).getByRole('button', { name: 'Make current firmware' }));
+    await waitFor(() => expect(requests[0]).toMatchObject({
+      path: expect.stringContaining('/make-current'),
+      body: { confirmation: 'MAKE CURRENT FIRMWARE', semantic_version: '1.2.4', sha256: 'b'.repeat(64) },
+    }));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Protect for rollback' }));
+    const rollbackDialog = screen.getByRole('dialog', { name: 'Protect firmware 1.2.4?' });
+    await userEvent.click(within(rollbackDialog).getByRole('button', { name: 'Protect for rollback' }));
+    await waitFor(() => expect(requests[1]).toMatchObject({
+      path: expect.stringContaining('/rollback-pin'),
+      body: { confirmation: 'UPDATE ROLLBACK PROTECTION', rollback_pinned: true },
+    }));
   });
 
   it('shows independent partial OTA results and retries only the failed sensor', async () => {
@@ -304,7 +398,10 @@ describe('Settings', () => {
     renderWithProviders(<SettingsPage />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Firmware' }));
-    expect(await screen.findByText('2 sensors targeted · 1 updated · 1 failed · 0 pending')).toBeInTheDocument();
+    expect(screen.getByText('Indoor-AC')).not.toBeVisible();
+    await userEvent.click(await screen.findByText('Deployment summary (1)'));
+    expect(await screen.findByText('2 sensors targeted · 1 updated · 1 failed · 0 pending')).toBeVisible();
+    await userEvent.click(screen.getByText('View sensor results'));
     expect(screen.getByText('Indoor-AC')).toBeInTheDocument();
     expect(screen.getByText('Outdoor-AC')).toBeInTheDocument();
     expect(screen.getByText(/Outdoor-AC reconnected on 1.2.3 instead of 1.2.4/)).toBeInTheDocument();
