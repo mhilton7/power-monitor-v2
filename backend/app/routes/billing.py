@@ -646,6 +646,37 @@ async def publish_bill_rate_import(
             "official-source workflow.",
             code="RATE_CANDIDATE_INCOMPLETE",
         )
+    if payload.assign_to_utility_account_id:
+        # Preserve home non-disclosure before reporting anything about the
+        # draft's publication semantics. The row is locked later in the
+        # established rate-assignment lock order.
+        scoped_account_id = await session.scalar(
+            select(UtilityAccount.id).where(
+                UtilityAccount.id == payload.assign_to_utility_account_id,
+                UtilityAccount.home_id == upload.home_id,
+            )
+        )
+        if scoped_account_id is None:
+            raise NotFound("utility account does not exist")
+    day_sensitive = any(
+        period.get("day_type") in {"weekday", "weekend", "holiday"}
+        for period in extraction.tou_period_definitions
+        if isinstance(period, dict)
+    )
+    if day_sensitive and extraction.holiday_treatment in {
+        "weekend_schedule",
+        "explicit_schedule",
+        "unresolved",
+    }:
+        # Bill PDFs are rate-only inputs and this extraction model deliberately
+        # has no place for an external holiday calendar. A day-sensitive draft
+        # must be completed through the official-source workflow, which binds
+        # authoritative bounded holiday evidence to the immutable version.
+        raise BillRateImportError(
+            "This schedule requires an authoritative holiday calendar before it can be "
+            "published. Complete it through the official-source workflow.",
+            code="RATE_HOLIDAY_CALENDAR_REQUIRED",
+        )
     try:
         threshold_rule = (
             TierThresholdRuleDraft.model_validate(extraction.tier_threshold_rule)

@@ -13,7 +13,7 @@ valid signed server `v0.1.0-rc.4` tag
 is historical failed prepublication evidence, not a Release. Hardware execution
 confirmed that firmware rc.1 through rc.5 crash in the main stack before
 provisioning. Public `v0.1.0-rc.16` is installation evidence for the prior
-durable sensor-backlog architecture. Candidate `v0.1.0-rc.22` retains
+durable sensor-backlog architecture. Candidate `v0.1.0-rc.23` retains
 `pm-protocol/1.0.0`, adds `pm-telemetry/2.0.0`, and extends the Alembic head to
 `20260820_0018`. It retains PostgreSQL telemetry and History ownership, removes
 active microSD/backlog behavior from new firmware, preserves
@@ -21,8 +21,8 @@ NVS identity/configuration, and adds Main-service History and exact tiered
 Billing. Firmware and server rc.16 remain immutable and must not be relabeled.
 Firmware rc.17 is immutable failed-candidate evidence because its public
 compatibility record omitted the telemetry protocol binding. The exact
-firmware rc.22 metadata and artifacts must be published and independently
-verified before the server rc.22 tag is created; server
+firmware rc.23 metadata and artifacts must be published and independently
+verified before the server rc.23 tag is created; server
 publication still requires every automated gate to pass.
 Stable publication remains blocked until physical hardware, TLS,
 OTA-install/rollback, and soak certification from the actual marked unit
@@ -83,18 +83,29 @@ assertion. Its generated OpenAPI SHA-256 is
 `66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591`.
 
 Public rc.16 carries named service branches and the explicitly designated Main
-service. Candidate rc.22 keeps the server the durable owner of independently
-accepted telemetry and active History. Firmware keeps one in-flight and one
-newest pending sample in RAM, and a missing sample never blocks a later sample.
-The UI removes normal storage/backlog controls; History preserves connection
-gaps and cumulative-energy recovery without inventing a power curve. Billing
-uses Main service with exact Decimal tier and fixed-charge semantics.
-The generated rc.22 OpenAPI SHA-256 is
-`f15e5429ca0333dbf5f1defeef01197d8a21d2bc9e684c78463f44e279b03123`;
-control remains `pm-protocol/1.0.0`, telemetry is `pm-telemetry/2.0.0`, and the
-Alembic head is `20260820_0018`.
+service. Firmware rc.22 remains immutable public evidence. The signed server
+rc.22 tag and run
+[`32451170213`](https://github.com/mhilton7/power-monitor-v2/actions/runs/32451170213)
+are immutable failed-candidate evidence. Mandatory gates, four image
+publications, and anonymous GHCR verification passed; deployment smoke then
+failed deterministically because a published bill-derived day-sensitive rate
+required a missing authoritative holiday calendar. Release assembly was
+skipped, so server rc.22 has no GitHub Release or generated YAML.
+
+Candidate rc.23 keeps the server as durable owner of independently accepted
+telemetry and active History. Firmware keeps one in-flight and one newest
+pending sample in RAM, and a missing sample never blocks a later sample. The UI
+removes normal storage/backlog controls; History preserves connection gaps and
+cumulative-energy recovery without inventing a power curve. Billing uses Main
+service with exact Decimal tier and fixed-charge semantics. RC23 also rejects
+unexecutable holiday-sensitive bill-rate publication, isolates any legacy
+unpriceable rate evidence without degrading unrelated worker work, and requires
+post-pricing worker health in deployment smoke. Control remains
+`pm-protocol/1.0.0`, telemetry is `pm-telemetry/2.0.0`, and the Alembic head is
+`20260820_0018`. The generated rc.23 OpenAPI SHA-256 is
+`3815180f5de88ed073a83f17ae13cffcf6a233e2daebf6b6ac56d1dc892dac72`.
 The checked-in YAML retains `UNPUBLISHED_*` sentinels until its tagged workflow
-supplies exact registry digests. Rc.22 must pass clean
+supplies exact registry digests. Rc.23 must pass clean
 dependency/backend/PostgreSQL gates, security scans, public package
 verification, first-run plus idempotent initializer smoke, checksums, and
 attestations. Its explicit migration chain extends to `20260820_0018`;
@@ -143,8 +154,8 @@ Release assets include manifest, digest-pinned YAML, SBOMs/attestations,
 test/security/migration reports, checksums, installation/upgrade/rollback
 guides, the tracked Windows SMB staging helper, the auditable initializer
 source embedded in the API image, and release notes. The GitHub Release
-cross-links the compatible firmware release. Coordinated rc.22 publishes under
-a new immutable tag without rewriting rc.21 or any earlier release.
+cross-links the compatible firmware release. Coordinated rc.23 publishes under
+a new immutable tag without rewriting rc.22 or any earlier release.
 
 ### Release-candidate publication order
 
@@ -165,7 +176,7 @@ Never tag a feature-branch commit. Publish an RC only in this order:
    ```
 
 3. Publish and independently verify the coordinated signed firmware
-   `v0.1.0-rc.22` release first. Set the server repository variable
+   `v0.1.0-rc.23` release first. Set the server repository variable
    `COMPATIBLE_FIRMWARE_TAG` to that exact tag and verify its immutable release
    metadata before creating the server tag.
 4. With the release signing key and local allowed-signers policy configured,
@@ -174,10 +185,10 @@ Never tag a feature-branch commit. Publish an RC only in this order:
 
    ```bash
    release_commit="$(git rev-parse HEAD)"
-   git tag -s -m 'PowerMeter V2 0.1.0-rc.22' v0.1.0-rc.22 "$release_commit"
-   git verify-tag v0.1.0-rc.22
-   test "$(git rev-parse 'v0.1.0-rc.22^{commit}')" = "$release_commit"
-   git push origin refs/tags/v0.1.0-rc.22
+   git tag -s -m 'PowerMeter V2 0.1.0-rc.23' v0.1.0-rc.23 "$release_commit"
+   git verify-tag v0.1.0-rc.23
+   test "$(git rev-parse 'v0.1.0-rc.23^{commit}')" = "$release_commit"
+   git push origin refs/tags/v0.1.0-rc.23
    ```
 
 The tagged workflow independently requires the pushed ref to resolve to an

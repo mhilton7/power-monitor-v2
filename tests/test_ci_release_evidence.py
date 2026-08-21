@@ -8,12 +8,19 @@ import subprocess
 import sys
 import textwrap
 import tomllib
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 import yaml
 from backend.app.bill_rate_import.parser import extract_rate_plan_from_pdf
 from backend.app.schemas.api import BootstrapRequest
+from backend.app.services.cost_engine import (
+    CostContext,
+    PricePeriod,
+    RateVersion,
+    price_sensor_interval,
+)
 from backend.tests.deployment_evidence_probe import _rate_source_pdf
 from scripts.validate_deployment_evidence import FAILURE_ASSERTIONS
 
@@ -54,11 +61,39 @@ def test_gitleaks_private_key_allowlist_is_exactly_scoped_to_synthetic_fixture()
 def test_deployment_probe_pdf_contains_rates_but_no_usage_evidence() -> None:
     draft, ignored_categories = extract_rate_plan_from_pdf(_rate_source_pdf())
     assert draft.rate_plan_name == "TOU-D-4-9PM"
-    assert len(draft.periods) == 13
+    assert len(draft.periods) == 3
+    assert {(period.season, period.day_type) for period in draft.periods} == {("all", "all")}
     assert draft.review_required is True
     assert set(ignored_categories).isdisjoint(
         {"BILL_USAGE", "BILL_TOTAL", "CUSTOMER_IDENTITY", "ACCOUNT_IDENTIFIER"}
     )
+    instant = datetime(2026, 8, 20, 19, tzinfo=UTC)
+    rate = RateVersion(
+        id="deployment-probe-rate",
+        timezone="America/Los_Angeles",
+        effective_start=instant - timedelta(days=1),
+        effective_end=None,
+        periods=tuple(
+            PricePeriod(
+                season=period.season,
+                day_type=period.day_type,
+                name=period.name,
+                start_minute=period.start_minute,
+                end_minute=period.end_minute,
+                price_per_kwh=period.price_per_kwh,
+            )
+            for period in draft.periods
+        ),
+        holiday_treatment=draft.holiday_treatment,
+    )
+    priced = price_sensor_interval(
+        start_utc=instant,
+        end_utc=instant + timedelta(minutes=1),
+        energy_mwh=245_200,
+        rate=rate,
+        context=CostContext(),
+    )
+    assert priced.total_microdollars > 0
 
 
 def test_ci_and_release_gates_use_postgres_roles_and_production_browser_e2e() -> None:
@@ -262,7 +297,7 @@ def test_current_release_tag_filters_reject_lightweight_unsigned_or_wrong_target
     tag_program = "select(\n  .sha == $expected_tag_object" + tag_program
     tag_object = "a" * 40
     commit = "b" * 40
-    tag_name = "v0.1.0-rc.22"
+    tag_name = "v0.1.0-rc.23"
     tag_ref = f"refs/tags/{tag_name}"
     ref = {
         "ref": tag_ref,
@@ -848,6 +883,9 @@ def test_release_smoke_preserves_redacted_failure_diagnostics() -> None:
     assert ".[0].State as $state" in smoke
     assert "failing_streak:$state.Health.FailingStreak" in smoke
     assert "readiness:$readiness" in smoke
+    assert "worker_cycle:$worker_cycle" in smoke
+    assert "collect_worker_cycle_health" in smoke
+    assert "{state,completed_at,error_code}" in smoke
     assert "$state.Error" not in smoke
     assert "$state.Health.Log" not in smoke
     assert "project_compose_state" in smoke
@@ -870,6 +908,12 @@ def test_release_smoke_preserves_redacted_failure_diagnostics() -> None:
     assert "compose start postgres api worker frontend gateway backup" not in smoke
     assert 'docker start "$expected_container_id"' in smoke
     assert 'wait_healthy "$service" "$expected_container_id"' in smoke
+    probe_offset = smoke.index("python backend/tests/deployment_evidence_probe.py")
+    worker_health_offset = smoke.index("wait_healthy worker", probe_offset)
+    authenticated_validation_offset = smoke.index("$authenticated_evidence", worker_health_offset)
+    assert probe_offset < worker_health_offset < authenticated_validation_offset
+    assert 'failed_assertion="worker_healthy_after_authenticated_pricing"' in smoke
+    assert '"worker healthy after authenticated pricing"' in smoke
     assert smoke.index('runtime_container_ids["$service"]="$container_id"') < smoke.index(
         'compose stop "${runtime_service_names[@]}"'
     )
@@ -964,11 +1008,11 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     assert "prepare-host.sh" not in installation
     assert "pm-protocol/1.0.0" in installation
     assert "authenticated PZEM-004T readings" in installation
-    assert "$Tag = 'v0.1.0-rc.22'" in installation
+    assert "$Tag = 'v0.1.0-rc.23'" in installation
     assert "$env:TEMP" in installation
     assert "[guid]::NewGuid().ToString('N')" in installation
     assert "Join-Path $HOME" not in installation
-    assert "signed v0.1.0-rc.22 release" in normalized_installation
+    assert "signed v0.1.0-rc.23 release" in normalized_installation
     assert "Stage-PowerMeterTrueNAS.ps1" in installation
     assert "power-monitor.home.arpa -> 192.168.0.175" in installation
     assert "Direct-IP HTTPS is not supported" in installation
@@ -1023,11 +1067,11 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
 def test_candidate_notes_describe_workflow_output_without_claiming_source_publication() -> None:
     notes = (ROOT / "release/RELEASE_NOTES.md").read_text(encoding="utf-8")
     normalized = " ".join(notes.split())
-    assert "power-monitor-v2-v0.1.0-rc.22.yaml" in normalized
+    assert "power-monitor-v2-v0.1.0-rc.23.yaml" in normalized
     assert "Alembic head: `20260820_0018`" in normalized
-    assert "firmware tag: `v0.1.0-rc.22`, build number `25`" in normalized
+    assert "firmware tag: `v0.1.0-rc.23`, build number `26`" in normalized
     assert "pm-telemetry/2.0.0" in normalized
-    assert "f15e5429ca0333dbf5f1defeef01197d8a21d2bc9e684c78463f44e279b03123" in normalized
+    assert "3815180f5de88ed073a83f17ae13cffcf6a233e2daebf6b6ac56d1dc892dac72" in normalized
     assert "original bytes/full OCR text are never persisted" in normalized
     assert "Automated tests do not install firmware on physical sensors" in normalized
     assert "actual marked-unit" in normalized
@@ -1042,9 +1086,9 @@ def test_release_process_requires_merge_then_verified_signed_annotated_tag() -> 
     merge = "Merge the approved pull request through the protected `main` branch"
     update = "git pull --ff-only origin main"
     firmware = "Publish and independently verify the coordinated signed firmware"
-    create = "git tag -s -m 'PowerMeter V2 0.1.0-rc.22'"
-    verify = "git verify-tag v0.1.0-rc.22"
-    push = "git push origin refs/tags/v0.1.0-rc.22"
+    create = "git tag -s -m 'PowerMeter V2 0.1.0-rc.23'"
+    verify = "git verify-tag v0.1.0-rc.23"
+    push = "git push origin refs/tags/v0.1.0-rc.23"
 
     assert normalized.index(merge) < normalized.index(update)
     assert normalized.index(update) < normalized.index(firmware)

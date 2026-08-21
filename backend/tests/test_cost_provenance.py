@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import importlib
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from backend.app.main import engine, session_factory
@@ -36,7 +40,39 @@ from backend.app.services.rate_workflow import (
 from httpx import AsyncClient
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from worker.app import jobs as worker_jobs
 from worker.app.jobs import calculate_billing_estimates, calculate_pending_costs
+
+
+@pytest.fixture
+def worker_cursor_directory() -> Iterator[Path]:
+    directory = Path(".test-runtime") / f"worker-cost-cursor-{uuid4()}"
+    directory.mkdir(parents=True)
+    try:
+        yield directory
+    finally:
+        for child in directory.iterdir():
+            child.unlink()
+        directory.rmdir()
+
+
+def test_pending_cost_cursor_rejects_missing_malformed_or_oversized_state(
+    worker_cursor_directory: Path,
+) -> None:
+    directory = worker_cursor_directory
+    cursor_path = directory / worker_jobs.PENDING_COST_CURSOR_FILENAME
+    assert worker_jobs._load_pending_cost_scan_cursor(directory) is None
+
+    cursor_path.write_text(
+        '{"schema":"pm-worker-cost-scan-cursor/1.0.0",'
+        '"start_utc":"2026-08-20T12:00:00",'
+        '"interval_id":"123e4567-e89b-12d3-a456-426614174000"}\n',
+        encoding="utf-8",
+    )
+    assert worker_jobs._load_pending_cost_scan_cursor(directory) is None
+
+    cursor_path.write_bytes(b"x" * (worker_jobs.PENDING_COST_CURSOR_MAX_BYTES + 1))
+    assert worker_jobs._load_pending_cost_scan_cursor(directory) is None
 
 
 def _backlog_record(*, sequence: int, start: datetime, energy_mwh: int) -> DurableReading:
@@ -946,6 +982,170 @@ async def test_overlapping_rate_assignments_leave_interval_unpriced(
             )
             is None
         )
+
+
+@pytest.mark.asyncio
+async def test_unresolved_holiday_rate_skips_only_affected_interval(
+    owner_client: AsyncClient,
+    worker_cursor_directory: Path,
+) -> None:
+    async with session_factory() as session:
+        first_home = await session.scalar(select(Home))
+        first_account = await session.scalar(select(UtilityAccount))
+        user_id = await session.scalar(select(User.id))
+        assert first_home is not None and first_account is not None and user_id is not None
+        second_home = Home(name="Independent executable rate", timezone="America/Los_Angeles")
+        session.add(second_home)
+        await session.flush()
+        second_account = UtilityAccount(
+            home_id=second_home.id,
+            timezone="America/Los_Angeles",
+            cost_scope="energy_only",
+        )
+        invalid_plan = RatePlan(
+            name="Missing holiday evidence",
+            utility_name="SCE",
+            rate_class="test",
+        )
+        valid_plan = RatePlan(name="Executable flat", utility_name="SCE", rate_class="test")
+        session.add_all((second_account, invalid_plan, valid_plan))
+        await session.flush()
+        invalid_version = RatePlanVersion(
+            rate_plan_id=invalid_plan.id,
+            version=1,
+            effective_start=datetime(2026, 1, 1, tzinfo=UTC),
+            timezone="America/Los_Angeles",
+            pricing_model="time_of_use",
+            holiday_treatment="same_as_weekend",
+            source_hash="a" * 64,
+            algorithm_version="cost-v1",
+            state="draft",
+        )
+        session.add(invalid_version)
+        await session.flush()
+        session.add(
+            RatePeriod(
+                rate_plan_version_id=invalid_version.id,
+                season="all",
+                day_type="weekday",
+                period_name="weekday",
+                start_minute=0,
+                end_minute=1440,
+                price_per_kwh=Decimal("0.10"),
+            )
+        )
+        await session.flush()
+        invalid_version.state = "published"
+        await session.flush()
+        valid_version = await _published_rate(
+            session,
+            plan=valid_plan,
+            version_number=1,
+            effective_start=datetime(2026, 1, 1, tzinfo=UTC),
+            price=Decimal("0.25"),
+        )
+        await replace_rate_assignment(
+            session,
+            account=first_account,
+            version=invalid_version,
+            actor_user_id=user_id,
+        )
+        await replace_rate_assignment(
+            session,
+            account=second_account,
+            version=valid_version,
+            actor_user_id=user_id,
+        )
+        invalid_device = Device(
+            home_id=first_home.id,
+            friendly_name="Unresolved holiday rate meter",
+            pzem_variant="pzem004t-v4-classic-candidate",
+            ct_rating_a=Decimal("100"),
+        )
+        valid_device = Device(
+            home_id=second_home.id,
+            friendly_name="Executable rate meter",
+            pzem_variant="pzem004t-v4-classic-candidate",
+            ct_rating_a=Decimal("100"),
+        )
+        session.add_all((invalid_device, valid_device))
+        await session.flush()
+        instant = datetime(2026, 8, 20, 19, tzinfo=UTC)
+        invalid_intervals = [
+            await _interval(
+                session,
+                device=invalid_device,
+                start=instant + timedelta(minutes=index),
+                energy_mwh=100_000,
+                sequence=index + 1,
+            )
+            for index in range(3)
+        ]
+        valid_interval = await _interval(
+            session,
+            device=valid_device,
+            start=instant + timedelta(minutes=3),
+            energy_mwh=100_000,
+            sequence=1,
+        )
+
+        cursor_directory = worker_cursor_directory
+        first_metrics: dict[str, int] = {}
+        assert (
+            await worker_jobs.calculate_pending_costs(
+                session,
+                limit=2,
+                metrics=first_metrics,
+                cursor_directory=cursor_directory,
+            )
+            == 0
+        )
+        assert first_metrics == {"unpriceable": 2}
+        cursor_path = cursor_directory / worker_jobs.PENDING_COST_CURSOR_FILENAME
+        assert 0 < cursor_path.stat().st_size <= worker_jobs.PENDING_COST_CURSOR_MAX_BYTES
+
+        # Reloading the module simulates a new worker process with no in-memory
+        # scheduler state. The durable keyset checkpoint must advance past the
+        # first bounded batch instead of selecting those same bad rows forever.
+        restarted_jobs = importlib.reload(worker_jobs)
+        second_metrics: dict[str, int] = {}
+        assert (
+            await restarted_jobs.calculate_pending_costs(
+                session,
+                limit=2,
+                metrics=second_metrics,
+                cursor_directory=cursor_directory,
+            )
+            == 1
+        )
+        assert second_metrics == {"unpriceable": 1}
+        selected_ids = set(
+            (
+                await session.scalars(
+                    select(IntervalCostSelection.normalized_interval_id).where(
+                        IntervalCostSelection.normalized_interval_id.in_(
+                            (*tuple(item.id for item in invalid_intervals), valid_interval.id)
+                        )
+                    )
+                )
+            ).all()
+        )
+        assert selected_ids == {valid_interval.id}
+        estimate_metrics: dict[str, int] = {}
+        assert (
+            await restarted_jobs.calculate_billing_estimates(
+                session,
+                now=instant + timedelta(minutes=4),
+                metrics=estimate_metrics,
+            )
+            == 1
+        )
+        assert estimate_metrics == {"unpriceable": 1}
+        await session.flush()
+        estimated_account_ids = set(
+            (await session.scalars(select(BillingEstimateSelection.utility_account_id))).all()
+        )
+        assert estimated_account_ids == {second_account.id}
 
 
 @pytest.mark.asyncio

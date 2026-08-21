@@ -99,18 +99,23 @@ the public server rc.13 contract. Firmware rc.14 and rc.15 remain immutable
 historical releases and must not be moved, rewritten, or relabeled.
 
 Public firmware/server rc.16, rc.20, and rc.21 remain immutable historical
-installation evidence. Coordinated firmware rc.22 must name server
-`v0.1.0-rc.22`, retain
+installation evidence. Firmware rc.22 is also immutable public evidence with
+deterministic build number 25. The signed server rc.22 tag and workflow run
+`32451170213` remain failed-candidate evidence: deployment smoke failed and
+release assembly was skipped, so there is no server rc.22 Release or generated
+YAML. None of that evidence is moved or relabeled.
+
+Coordinated firmware rc.23 must name server `v0.1.0-rc.23`, retain
 `pm-protocol/1.0.0`, declare `pm-telemetry/2.0.0`, and bind generated OpenAPI
 SHA-256
-`f15e5429ca0333dbf5f1defeef01197d8a21d2bc9e684c78463f44e279b03123`.
-Public RC20 build number is 23 and remains immutable historical evidence.
-RC22 firmware retains the stateless runtime, anchors successful telemetry to
-fixed cadence deadlines so HTTPS latency does not create artificial missing
-samples, keeps only one in-flight and one newest pending sample in RAM, and
-preserves existing NVS identity/configuration through the schema-v1 layout.
-Its deterministic build number is 25. Its metadata and artifacts must be created, signed,
-published, and independently verified before the server rc.22 tag is created.
+`3815180f5de88ed073a83f17ae13cffcf6a233e2daebf6b6ac56d1dc892dac72`. Public RC20 build number is 23 and RC22 build
+number 25 remain immutable; RC23 uses deterministic build number 26. It
+retains the stateless runtime, anchors successful telemetry to fixed cadence
+deadlines so HTTPS latency does not create artificial missing samples, keeps
+only one in-flight and one newest pending sample in RAM, and preserves existing
+NVS identity/configuration through the schema-v1 layout. RC23 metadata and
+artifacts must be created, signed, published, and independently verified before
+the server rc.23 tag is created.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

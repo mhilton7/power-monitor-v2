@@ -10,11 +10,14 @@ from backend.app.services.cost_engine import (
     EventCalendar,
     FixedCharge,
     PricePeriod,
+    RateEvaluationError,
     RateVersion,
     SeasonDefinition,
     fixed_charge_microdollars,
+    fixed_charges_from_storage,
     price_sensor_interval,
     resolve_price_period,
+    season_definitions_from_storage,
 )
 
 
@@ -27,6 +30,41 @@ def rate(periods: tuple[PricePeriod, ...], **kwargs) -> RateVersion:  # type: ig
         periods=periods,
         **kwargs,
     )
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        [{"season_name": "bad", "start_month": 1, "end_month": 13}],
+        [
+            {
+                "season_name": "bad",
+                "start_month": 2,
+                "start_day": 30,
+                "end_month": 3,
+                "end_day": 1,
+            }
+        ],
+    ],
+)
+def test_malformed_stored_season_values_use_rate_evaluation_error(
+    stored: list[dict[str, object]],
+) -> None:
+    with pytest.raises(RateEvaluationError, match="stored season definition is malformed"):
+        season_definitions_from_storage(stored)
+
+
+def test_malformed_stored_fixed_charge_decimal_uses_rate_evaluation_error() -> None:
+    with pytest.raises(RateEvaluationError, match="stored fixed charge is malformed"):
+        fixed_charges_from_storage(
+            [
+                {
+                    "charge": "daily_fixed_charge",
+                    "amount": "not-a-decimal",
+                    "applies": "per_account_per_day",
+                }
+            ]
+        )
 
 
 def test_tou_boundary_splits_sensor_energy_exactly() -> None:
