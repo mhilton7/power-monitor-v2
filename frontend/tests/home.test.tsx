@@ -246,6 +246,25 @@ describe('Home', () => {
     expect(chart).toHaveAttribute('data-missing-range-count', '1');
   });
 
+  it('uses authoritative yesterday and today summaries when rolling energy buckets are null', async () => {
+    const energyHistoryRequests: string[] = [];
+    installFetchMock((path, method) => {
+      if (path.includes('/history') && path.includes('metric=energy')) {
+        energyHistoryRequests.push(path);
+        return { status: 200, body: { ...history, points: [{ ...history.points[0]!, value: null }], energy_kwh: null } };
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<HomePage />);
+
+    const chart = await screen.findByTestId('daily-chart');
+    expect(chart).toHaveAttribute('data-day-source', 'calendar-summaries');
+    expect(chart).toHaveAttribute('data-day-count', '2');
+    expect(screen.getByText('Yesterday + today')).toBeInTheDocument();
+    expect(screen.getByText('38.44 kWh')).toBeInTheDocument();
+    expect(energyHistoryRequests).toHaveLength(0);
+  });
+
   it('shows stateless delivery details and only the supported sensor commands', async () => {
     installFetchMock((path) => {
       if (path.includes('/home')) return { status: 200, body: home };

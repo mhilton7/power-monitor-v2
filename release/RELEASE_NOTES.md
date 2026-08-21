@@ -1,11 +1,30 @@
-# PowerMeter V2 v0.1.0-rc.23
+# PowerMeter V2 v0.1.0-rc.24
 
-RC23 carries forward the server-owned History, billing presentation,
+RC24 carries forward the server-owned History, billing presentation,
 official-rate catalog, responsive chart, and firmware/deployment lifecycle
-work while remediating the deterministic RC22 deployment-smoke failure. The
+work while correcting three production UI/API integration defects. The
 firmware runtime remains stateless; this candidate advances its coordinated
 release binding without reintroducing storage or backlog behavior. It remains
 a release candidate because marked-unit hardware certification is pending.
+
+## RC24 dashboard and OTA corrections
+
+- Power History now tracks the active brush selection and formats the selected
+  local-time range compactly. Its footer uses a bounded responsive grid so the
+  selected range and reading-coverage text cannot overlap after dragging.
+- Today's Daily Energy chart uses the server's authoritative calendar-day
+  `yesterday` and `today` summaries in the configured IANA timezone, including
+  accepted safely recovered PZEM energy. It no longer asks a rolling UTC
+  24-hour History bucket to stand in for calendar-day totals, and missing
+  readings are never converted to zero.
+- Firmware Settings accepts the additive OTA job build-identity evidence
+  `target_firmware_build_id` and
+  `reported_firmware_build_id_after_reboot`, plus reconciliation
+  `artifact_quarantines`. The response remains strict about the typed evidence
+  while tolerating future additive lifecycle fields, so the view no longer
+  fails when the current server returns those fields.
+- Firmware/server RC23 remain immutable public prereleases. RC22 remains
+  immutable failed-candidate evidence and is not rewritten or relabeled.
 
 The signed server `v0.1.0-rc.22` tag and run
 [`32451170213`](https://github.com/mhilton7/power-monitor-v2/actions/runs/32451170213)
@@ -122,25 +141,25 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
 
 ## Release binding
 
-- Server and frontend version: `0.1.0-rc.23`.
-- Compatible firmware tag: `v0.1.0-rc.23`, build number `26`.
+- Server and frontend version: `0.1.0-rc.24`.
+- Compatible firmware tag: `v0.1.0-rc.24`, build number `27`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
 - Alembic head: `20260820_0018`.
 - Generated contract-document SHA-256:
-  `3815180f5de88ed073a83f17ae13cffcf6a233e2daebf6b6ac56d1dc892dac72`.
+  `849b51d0c706708a5581f6d8f4e2790cfd6fe229f83cdfabcaf2458c2fd82e10`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned
-`power-monitor-v2-v0.1.0-rc.23.yaml`, release manifest, migration/security/test
+`power-monitor-v2-v0.1.0-rc.24.yaml`, release manifest, migration/security/test
 evidence, and checksums. The firmware prerelease must be published and
 independently verified first, then the server compatibility variable must be
-set to the exact RC23 firmware tag.
+set to the exact RC24 firmware tag.
 
 ## Deployment boundary
 
-Deploy the server RC23 YAML before applying the firmware RC23 update. Existing
-RC21 and RC22 sensors remain protocol-compatible throughout. Automated
+Deploy the server RC24 YAML before applying the firmware RC24 update. Existing
+RC21 through RC23 sensors remain protocol-compatible throughout. Automated
 tests do not install firmware on physical sensors. No card was formatted and no
 NVS namespace was erased while preparing this release.
 

@@ -9,7 +9,7 @@ import { SensorDrawer } from '../components/SensorDrawer';
 import { HeartbeatAge } from '../components/HeartbeatAge';
 import { Card, ConfirmDialog, EmptyState, ErrorState, Loading, Notice, StatusPill } from '../components/ui';
 import { useHomeScope } from '../home/useHomeScope';
-import { chartAxisFormat, chartTick, dateTime, money, numeric, percent, resolveDisplayTimezone, timeAgo } from '../lib/format';
+import { chartAxisFormat, chartTick, dateTime, dateTimeRange, money, numeric, percent, resolveDisplayTimezone, timeAgo } from '../lib/format';
 import './HomePage.css';
 
 type SensorSummary = HomeData['devices'][number];
@@ -192,6 +192,7 @@ function UsageTooltip({ active, payload, timezone, unit = 'kW' }: {
 
 export function HomePage() {
   const [now] = useState(() => new Date());
+  const [powerBrushRange, setPowerBrushRange] = useState<{ key: string; startIndex: number; endIndex: number } | null>(null);
   const [selectedDevice, setSelectedDevice] = useState<DeviceDetail>();
   const [rebootOpen, setRebootOpen] = useState(false);
   const queryClient = useQueryClient();
@@ -216,6 +217,8 @@ export function HomePage() {
   const liveScopeName = homeTotalBranch?.name ?? (aggregateCircuitId ? 'Main service' : home.data?.devices.find((sensor) => sensor.id === commandDeviceId)?.friendly_name ?? 'Selected sensor');
   const historyDeviceId = aggregateCircuitId ? '' : commandDeviceId;
   const historyScopeKey = aggregateCircuitId ? `aggregate:${aggregateCircuitId}` : `device:${historyDeviceId}`;
+  const powerBrushKey = `${dashboardDays}:${historyScopeKey}`;
+  const hasServerDailyComparisons = dashboardDays === 1 && home.data?.summaries.yesterday !== undefined;
   const history24 = useQuery({
     queryKey: ['history', selectedHomeId, 'home-dashboard', dashboardDays, historyScopeKey],
     queryFn: () => api.history(historyParams(selectedHomeId, { deviceId: historyDeviceId, aggregateCircuitId }, new Date(now.getTime() - dashboardDays * 24 * 60 * 60 * 1000), now, 'power', dashboardDays === 1 ? 300 : 3600)),
@@ -224,7 +227,7 @@ export function HomePage() {
   const daily = useQuery({
     queryKey: ['history', selectedHomeId, 'home-daily', dashboardDays, historyScopeKey],
     queryFn: () => api.history(historyParams(selectedHomeId, { deviceId: historyDeviceId, aggregateCircuitId }, new Date(now.getTime() - dashboardDays * 24 * 60 * 60 * 1000), now, 'energy', 86400)),
-    enabled: Boolean(selectedHomeId && (historyDeviceId || aggregateCircuitId)),
+    enabled: Boolean(selectedHomeId && (historyDeviceId || aggregateCircuitId) && !hasServerDailyComparisons),
   });
   const command = useMutation({ mutationFn: () => api.command(commandDeviceId, 'reboot'), onSuccess: () => { setRebootOpen(false); void queryClient.invalidateQueries({ queryKey: ['devices'] }); } });
 
@@ -251,11 +254,45 @@ export function HomePage() {
     }
     return points.sort((left, right) => left.epoch - right.epoch);
   }, [history24.data]);
-  const dailyData = useMemo(() => daily.data?.points.map((point) => ({ ...point, epoch: new Date(point.timestamp).getTime(), value: point.value === null ? null : Number(point.value) })) ?? [], [daily.data]);
+  const dailyData = useMemo(() => {
+    const homeData = home.data;
+    const yesterday = homeData?.summaries.yesterday;
+    if (dashboardDays === 1 && yesterday) {
+      const anchor = new Date(homeData.generated_at ?? now);
+      const summaryPoint = (timestamp: Date, summary: typeof yesterday) => ({
+        timestamp: timestamp.toISOString(),
+        epoch: timestamp.getTime(),
+        value: summary.energy_kwh === null ? null : Number(summary.energy_kwh),
+        cost: summary.cost,
+        quality: summary.completeness === null ? null : Number(summary.completeness),
+      });
+      return [
+        summaryPoint(new Date(anchor.getTime() - 86_400_000), yesterday),
+        summaryPoint(anchor, homeData.summaries.today),
+      ];
+    }
+    return daily.data?.points.map((point) => ({
+      ...point,
+      epoch: new Date(point.timestamp).getTime(),
+      value: point.value === null ? null : Number(point.value),
+    })) ?? [];
+  }, [daily.data, dashboardDays, home.data, now]);
   const hasCommittedPower = chartData.some((point) => point.valueKw !== null);
-  const displayTimezone = resolveDisplayTimezone(preferences.data?.display_timezone, history24.data?.timezone ?? daily.data?.timezone);
+  const displayTimezone = resolveDisplayTimezone(preferences.data?.display_timezone, home.data?.timezone ?? history24.data?.timezone ?? daily.data?.timezone);
   const powerAxis = useMemo(() => chartAxisFormat(chartData.map((point) => point.valueKw), 'kW', 62), [chartData]);
   const energyAxis = useMemo(() => chartAxisFormat(dailyData.map((point) => point.value), 'kWh', 66), [dailyData]);
+  const dailyTotal = useMemo(() => {
+    if (dashboardDays !== 1 || !hasServerDailyComparisons) return daily.data?.energy_kwh ?? null;
+    const values = dailyData.map((point) => point.value);
+    return values.length === 2 && values.every((value) => value !== null)
+      ? values.reduce((total, value) => total + (value ?? 0), 0)
+      : null;
+  }, [daily.data?.energy_kwh, dailyData, dashboardDays, hasServerDailyComparisons]);
+  const activePowerBrushRange = powerBrushRange?.key === powerBrushKey ? powerBrushRange : null;
+  const powerRangeStartIndex = Math.min(activePowerBrushRange?.startIndex ?? 0, Math.max(0, chartData.length - 1));
+  const powerRangeEndIndex = Math.min(activePowerBrushRange?.endIndex ?? Math.max(0, chartData.length - 1), Math.max(0, chartData.length - 1));
+  const powerRangeStart = chartData[powerRangeStartIndex]?.epoch ?? now.getTime() - dashboardDays * 86_400_000;
+  const powerRangeEnd = chartData[powerRangeEndIndex]?.epoch ?? now.getTime();
 
   if (homeScope.isLoading) return <div className="page"><h1 className="sr-only">Home</h1><Loading label="Loading authorized homes" /></div>;
   if (homeScope.isError) return <div className="page"><h1 className="sr-only">Home</h1><ErrorState error={homeScope.error} retry={homeScope.refetch} /></div>;
@@ -322,12 +359,12 @@ export function HomePage() {
 
     <section className="dashboard-content" aria-label="Saved usage, commands, and alerts">
       {(visibleCards.has('live_power') || visibleCards.has('completeness')) && <Card title={`Power History – ${dashboardRangeLabel}`} eyebrow="Saved sensor readings" action={<span className="select-chip">kW</span>} className="dashboard-chart-card dashboard-power-history">
-        {history24.isLoading ? <Loading label="Loading saved readings" /> : history24.isError ? <ErrorState error={history24.error} /> : history24.data && chartData.length > 0 && hasCommittedPower ? <div className="chart-wrap" data-testid="usage-chart" data-missing-gap-style="unshaded" data-missing-range-count={history24.data.missing_ranges.length}><ResponsiveContainer width="100%" height="100%"><AreaChart title={`Saved power over ${dashboardRangeLabel.toLowerCase()}`} desc="Saved sensor power. Missing readings render as unshaded breaks in the line." data={chartData} margin={{ top: 16, right: 12, bottom: 8, left: 8 }}><defs><linearGradient id="powerFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#65e692" stopOpacity={0.48} /><stop offset="100%" stopColor="#65e692" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" minTickGap={70} interval="preserveStartEnd" tickFormatter={(value: number) => chartTick(value, dashboardDays * 24, displayTimezone)} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} tickFormatter={powerAxis.tick} axisLine={false} tickLine={false} width={powerAxis.width} /><Tooltip content={<UsageTooltip timezone={displayTimezone} />} /><Area type="monotone" dataKey="valueKw" stroke="#65e692" strokeWidth={2} fill="url(#powerFill)" connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom saved power History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#151d1a" tickFormatter={() => ''} /></AreaChart></ResponsiveContainer></div> : <EmptyState title="No readings were received during this time." detail="Choose another time range or check the sensor connection." />}
-        <div className="chart-footer"><Clock3 aria-hidden="true" /><span>{dateTime(new Date(now.getTime() - dashboardDays * 86_400_000).toISOString(), displayTimezone)} – {dateTime(now.toISOString(), displayTimezone)}</span>{history24.data && <span>{percent(history24.data.completeness === null ? null : Number(history24.data.completeness))} reading coverage · {history24.data.missing_ranges.length} gap{history24.data.missing_ranges.length === 1 ? '' : 's'}</span>}</div>
+        {history24.isLoading ? <Loading label="Loading saved readings" /> : history24.isError ? <ErrorState error={history24.error} /> : history24.data && chartData.length > 0 && hasCommittedPower ? <div className="chart-wrap" data-testid="usage-chart" data-missing-gap-style="unshaded" data-missing-range-count={history24.data.missing_ranges.length}><ResponsiveContainer width="100%" height="100%"><AreaChart title={`Saved power over ${dashboardRangeLabel.toLowerCase()}`} desc="Saved sensor power. Missing readings render as unshaded breaks in the line." data={chartData} margin={{ top: 16, right: 12, bottom: 8, left: 8 }}><defs><linearGradient id="powerFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#65e692" stopOpacity={0.48} /><stop offset="100%" stopColor="#65e692" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" minTickGap={70} interval="preserveStartEnd" tickFormatter={(value: number) => chartTick(value, dashboardDays * 24, displayTimezone)} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} tickFormatter={powerAxis.tick} axisLine={false} tickLine={false} width={powerAxis.width} /><Tooltip content={<UsageTooltip timezone={displayTimezone} />} /><Area type="monotone" dataKey="valueKw" stroke="#65e692" strokeWidth={2} fill="url(#powerFill)" connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom saved power History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#151d1a" tickFormatter={() => ''} onChange={(range) => { if (typeof range.startIndex === 'number' && typeof range.endIndex === 'number') setPowerBrushRange({ key: powerBrushKey, startIndex: range.startIndex, endIndex: range.endIndex }); }} /></AreaChart></ResponsiveContainer></div> : <EmptyState title="No readings were received during this time." detail="Choose another time range or check the sensor connection." />}
+        <div className="chart-footer"><Clock3 aria-hidden="true" /><span className="chart-footer-range" data-testid="power-selected-range">{dateTimeRange(new Date(powerRangeStart).toISOString(), new Date(powerRangeEnd).toISOString(), displayTimezone)}</span>{history24.data && <span className="chart-footer-coverage">{percent(history24.data.completeness === null ? null : Number(history24.data.completeness))} reading coverage · {history24.data.missing_ranges.length} gap{history24.data.missing_ranges.length === 1 ? '' : 's'}</span>}</div>
       </Card>}
       {visibleCards.has('energy') && <Card title="Daily Energy (kWh)" eyebrow="Saved service-branch totals" action={<span className="select-chip">{dashboardRangeLabel}</span>} className="dashboard-chart-card dashboard-daily-energy">
-        {daily.isLoading ? <Loading label="Loading daily energy" /> : daily.isError ? <ErrorState error={daily.error} /> : daily.data && dailyData.length > 0 ? <div className="chart-wrap" data-testid="daily-chart"><ResponsiveContainer width="100%" height="100%"><BarChart title={`Saved daily energy over ${dashboardRangeLabel.toLowerCase()}`} desc="Saved daily energy from sensors confirmed not to overlap." data={dailyData} margin={{ top: 16, right: 8, bottom: 8, left: 8 }}><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" minTickGap={45} interval="preserveStartEnd" tickFormatter={(value: number) => dailyTick(value, displayTimezone)} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} tickFormatter={energyAxis.tick} axisLine={false} tickLine={false} width={energyAxis.width} /><Tooltip content={<UsageTooltip timezone={displayTimezone} unit="kWh" />} /><Bar dataKey="value" fill="#65d98b" radius={[5, 5, 0, 0]} maxBarSize={32} isAnimationActive={false} /></BarChart></ResponsiveContainer></div> : <EmptyState title="No saved energy yet" detail="Daily totals appear after saved sensor readings reach the server." />}
-        <div className="dashboard-energy-total"><span>Total</span><strong>{numeric(daily.data?.energy_kwh === null || daily.data?.energy_kwh === undefined ? null : Number(daily.data.energy_kwh), 'kWh')}</strong></div>
+        {daily.isLoading && !hasServerDailyComparisons ? <Loading label="Loading daily energy" /> : daily.isError && !hasServerDailyComparisons ? <ErrorState error={daily.error} /> : dailyData.length > 0 ? <div className="chart-wrap" data-testid="daily-chart" data-day-count={dailyData.length} data-day-source={hasServerDailyComparisons ? 'calendar-summaries' : 'history-buckets'}><ResponsiveContainer width="100%" height="100%"><BarChart title={hasServerDailyComparisons ? 'Saved energy for yesterday and today' : `Saved daily energy over ${dashboardRangeLabel.toLowerCase()}`} desc="Saved daily energy from sensors confirmed not to overlap. Reading coverage remains visible and missing readings are not treated as zero." data={dailyData} margin={{ top: 16, right: 8, bottom: 8, left: 8 }}><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" minTickGap={45} interval="preserveStartEnd" tickFormatter={(value: number) => dailyTick(value, displayTimezone)} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} tickFormatter={energyAxis.tick} axisLine={false} tickLine={false} width={energyAxis.width} /><Tooltip content={<UsageTooltip timezone={displayTimezone} unit="kWh" />} /><Bar dataKey="value" fill="#65d98b" radius={[5, 5, 0, 0]} maxBarSize={32} isAnimationActive={false} /></BarChart></ResponsiveContainer></div> : <EmptyState title="No saved energy yet" detail="Daily totals appear after saved sensor readings reach the server." />}
+        <div className="dashboard-energy-total"><span>{hasServerDailyComparisons ? 'Yesterday + today' : 'Total'}</span><strong>{numeric(dailyTotal === null || dailyTotal === undefined ? null : Number(dailyTotal), 'kWh')}</strong></div>
       </Card>}
       <aside className="dashboard-side-stack">
         <Card title="Recent Activity / Commands" className="dashboard-command-card">

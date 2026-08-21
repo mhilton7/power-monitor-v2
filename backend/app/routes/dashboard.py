@@ -925,6 +925,7 @@ async def home_dashboard(
         }
     return {
         "generated_at": now,
+        "timezone": timezone,
         "devices": output_devices,
         "summaries": summaries,
         "current_rate": current_rate,

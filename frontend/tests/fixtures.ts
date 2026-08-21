@@ -17,6 +17,7 @@ export const session = {
 };
 
 export const home = {
+  timezone: 'America/Los_Angeles',
   devices: [{
     id: 'device-main', friendly_name: 'Main Panel Sensor', state: 'live',
     measurement: { voltage_v: 122.6, current_a: 20.2, active_power_w: 2480, frequency_hz: 60.01, power_factor: 0.97, measured_at: '2026-08-13T17:32:10Z', pzem_status: 'ok' },
@@ -24,7 +25,9 @@ export const home = {
   }],
   summaries: {
     today: { energy_kwh: 18.74, cost: '3.21', completeness: .99, missing_intervals: 2 },
+    yesterday: { energy_kwh: 19.7, cost: '3.10', completeness: .995, missing_intervals: 1 },
     week: { energy_kwh: 118.2, cost: '18.67', completeness: .97, missing_intervals: 19 },
+    last_week: { energy_kwh: 116.4, cost: '18.11', completeness: .98, missing_intervals: 8 },
     billing_cycle: { energy_kwh: 392.8, cost: '62.48', completeness: .96, missing_intervals: 55 },
     month: { energy_kwh: 401.1, cost: '64.10', completeness: .96 },
   },
@@ -59,17 +62,38 @@ export const firmwareReleases = {
   releases: [{
     schema: 'pm-ota-manifest/1.0.0', release_id: '00000000-0000-0000-0000-000000000030', semantic_version: '1.2.4', build_number: 851,
     project_name: 'power-monitor-sensor-headless', target_chip: 'esp32s3', board_profile: 'esp32-s3-devkitc-n16r8-reference/1', minimum_boot_version: 1, minimum_protocol: 'pm-protocol/1.0.0', minimum_config_version: 1,
-    image_size: 1_048_576, sha256: 'b'.repeat(64), candidate: true, artifact_available: true, upload_status: 'uploaded', validation_status: 'ready', release_notes: 'Candidate release for staged validation.', physical_certification: 'pending',
+    image_size: 1_048_576, sha256: 'b'.repeat(64), firmware_build_id: 'c'.repeat(64), candidate: true, artifact_available: true, upload_status: 'uploaded', validation_status: 'ready', release_notes: 'Candidate release for staged validation.', physical_certification: 'pending',
     release_state: 'available', archived_at: null, deleted_at: null, artifact_deleted_at: null, rollback_pinned: false, deployment_count: 2, active_deployment_count: 0, sensor_reported_count: 0, deploy_eligible: true, archive_eligible: true, restore_eligible: false, delete_eligibility: { eligible: true, protection_reasons: [] },
     deployment_batches: [{
       id: '00000000-0000-0000-0000-000000000031', release_id: '00000000-0000-0000-0000-000000000030', target_version: '1.2.4', rollout: 'staged', state: 'partial', targeted: 2, succeeded: 1, failed: 1, pending: 0,
       result_state: 'partial', deployment_state: 'partial', archived_at: null, deleted_at: null, troubleshooting_hold: false, archive_eligible: true, restore_eligible: false, delete_eligibility: { eligible: false, protection_reasons: ['archive_required_before_deletion'] }, created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:10:00Z', completed_at: '2026-08-13T17:10:00Z',
       jobs: [
-        { id: '00000000-0000-0000-0000-000000000032', device_id: 'device-main', device_name: 'Indoor-AC', previous_version: '1.2.3', current_version: '1.2.4', target_version: '1.2.4', target_build: 851, state: 'succeeded', attempt_state: 'updated', progress_percent: 100, attempt: 1, error_code: null, error_message: null, created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:08:00Z', completed_at: '2026-08-13T17:08:00Z', confirmation_heartbeat_at: '2026-08-13T17:08:00Z', reported_firmware_after_reboot: '1.2.4', retry_eligible: false, cancel_eligible: false },
-        { id: '00000000-0000-0000-0000-000000000033', device_id: 'device-outdoor', device_name: 'Outdoor-AC', previous_version: '1.2.3', current_version: '1.2.3', target_version: '1.2.4', target_build: 851, state: 'failed', attempt_state: 'failed', progress_percent: 0, attempt: 1, error_code: 'OTA_VERSION_NOT_CONFIRMED', error_message: 'Outdoor-AC reconnected on 1.2.3 instead of 1.2.4', created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:10:00Z', completed_at: '2026-08-13T17:10:00Z', confirmation_heartbeat_at: null, reported_firmware_after_reboot: '1.2.3', retry_eligible: true, cancel_eligible: false },
+        { id: '00000000-0000-0000-0000-000000000032', device_id: 'device-main', device_name: 'Indoor-AC', previous_version: '1.2.3', current_version: '1.2.4', target_version: '1.2.4', target_build: 851, target_firmware_build_id: 'c'.repeat(64), state: 'succeeded', attempt_state: 'updated', progress_percent: 100, attempt: 1, error_code: null, error_message: null, created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:08:00Z', completed_at: '2026-08-13T17:08:00Z', confirmation_heartbeat_at: '2026-08-13T17:08:00Z', reported_firmware_after_reboot: '1.2.4', reported_firmware_build_id_after_reboot: 'c'.repeat(64), retry_eligible: false, cancel_eligible: false },
+        { id: '00000000-0000-0000-0000-000000000033', device_id: 'device-outdoor', device_name: 'Outdoor-AC', previous_version: '1.2.3', current_version: '1.2.3', target_version: '1.2.4', target_build: 851, target_firmware_build_id: 'c'.repeat(64), state: 'failed', attempt_state: 'failed', progress_percent: 0, attempt: 1, error_code: 'OTA_VERSION_NOT_CONFIRMED', error_message: 'Outdoor-AC reconnected on 1.2.3 instead of 1.2.4', created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:10:00Z', completed_at: '2026-08-13T17:10:00Z', confirmation_heartbeat_at: null, reported_firmware_after_reboot: '1.2.3', reported_firmware_build_id_after_reboot: 'd'.repeat(64), retry_eligible: true, cancel_eligible: false },
       ],
     }],
   }],
+  reconciliation: {
+    strategy: 'explicit_state_and_artifact_evidence',
+    inconsistent_release_ids: [],
+    silent_deletion_performed: false,
+    artifact_quarantines: {
+      apply: false,
+      restored_release_ids: [],
+      purged_release_ids: [],
+      purged_unknown_upload_release_ids: [],
+      promoted_upload_release_ids: [],
+      collision_release_ids: [],
+      corrupt_artifact_release_ids: [],
+      unknown_release_ids: [],
+      orphan_final_release_ids: [],
+      orphan_temp_release_ids: [],
+      deferred_recovery_release_ids: [],
+      recovery_grace_seconds: 30,
+      unsafe_entries: [],
+      attention_required: false,
+    },
+  },
 };
 
 export const firmwareLifecycleSettings = {
@@ -231,7 +255,7 @@ export const sceRateCatalog = {
 };
 
 export const systemHealth = {
-  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.23', protocol: 'pm-protocol/1.0.0', database: 'reachable',
+  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.24', protocol: 'pm-protocol/1.0.0', database: 'reachable',
   sensors: [{ device_id: 'device-main', state: 'online', heartbeat_age_seconds: 5, pzem_status: 'ok', telemetry_protocol: 'direct_https', server_delivery_status: 'received', last_server_received_at: '2026-08-13T17:32:11Z', last_sensor_sampled_at: '2026-08-13T17:32:10Z', sensor_time_trusted: true }],
   open_alert_count: 1, last_rate_sync: { id: 'rate-run-old', state: 'review_required', event_code: 'RATE_SOURCE_SNAPSHOT_CAPTURED', completed_at: '2026-08-13T16:00:00Z' },
   backup: {}, restore_test: {}, physical_hardware_certification: 'pending',

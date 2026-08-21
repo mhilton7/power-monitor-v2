@@ -100,6 +100,7 @@ async def test_device_presentation_and_monitoring_settings_are_scoped_and_audite
 
     dashboard = await owner_client.get("/api/v1/home", params={"home_id": home_id})
     assert dashboard.status_code == 200, dashboard.text
+    assert dashboard.json()["timezone"] == "America/Los_Angeles"
     assert all(row["id"] != device_id for row in dashboard.json()["devices"])
 
     async with session_factory() as session:

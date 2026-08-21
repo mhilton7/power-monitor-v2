@@ -372,6 +372,24 @@
 .dashboard-chart-card .chart-wrap { height: 228px; }
 .dashboard-chart-card .empty-state { min-height: 228px; }
 
+.dashboard-power-history .chart-footer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  justify-content: stretch;
+  text-align: left;
+}
+
+.dashboard-power-history .chart-footer-range {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-power-history .chart-footer-coverage {
+  margin-left: 0;
+  white-space: nowrap;
+  text-align: right;
+}
+
 .dashboard-energy-total {
   min-height: 28px;
   display: flex;
@@ -612,6 +630,8 @@
   .dashboard-sensor-action { grid-column: 3; }
   .dashboard-chart-card { min-height: 348px; }
   .dashboard-chart-card .chart-wrap { height: 250px; }
+  .dashboard-power-history .chart-footer { grid-template-columns: auto minmax(0, 1fr); }
+  .dashboard-power-history .chart-footer-coverage { grid-column: 1 / -1; text-align: left; }
   .dashboard-side-stack { grid-template-columns: 1fr; }
   .dashboard-command-grid button,
   .dashboard-command-grid a { min-height: 66px; }

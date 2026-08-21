@@ -1,4 +1,4 @@
-import { browserTimezone, chartAxisFormat, dateTime, resolveDisplayTimezone } from '../src/lib/format';
+import { browserTimezone, chartAxisFormat, dateTime, dateTimeRange, resolveDisplayTimezone } from '../src/lib/format';
 
 describe('display formatting', () => {
   it('honors an explicit timezone before browser and home fallbacks', () => {
@@ -10,6 +10,13 @@ describe('display formatting', () => {
   it('formats Pacific winter and summer instants with the correct DST abbreviation', () => {
     expect(dateTime('2026-01-15T20:00:00Z', 'America/Los_Angeles')).toContain('PST');
     expect(dateTime('2026-08-15T20:00:00Z', 'America/Los_Angeles')).toContain('PDT');
+  });
+
+  it('formats a compact selected chart range without repeating full timestamps', () => {
+    const range = dateTimeRange('2026-08-13T10:00:00Z', '2026-08-13T22:00:00Z', 'America/Los_Angeles');
+    expect(range).toContain('PDT');
+    expect(range).toContain('Aug 13');
+    expect(range).not.toContain('2026');
   });
 
   it('measures enough y-axis space for readable power and energy units', () => {

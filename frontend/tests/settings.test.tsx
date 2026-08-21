@@ -6,6 +6,16 @@ import { apiResponse, device, firmwareReleases, homeUtility, systemHealth } from
 import { installFetchMock, renderWithProviders } from './render';
 
 describe('Settings', () => {
+  it('accepts additive OTA build identity and artifact reconciliation evidence', async () => {
+    installFetchMock(apiResponse);
+    renderWithProviders(<SettingsPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Firmware' }));
+    expect(await screen.findByText('1.2.4 · build 851')).toBeInTheDocument();
+    expect(screen.getByText('Lifecycle reconciliation report')).toBeInTheDocument();
+    expect(screen.queryByText('Unable to load this view')).not.toBeInTheDocument();
+  });
+
   it('enrolls the first sensor with the only authorized home scope', async () => {
     const homeId = '00000000-0000-0000-0000-000000000010';
     let enrollment: Record<string, unknown> | undefined;
