@@ -10,10 +10,8 @@ import { HeartbeatAge } from './HeartbeatAge';
 import { ConfirmDialog, Dialog, Notice, StatusPill } from './ui';
 
 function deliveryLabel(device: DeviceDetail) {
-  if (device.server_delivery_status) return device.server_delivery_status.replaceAll('_', ' ');
-  if (device.last_server_received_at) return 'Received by server';
-  if (device.heartbeat_at) return 'Waiting for a reading';
-  return 'Not connected';
+  const status = device.server_delivery_status ?? device.synchronization?.server_delivery_status;
+  return status ? status.replaceAll('_', ' ') : 'Not reported by the server';
 }
 
 export function SensorDrawer({ device, open, onClose }: { device: DeviceDetail | undefined; open: boolean; onClose: () => void }) {
@@ -27,6 +25,9 @@ export function SensorDrawer({ device, open, onClose }: { device: DeviceDetail |
   const configure = useMutation({ mutationFn: (payload: { friendly_name?: string; location?: string | null; notes?: string | null; display_order?: number; include_in_aggregate?: boolean; show_on_dashboard?: boolean; monitoring_enabled?: boolean; measurement_scope?: string; measurement_scope_confirmation?: string }) => api.updateDevice(device?.id ?? '', payload), onSuccess: () => { setConfigureOpen(false); setScopeDraft(''); void queryClient.invalidateQueries({ queryKey: ['devices'] }); void queryClient.invalidateQueries({ queryKey: ['home'] }); } });
   const revoke = useMutation({ mutationFn: () => api.revokeDevice(device?.id ?? ''), onSuccess: () => { setRevokeOpen(false); onClose(); void queryClient.invalidateQueries({ queryKey: ['devices'] }); void queryClient.invalidateQueries({ queryKey: ['home'] }); } });
   if (!device) return null;
+  const lastReceivedAt = device.last_server_received_at ?? device.synchronization?.last_server_received_at;
+  const lastSampledAt = device.last_sensor_sampled_at ?? device.synchronization?.last_sensor_sampled_at;
+  const sensorTimeTrusted = device.sensor_time_trusted ?? device.synchronization?.sensor_time_trusted;
 
   function submitConfiguration(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -46,8 +47,8 @@ export function SensorDrawer({ device, open, onClose }: { device: DeviceDetail |
       <div className="detail-grid">
         <section><h3><Cpu aria-hidden="true" /> Sensor</h3><dl><div><dt>Location</dt><dd>{device.location ?? 'Not set'}</dd></div><div><dt>Firmware</dt><dd>{device.firmware_version ?? 'Not available'}</dd></div><div><dt>Meter</dt><dd>{device.pzem_variant}</dd></div><div><dt>Last restart</dt><dd>{device.last_reboot_reason ?? 'Not available'}</dd></div></dl></section>
         <section><h3><Wifi aria-hidden="true" /> Connection</h3><dl><div><dt>Wi-Fi</dt><dd>{device.heartbeat_at ? 'Connected' : 'Not connected'}</dd></div><div><dt>Signal</dt><dd>{numeric(device.wifi_rssi, 'dBm', 0)}</dd></div><div><dt>IP address</dt><dd>{device.ip_address ?? 'Not available'}</dd></div></dl></section>
-        <section><h3><Activity aria-hidden="true" /> Measurement</h3><dl><div><dt>Meter state</dt><dd>{device.pzem_status}</dd></div><div><dt>CT rating</dt><dd>{numeric(device.ct_rating_a === null ? null : Number(device.ct_rating_a), 'A', 0)}</dd></div><div><dt>Total energy</dt><dd>{numeric(device.cumulative_energy_kwh ?? null, 'kWh', 3)}</dd></div><div><dt>Sample time trusted</dt><dd>{device.sensor_time_trusted === undefined || device.sensor_time_trusted === null ? 'Not reported' : device.sensor_time_trusted ? 'Yes' : 'No'}</dd></div></dl></section>
-        <section><h3><Server aria-hidden="true" /> Server delivery</h3><dl><div><dt>Status</dt><dd>{deliveryLabel(device)}</dd></div><div><dt>Last received</dt><dd><HeartbeatAge timestamp={device.last_server_received_at ?? null} /></dd></div><div><dt>Last measured</dt><dd><HeartbeatAge timestamp={device.last_sensor_sampled_at ?? null} /></dd></div></dl></section>
+        <section><h3><Activity aria-hidden="true" /> Measurement</h3><dl><div><dt>Meter state</dt><dd>{device.pzem_status}</dd></div><div><dt>CT rating</dt><dd>{numeric(device.ct_rating_a === null ? null : Number(device.ct_rating_a), 'A', 0)}</dd></div><div><dt>Total energy</dt><dd>{numeric(device.cumulative_energy_kwh ?? null, 'kWh', 3)}</dd></div><div><dt>Sample time trusted</dt><dd>{sensorTimeTrusted === undefined || sensorTimeTrusted === null ? 'Not reported' : sensorTimeTrusted ? 'Yes' : 'No'}</dd></div></dl></section>
+        <section><h3><Server aria-hidden="true" /> Server delivery</h3><dl><div><dt>Status</dt><dd>{deliveryLabel(device)}</dd></div><div><dt>Last received</dt><dd><HeartbeatAge timestamp={lastReceivedAt ?? null} /></dd></div><div><dt>Last measured</dt><dd><HeartbeatAge timestamp={lastSampledAt ?? null} /></dd></div></dl></section>
         <section><h3><Activity aria-hidden="true" /> Device memory</h3><dl><div><dt>Available memory</dt><dd>{bytes(device.free_internal_heap)}</dd></div><div><dt>Largest available block</dt><dd>{bytes(device.largest_internal_block)}</dd></div></dl></section>
         <section><h3><UploadCloud aria-hidden="true" /> Firmware update</h3><dl><div><dt>Last action</dt><dd>{device.last_command ? `${device.last_command.type.replaceAll('_', ' ')} · ${device.last_command.state}` : 'None'}</dd></div><div><dt>Progress</dt><dd>{device.last_command ? `${device.last_command.progress_percent}%` : 'Not available'}</dd></div><div><dt>Result</dt><dd>{device.last_command?.result_code ?? 'Not reported'}</dd></div></dl></section>
       </div>

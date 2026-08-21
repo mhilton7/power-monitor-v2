@@ -38,7 +38,7 @@ describe('Normal user-facing language', () => {
     expect(screen.getByRole('heading', { name: 'Current Billing Cycle' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Tier Breakdown' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Cost Summary' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'SCE rate update' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Manage billing settings' })).toHaveAttribute('href', '/settings?section=rates');
     expectPlainLanguage();
   });
 

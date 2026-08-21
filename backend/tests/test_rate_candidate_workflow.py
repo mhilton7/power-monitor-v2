@@ -2353,7 +2353,9 @@ async def test_scheduled_sync_projects_one_network_result_to_each_home(
         "https://www.sce.com/save-money/rates-financing/residential-rate-plans/tou-d-4-9"
     )
     catalog_root = (
-        f'<html><body><a href="{catalog_detail_url}">TOU-D 4 PM to 9 PM</a></body></html>'
+        "<html><body><main><h2>TOU-D 4 PM to 9 PM</h2>"
+        f'<a href="{catalog_detail_url}">TOU-D 4 PM to 9 PM</a>'
+        "</main></body></html>"
     ).encode()
 
     async def fetch_once(url: str, **_kwargs: object):  # type: ignore[no-untyped-def]

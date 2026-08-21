@@ -1302,3 +1302,98 @@ def test_catalog_lifecycle_revision_refuses_account_tier_threshold_loss(
     finally:
         get_settings.cache_clear()
         database.unlink(missing_ok=True)
+
+
+def test_billing_configuration_migration_preserves_existing_account_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = ROOT / ".test-runtime" / f"billing-settings-{uuid.uuid4().hex}.sqlite3"
+    async_url = _sqlite_url(database, async_driver=True)
+    sync_url = _sqlite_url(database, async_driver=False)
+    monkeypatch.setenv("PM_ENV", "test")
+    monkeypatch.setenv("PM_DATABASE_URL", async_url)
+    get_settings.cache_clear()
+    config = _config()
+    try:
+        command.upgrade(config, "20260820_0018")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO homes (id, name, timezone, created_at) VALUES "
+                        "('billing-settings-home', 'Preserved home', "
+                        "'America/Los_Angeles', CURRENT_TIMESTAMP)"
+                    )
+                )
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO utility_accounts "
+                        "(id, home_id, utility_name, timezone, billing_day, cost_scope, "
+                        "baseline_allocation_kwh, cca_provider) VALUES "
+                        "('billing-settings-account', 'billing-settings-home', "
+                        "'Southern California Edison', 'America/Los_Angeles', 17, "
+                        "'full_account', 579.0, 'Clean Power Alliance')"
+                    )
+                )
+        finally:
+            engine.dispose()
+
+        command.upgrade(config, "head")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                row = connection.execute(
+                    sa.text(
+                        "SELECT billing_day, cost_scope, baseline_allocation_kwh, cca_provider, "
+                        "currency, generation_service_kind, estimate_high_coverage, "
+                        "estimate_min_coverage, max_estimatable_gap_seconds "
+                        "FROM utility_accounts WHERE id = 'billing-settings-account'"
+                    )
+                ).one()
+                assert row.billing_day == 17
+                assert row.cost_scope == "full_account"
+                assert Decimal(str(row.baseline_allocation_kwh)) == Decimal("579")
+                assert row.cca_provider == "Clean Power Alliance"
+                assert row.currency == "USD"
+                assert row.generation_service_kind == "cca"
+                assert Decimal(str(row.estimate_high_coverage)) == Decimal("0.99")
+                assert Decimal(str(row.estimate_min_coverage)) == Decimal("0.95")
+                assert row.max_estimatable_gap_seconds == 900
+        finally:
+            engine.dispose()
+
+        # Untouched legacy values can return to the prior revision.
+        command.downgrade(config, "20260820_0018")
+        command.upgrade(config, "head")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    sa.text(
+                        "UPDATE utility_accounts SET estimate_high_coverage = 0.98 "
+                        "WHERE id = 'billing-settings-account'"
+                    )
+                )
+        finally:
+            engine.dispose()
+        with pytest.raises(RuntimeError, match="billing configuration would be lost"):
+            command.downgrade(config, "20260820_0018")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == (
+                    "20260821_0019"
+                )
+                retained = connection.scalar(
+                    sa.text(
+                        "SELECT estimate_high_coverage FROM utility_accounts "
+                        "WHERE id = 'billing-settings-account'"
+                    )
+                )
+                assert Decimal(str(retained)) == Decimal("0.98")
+        finally:
+            engine.dispose()
+    finally:
+        get_settings.cache_clear()
+        database.unlink(missing_ok=True)

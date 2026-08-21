@@ -371,6 +371,9 @@
 
 .dashboard-chart-card .chart-wrap { height: 228px; }
 .dashboard-chart-card .empty-state { min-height: 228px; }
+.dashboard-chart-card .chart-actions { display: flex; align-items: center; gap: 10px; }
+.dashboard-chart-card .chart-actions .text-button { padding: 6px 2px; white-space: nowrap; }
+.dashboard-chart-card .chart-helper { margin: -8px 0 4px; font-size: .68rem; }
 
 .dashboard-power-history .chart-footer {
   display: grid;

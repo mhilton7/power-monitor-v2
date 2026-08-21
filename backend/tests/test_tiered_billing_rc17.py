@@ -1,6 +1,14 @@
 from decimal import Decimal
 
-from backend.app.services.tiered_billing import TieredCost, billing_projection, tiered_cost
+from backend.app.services.tiered_billing import (
+    EnergyQuality,
+    TieredCost,
+    billing_calculation_state,
+    billing_projection,
+    estimate_confidence,
+    tier_state_for_quality,
+    tiered_cost,
+)
 
 TIER_1_RATE = Decimal("0.30863")
 TIER_2_RATE = Decimal("0.40962")
@@ -93,8 +101,106 @@ def test_projection_confidence_discloses_unresolved_energy() -> None:
         unresolved_counter_resets=1,
         unresolved_connection_gaps=1,
     )
-    assert projected["confidence"] == "limited"
+    assert projected["status"] == "insufficient_data"
+    assert projected["confidence"] is None
     reasons = projected["confidence_reasons"]
     assert isinstance(reasons, list)
     assert "unresolved_counter_reset" in reasons
-    assert "unresolved_connection_gap" in reasons
+
+
+def test_high_coverage_short_estimate_is_distinct_and_can_confirm_a_tier() -> None:
+    quality = EnergyQuality(
+        measured_kwh=Decimal("59.81"),
+        recovered_kwh=Decimal("0.17"),
+        estimated_kwh=Decimal("0.04"),
+        estimate_lower_kwh=Decimal("0.03"),
+        estimate_upper_kwh=Decimal("0.05"),
+        unknown_gap_count=0,
+        unknown_gap_seconds=0,
+        estimation_methods=("short_gap_neighbor_interpolation",),
+    )
+    confidence, reasons = estimate_confidence(
+        reading_coverage=Decimal("0.9942"),
+        quality=quality,
+    )
+    assert confidence == "high"
+    assert "estimated_by_short_gap_neighbor_interpolation" in reasons
+    assert quality.saved_usage_kwh == Decimal("59.98")
+    assert quality.current_usage_kwh == Decimal("60.02")
+    assert tier_state_for_quality(quality=quality, threshold_kwh=Decimal("579")) == (
+        "estimated_tier_1"
+    )
+
+
+def test_recovered_total_is_exact_for_tiered_billing_despite_chart_gap() -> None:
+    quality = EnergyQuality(
+        measured_kwh=Decimal("59.81"),
+        recovered_kwh=Decimal("0.21"),
+        estimated_kwh=Decimal("0"),
+        estimate_lower_kwh=Decimal("0"),
+        estimate_upper_kwh=Decimal("0"),
+        unknown_gap_count=0,
+        unknown_gap_seconds=0,
+    )
+    confidence, reasons = estimate_confidence(
+        reading_coverage=Decimal("0.80"),
+        quality=quality,
+    )
+    assert confidence == "high"
+    assert "cumulative_meter_energy_recovered" in reasons
+    assert tier_state_for_quality(quality=quality, threshold_kwh=Decimal("60")) == "tier_2"
+
+
+def test_unknown_energy_or_reset_fails_closed() -> None:
+    unknown = EnergyQuality(
+        measured_kwh=Decimal("578.9"),
+        recovered_kwh=Decimal("0"),
+        estimated_kwh=Decimal("0"),
+        estimate_lower_kwh=Decimal("0"),
+        estimate_upper_kwh=Decimal("0"),
+        unknown_gap_count=1,
+        unknown_gap_seconds=600,
+    )
+    confidence, reasons = estimate_confidence(
+        reading_coverage=Decimal("0.999"),
+        quality=unknown,
+    )
+    assert confidence == "insufficient"
+    assert reasons == ["unknown_gap_energy"]
+    assert tier_state_for_quality(quality=unknown, threshold_kwh=Decimal("579")) == (
+        "not_confirmed"
+    )
+    reset_confidence, reset_reasons = estimate_confidence(
+        reading_coverage=Decimal("1"),
+        quality=EnergyQuality(
+            measured_kwh=Decimal("10"),
+            recovered_kwh=Decimal("0"),
+            estimated_kwh=Decimal("0"),
+            estimate_lower_kwh=Decimal("0"),
+            estimate_upper_kwh=Decimal("0"),
+            unknown_gap_count=0,
+            unknown_gap_seconds=0,
+        ),
+        unresolved_counter_resets=1,
+    )
+    assert reset_confidence == "insufficient"
+    assert reset_reasons == ["unresolved_counter_reset"]
+
+
+def test_tou_unallocated_gap_cost_is_partial_never_exact() -> None:
+    assert (
+        billing_calculation_state(
+            has_blocking_reason=False,
+            has_estimated_energy=False,
+            tou_gap_unallocated=True,
+        )
+        == "partial"
+    )
+    assert (
+        billing_calculation_state(
+            has_blocking_reason=True,
+            has_estimated_energy=True,
+            tou_gap_unallocated=True,
+        )
+        == "unavailable"
+    )

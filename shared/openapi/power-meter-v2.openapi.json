@@ -1057,6 +1057,17 @@
       "HomeUtilityUpdateRequest": {
         "additionalProperties": false,
         "properties": {
+          "all_electric": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "All Electric"
+          },
           "allocated_account_confirmation": {
             "anyOf": [
               {
@@ -1084,6 +1095,18 @@
             ],
             "title": "Baseline Allocation Kwh"
           },
+          "baseline_region": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Region"
+          },
           "billing_day": {
             "anyOf": [
               {
@@ -1096,6 +1119,24 @@
               }
             ],
             "title": "Billing Day"
+          },
+          "billing_history_interval_seconds": {
+            "anyOf": [
+              {
+                "enum": [
+                  15,
+                  30,
+                  60,
+                  300,
+                  900
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing History Interval Seconds"
           },
           "cca_provider": {
             "anyOf": [
@@ -1125,6 +1166,50 @@
             ],
             "title": "Cost Scope"
           },
+          "currency": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Z]{3}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "estimate_high_coverage": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimate High Coverage"
+          },
+          "estimate_min_coverage": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimate Min Coverage"
+          },
           "full_account_confirmation": {
             "anyOf": [
               {
@@ -1136,6 +1221,34 @@
               }
             ],
             "title": "Full Account Confirmation"
+          },
+          "generation_service_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sce_generation",
+                  "cca",
+                  "direct_access",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Service Kind"
+          },
+          "heat_pump_allocation": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heat Pump Allocation"
           },
           "home_name": {
             "anyOf": [
@@ -1150,6 +1263,58 @@
             ],
             "title": "Home Name"
           },
+          "max_estimatable_gap_seconds": {
+            "anyOf": [
+              {
+                "maximum": 86400.0,
+                "minimum": 60.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Estimatable Gap Seconds"
+          },
+          "medical_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Medical Baseline"
+          },
+          "projection_minimum_hours": {
+            "anyOf": [
+              {
+                "maximum": 720.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projection Minimum Hours"
+          },
+          "summer_baseline_kwh_per_day": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summer Baseline Kwh Per Day"
+          },
           "timezone": {
             "anyOf": [
               {
@@ -1162,6 +1327,21 @@
               }
             ],
             "title": "Timezone"
+          },
+          "winter_baseline_kwh_per_day": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winter Baseline Kwh Per Day"
           }
         },
         "title": "HomeUtilityUpdateRequest",
@@ -2387,7 +2567,7 @@
   },
   "info": {
     "title": "PowerMeter V2 API",
-    "version": "0.1.0-rc.24"
+    "version": "0.1.0-rc.25"
   },
   "openapi": "3.1.0",
   "paths": {

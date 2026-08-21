@@ -6,6 +6,8 @@ test.beforeEach(async ({ page }) => { await mockApi(page); });
 
 test('rate-only PDF review excludes prohibited bill usage and comparison surfaces', async ({ page }) => {
   await page.goto('/billing');
+  await expect(page.getByRole('button', { name: 'Import rates from SCE bill PDF' })).toHaveCount(0);
+  await page.getByRole('link', { name: 'Manage billing settings' }).click();
   await page.getByRole('button', { name: 'Import rates from SCE bill PDF' }).click();
   await expect(page.getByRole('heading', { name: 'Rates and reusable cost rules only' })).toBeVisible();
   await expect(page.getByText(/No upload can create or change sensor readings/)).toBeVisible();
@@ -16,7 +18,7 @@ test('rate-only PDF review excludes prohibited bill usage and comparison surface
 });
 
 test('rate-source Check now and backup/system health evidence work', async ({ page }) => {
-  await page.goto('/billing');
+  await page.goto('/settings?section=rates');
   const checkRequest = page.waitForRequest((request) => request.url().includes('/rate-sources/check-now?'));
   await page.getByRole('button', { name: 'Check now' }).click();
   expect(new URL((await checkRequest).url()).searchParams.get('home_id')).toBe(homeScopes[0]!.id);

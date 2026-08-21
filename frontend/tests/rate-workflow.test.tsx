@@ -150,7 +150,7 @@ describe('exact-home SCE rate workflow', () => {
       }
       return apiResponse(path, method);
     });
-    renderWithProviders(<BillingPage />);
+    renderWithProviders(<BillingPage mode="settings" />);
 
     await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate update ${candidate.id}`) }));
     expect(screen.getByText(/Additional baseline evidence required/)).toBeInTheDocument();
@@ -176,7 +176,7 @@ describe('exact-home SCE rate workflow', () => {
       }
       return apiResponse(path, method);
     });
-    renderWithProviders(<BillingPage />);
+    renderWithProviders(<BillingPage mode="settings" />);
 
     expect(await screen.findByText(`${rateCandidate.source.name} · official_https · ${rateCandidate.source.url}`)).toBeInTheDocument();
     await userEvent.click(await screen.findByRole('button', { name: 'Check now' }));
@@ -194,7 +194,7 @@ describe('exact-home SCE rate workflow', () => {
       }
       return apiResponse(path, method);
     });
-    renderWithProviders(<BillingPage />);
+    renderWithProviders(<BillingPage mode="settings" />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Check now' }));
     expect(await screen.findByText(/The verified source is unchanged/)).toBeInTheDocument();
@@ -227,7 +227,7 @@ describe('exact-home SCE rate workflow', () => {
       }
       return apiResponse(path, method);
     });
-    renderWithProviders(<BillingPage />);
+    renderWithProviders(<BillingPage mode="settings" />);
 
     await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate update ${rateCandidate.id}`) }));
     await userEvent.type(screen.getByLabelText('Effective start date'), '2026-08-01');
@@ -266,7 +266,7 @@ describe('exact-home SCE rate workflow', () => {
       }
       return apiResponse(path, method);
     });
-    renderWithProviders(<BillingPage />);
+    renderWithProviders(<BillingPage mode="settings" />);
     await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate update ${rateCandidate.id}`) }));
 
     await userEvent.click(screen.getByRole('button', { name: 'Reject candidate' }));
@@ -298,7 +298,7 @@ describe('exact-home SCE rate workflow', () => {
       }
       return apiResponse(path, method);
     });
-    renderWithProviders(<BillingPage />);
+    renderWithProviders(<BillingPage mode="settings" />);
 
     await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate update ${rateCandidate.id}`) }));
     await userEvent.click(screen.getByRole('button', { name: 'Delete candidate' }));

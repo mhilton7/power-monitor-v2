@@ -418,6 +418,21 @@ def _public_decimal(raw: str, *, cents: bool) -> Decimal:
     return value.quantize(Decimal("0.00000001"))
 
 
+def _effective_date(text: str) -> str | None:
+    match = re.search(
+        r"(?:CURRENT\s+RATES?\s+AS\s+OF|RATES?\s+EFFECTIVE)\s+"
+        r"(?P<month>\d{1,2})/(?P<day>\d{1,2})/(?P<year>\d{2,4})",
+        text,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    year = int(match.group("year"))
+    if year < 100:
+        year += 2000
+    return f"{year:04d}-{int(match.group('month')):02d}-{int(match.group('day')):02d}"
+
+
 def _tier_price(text: str, tier: int) -> Decimal:
     match = re.search(
         rf"\bTIER\s*{tier}\b(?:(?!\bTIER\s*[12]\b).){{0,240}}?"
@@ -461,20 +476,7 @@ def _tiered_candidate(
         base_match.group("amount"),
         cents=base_match.group("dollar") is None and base_match.group("cents") is not None,
     )
-    effective_match = re.search(
-        r"CURRENT\s+RATES?\s+AS\s+OF\s+(?P<month>\d{1,2})/(?P<day>\d{1,2})/(?P<year>\d{2,4})",
-        text,
-        re.IGNORECASE,
-    )
-    effective_date = None
-    if effective_match is not None:
-        year = int(effective_match.group("year"))
-        if year < 100:
-            year += 2000
-        effective_date = (
-            f"{year:04d}-{int(effective_match.group('month')):02d}-"
-            f"{int(effective_match.group('day')):02d}"
-        )
+    effective_date = _effective_date(text)
     periods = [
         {
             "season": "all",
@@ -515,7 +517,7 @@ def _tiered_candidate(
         "holiday_rule": "not_applicable",
         "effective_start": effective_date,
         "effective_end": None,
-        "effective_date_confirmation_required": True,
+        "effective_date_confirmation_required": effective_date is None,
         "plans": [
             {
                 "rate_plan_name": "DOMESTIC",
@@ -692,6 +694,7 @@ def parse_sce_public_page(body: bytes, media_type: str) -> ParsedRateCandidate:
             }
         )
 
+    effective_date = _effective_date(text)
     normalized = {
         "schema": CANDIDATE_SCHEMA,
         "utility_name": "Southern California Edison",
@@ -704,9 +707,9 @@ def parse_sce_public_page(body: bytes, media_type: str) -> ParsedRateCandidate:
         "plan_classification": classification,
         "holiday_treatment": treatment,
         "holiday_rule": "weekend_rates",
-        "effective_start": None,
+        "effective_start": effective_date,
         "effective_end": None,
-        "effective_date_confirmation_required": True,
+        "effective_date_confirmation_required": effective_date is None,
         "plans": plans,
     }
     return ParsedRateCandidate(
@@ -722,7 +725,7 @@ def parse_sce_public_page(body: bytes, media_type: str) -> ParsedRateCandidate:
             "day_types": ["weekday", "weekend", "holiday"],
             "coverage": "complete",
             "price_unit": "USD/kWh",
-            "effective_date": "administrator_confirmation_required",
+            "effective_date": effective_date or "administrator_confirmation_required",
         },
     )
 

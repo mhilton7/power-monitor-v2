@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { api } from '../src/api';
 import { rateDraftSchema } from '../src/api/schemas';
@@ -27,8 +27,9 @@ describe('Billing rate-source boundary', () => {
     expect(screen.getByRole('heading', { name: 'Current Billing Cycle' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Tier Breakdown' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Cost Summary' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'SCE rate update' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Imported bill rates' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'SCE rate update' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Imported bill rates' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Manage billing settings' })).toHaveAttribute('href', '/settings?section=rates');
     expect(screen.getByText('SCE Domestic')).toBeInTheDocument();
     expect(screen.getAllByText('$0.30863/kWh')).toHaveLength(2);
     expect(screen.getAllByText('$0.40962/kWh')).toHaveLength(2);
@@ -36,13 +37,13 @@ describe('Billing rate-source boundary', () => {
     expect(screen.getByText('19.3 kWh per billing day')).toBeInTheDocument();
     expect(screen.getByText('Billing source: Main service')).toBeInTheDocument();
     expect(screen.getAllByText('Tier not confirmed').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/Complete reading coverage is required/)).toBeInTheDocument();
+    expect(screen.getByText(/Reading coverage alone does not block/)).toBeInTheDocument();
     expect(screen.getByText('Not enough data to estimate the full bill yet.')).toBeInTheDocument();
   });
 
   it('labels PDF upload as rate-only and has no historical bill comparison surface', async () => {
     const fetchMock = installFetchMock();
-    renderWithProviders(<BillingPage />);
+    renderWithProviders(<BillingPage mode="settings" />);
     await userEvent.click(await screen.findByRole('button', { name: 'Import rates from SCE bill PDF' }));
     expect(screen.getByRole('heading', { name: 'Rates and reusable cost rules only' })).toBeInTheDocument();
     expect(screen.getByText(/No upload can create or change sensor readings, intervals, History/)).toBeInTheDocument();
@@ -97,6 +98,44 @@ describe('Billing rate-source boundary', () => {
     expect(tierCard!.textContent).toContain('$0.00');
   });
 
+  it('accepts structured billing reasons and confirms a recovered or estimated tier below 100% reading coverage', async () => {
+    const current = billing.accounts[0]!.current_billing_cycle;
+    const cycle = {
+      ...current,
+      saved_usage_kwh: '0.17', current_usage_kwh: '99.42', reading_coverage: '0.9942', tier_state: 'estimated_tier_1',
+      measured_energy_kwh: '98', recovered_gap_energy_kwh: '1.12', estimated_missing_energy_kwh: '0.30',
+      estimated_missing_energy_lower_kwh: '0.20', estimated_missing_energy_upper_kwh: '0.40', unknown_energy_kwh: '0', unknown_gap_seconds: 0,
+      billing_adjustment_kwh: '9.99', unresolved_connection_gap_count: 0, calculation_state: 'estimated', confidence: 'moderate',
+      confidence_reasons: ['estimated_by_bounded_interpolation'],
+      availability_reasons: [{ code: 'estimated_missing_energy', message: 'Some energy is estimated from a bounded connection gap.', severity: 'warning' }],
+      tier_1_allowance_kwh: '598.3', tier_1_remaining_kwh: '498.88', amount_above_tier_1_kwh: '0',
+      tier_breakdown: {
+        tier_1: { usage_kwh: '99.42', allowance_kwh: '598.3', remaining_kwh: '498.88', rate_per_kwh: '0.30863', cost: '30.685975' },
+        tier_2: { usage_kwh: '0', starts_above_kwh: '598.3', rate_per_kwh: '0.40962', cost: '0' },
+        service_charge_to_date: '15.38', total_to_date: '46.065975', calculation_basis: 'estimated', cost_range: { lower: '45.90', upper: '46.20' },
+      },
+      energy_quality: { measured_kwh: '98', recovered_kwh: '1.12', estimated_kwh: '0.30', unknown_kwh: '0', unknown_gap_count: 0, unknown_gap_seconds: 0, estimation_methods: ['bounded_interpolation'], estimate_details: [], raw_history_modified: false },
+      cost_to_date: '46.065975', cost_range: { lower: '45.90', upper: '46.20' }, cost_basis: 'cycle_total', tou_unallocated_gap_energy_kwh: '0',
+    };
+    installFetchMock((path, method) => new URL(path, 'http://frontend.test').pathname.endsWith('/billing')
+      ? { status: 200, body: { ...billing, accounts: [{ ...billing.accounts[0]!, current_billing_cycle: cycle }] } }
+      : apiResponse(path, method));
+    renderWithProviders(<BillingPage />);
+
+    const cycleCard = (await screen.findByRole('heading', { name: 'Current Billing Cycle' })).closest<HTMLElement>('.card');
+    expect(cycleCard).not.toBeNull();
+    expect(within(cycleCard!).getByText('Estimated Tier 1')).toBeInTheDocument();
+    expect(cycleCard).toHaveTextContent('99.42 kWh');
+    expect(cycleCard).toHaveTextContent('98 kWh');
+    expect(cycleCard).toHaveTextContent('1.12 kWh');
+    expect(cycleCard).toHaveTextContent('0.3 kWh');
+    expect(cycleCard).not.toHaveTextContent('9.99 kWh');
+    expect(within(cycleCard!).getByText('Some energy is estimated from a bounded connection gap.')).toHaveAttribute('data-reason-code', 'estimated_missing_energy');
+    expect(screen.queryByText('Tier not confirmed')).not.toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Billing-cycle tier usage' })).toHaveAttribute('aria-valuenow', '99.42');
+    expect(screen.getByText(/Raw History modified: no/)).toBeInTheDocument();
+  });
+
   it('binds a rate-source PDF upload to the exact selected home UUID', async () => {
     let uploadedHomeId: FormDataEntryValue | null = null;
     installFetchMock((path, method, body) => {
@@ -146,7 +185,7 @@ describe('Billing rate-source boundary', () => {
       if (path.includes('/bill-rate-imports') && method === 'GET') return { status: 200, body: { extractions: [domesticDraft] } };
       return apiResponse(path, method);
     });
-    renderWithProviders(<BillingPage />);
+    renderWithProviders(<BillingPage mode="settings" />);
     await userEvent.click(await screen.findByRole('button', { name: /DOMESTIC/ }));
     expect(screen.getByText('seasonal tiered')).toBeInTheDocument();
     expect(screen.getByText('not applicable')).toBeInTheDocument();
@@ -177,7 +216,7 @@ describe('Billing rate-source boundary', () => {
       }
       return apiResponse(path, method);
     });
-    renderWithProviders(<BillingPage />);
+    renderWithProviders(<BillingPage mode="settings" />);
 
     await userEvent.click(await screen.findByRole('button', { name: /DOMESTIC/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Delete draft' }));

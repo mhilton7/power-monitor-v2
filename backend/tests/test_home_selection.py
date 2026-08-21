@@ -12,6 +12,7 @@ from backend.app.models import (
     Device,
     DeviceHeartbeat,
     Home,
+    HomeTelemetrySetting,
     RateAssignment,
     RatePeriod,
     RatePlan,
@@ -318,12 +319,38 @@ async def test_home_utility_auto_resolves_exactly_one_scope_for_get_and_patch(
 
     updated = await owner_client.patch(
         "/api/v1/settings/home-utility",
-        json={"billing_day": 7, "home_name": "  Main   House  "},
+        json={
+            "billing_day": 7,
+            "home_name": "  Main   House  ",
+            "currency": "USD",
+            "generation_service_kind": "cca",
+            "cca_provider": "Clean Power Alliance",
+            "baseline_region": "16",
+            "summer_baseline_kwh_per_day": "19.3",
+            "winter_baseline_kwh_per_day": "11.1",
+            "all_electric": True,
+            "medical_baseline": False,
+            "heat_pump_allocation": True,
+            "estimate_high_coverage": "0.99",
+            "estimate_min_coverage": "0.95",
+            "max_estimatable_gap_seconds": 900,
+            "billing_history_interval_seconds": 300,
+            "projection_minimum_hours": 24,
+        },
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["home"]["id"] == home_id
     assert updated.json()["home"]["name"] == "Main House"
     assert updated.json()["utility"]["billing_day"] == 7
+    assert updated.json()["billing_configuration_owner"] == "settings_rates_and_data_sources"
+    assert updated.json()["billing_configuration_writable"] is True
+    assert updated.json()["utility"]["generation_service_kind"] == "cca"
+    assert updated.json()["utility"]["cca_provider"] == "Clean Power Alliance"
+    assert Decimal(str(updated.json()["utility"]["summer_baseline_kwh_per_day"])) == Decimal("19.3")
+    assert Decimal(str(updated.json()["utility"]["estimate_min_coverage"])) == Decimal("0.95")
+    assert updated.json()["utility"]["max_estimatable_gap_seconds"] == 900
+    assert updated.json()["utility"]["billing_history_interval_seconds"] == 300
+    assert updated.json()["billing_evidence_retention_policy"] == ("indefinite_immutable_evidence")
     scopes = await owner_client.get("/api/v1/home-scopes")
     assert scopes.json() == {"home_scopes": [{"id": home_id, "name": "Main House"}]}
     async with session_factory() as session:
@@ -335,6 +362,15 @@ async def test_home_utility_auto_resolves_exactly_one_scope_for_get_and_patch(
         )
         assert renamed is not None
         assert renamed.details == {}
+        telemetry_settings = await session.get(HomeTelemetrySetting, home_id)
+        assert telemetry_settings is not None
+        assert telemetry_settings.history_interval_seconds == 300
+
+    invalid_threshold_order = await owner_client.patch(
+        "/api/v1/settings/home-utility",
+        json={"estimate_min_coverage": "0.995"},
+    )
+    assert invalid_threshold_order.status_code == 409, invalid_threshold_order.text
 
     for path in SCOPED_GET_PATHS:
         response = await owner_client.get(path, params=_feature_params(path))

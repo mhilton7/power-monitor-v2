@@ -44,7 +44,7 @@ DIGEST_D = "sha256:" + "4" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
 FIRMWARE_BUILD_ID = "c" * 64
-VERSION = "0.1.0-rc.24"
+VERSION = "0.1.0-rc.25"
 
 
 @pytest.fixture
@@ -83,7 +83,7 @@ def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]
         "version": VERSION,
         "revision": COMMIT,
         "release_status": "candidate_physical_certification_pending",
-        "database": {"expected_migration": "20260820_0018"},
+        "database": {"expected_migration": "20260821_0019"},
         "frontend": {
             "version": VERSION,
             "revision": COMMIT,
@@ -91,13 +91,13 @@ def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]
             "build_time": "2026-08-17T00:00:00Z",
         },
         "firmware_release_url": (
-            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.24"
+            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.25"
         ),
         "firmware": {
             "repository": "https://github.com/mhilton7/power-monitor-sensor-headless",
-            "tag": "v0.1.0-rc.24",
+            "tag": "v0.1.0-rc.25",
             "revision": COMMIT,
-            "build_number": 27,
+            "build_number": 28,
             "firmware_build_id": FIRMWARE_BUILD_ID,
             "image_sha256": IMAGE,
             "protocol": "pm-protocol/1.0.0",
@@ -697,7 +697,7 @@ def test_release_template_requires_exact_sentinels_and_real_digests() -> None:
     assert "UNPUBLISHED" not in output
     assert f'PM_RELEASE_VERSION: "{VERSION}"' in output
     assert f'PM_RELEASE_REVISION: "{"0" * 40}"' in output
-    assert 'PM_EXPECTED_DATABASE_REVISION: "20260820_0018"' in output
+    assert 'PM_EXPECTED_DATABASE_REVISION: "20260821_0019"' in output
     validate_compose(load_yaml(output), published=True)
     with pytest.raises(ReleaseError):
         render(
@@ -768,7 +768,7 @@ def test_release_renderer_separates_firmware_build_number_and_exact_build_id(
     evidence_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    output = evidence_dir / "power-monitor-v2-v0.1.0-rc.24.yaml"
+    output = evidence_dir / "power-monitor-v2-v0.1.0-rc.25.yaml"
     manifest_path = evidence_dir / "release-manifest.json"
     monkeypatch.setattr(
         sys,
@@ -798,9 +798,9 @@ def test_release_renderer_separates_firmware_build_number_and_exact_build_id(
             "--frontend-asset-id",
             f"{VERSION}-{COMMIT[:16]}",
             "--firmware-release-url",
-            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.24",
+            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.25",
             "--firmware-tag",
-            "v0.1.0-rc.24",
+            "v0.1.0-rc.25",
             "--firmware-revision",
             COMMIT,
             "--firmware-image-sha256",
@@ -1056,7 +1056,7 @@ def test_release_workflows_bind_both_firmware_build_identities() -> None:
     assert release.count("--firmware-build-number") == 2
     assert release.count("--firmware-build-id") == 2
     assert "pm-cross-repository-contract/1.1.0" in release
-    assert "--firmware-build-number 27" in ci
+    assert "--firmware-build-number 28" in ci
     assert f"--firmware-build-id {FIRMWARE_BUILD_ID}" in ci
 
     assert '.schema == "pm-firmware-release/1.1.0"' in promotion

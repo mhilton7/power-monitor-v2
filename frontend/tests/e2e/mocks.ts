@@ -85,7 +85,15 @@ export async function mockApi(page: Page, options: MockOptions = {}) {
     if (path.endsWith('/acknowledge')) { await json(route, { id: 'alert-delivery', state: 'acknowledged' }); return; }
     if (path.endsWith('/silence')) { await json(route, { id: 'alert-delivery', silenced_until: '2026-08-14T17:32:00Z' }); return; }
     if (path.endsWith('/history/export.csv')) { await route.fulfill({ status: 200, contentType: 'text/csv', body: 'timestamp,value\n2026-08-13T10:00:00Z,0\n' }); return; }
-    if (path.endsWith('/history')) { await json(route, url.searchParams.get('resolution_seconds') === '86400' ? dailyHistory : history); return; }
+    if (path.endsWith('/history')) {
+      if (url.searchParams.get('metric') === 'energy') {
+        await json(route, { ...dailyHistory, points: [
+          { timestamp: '2026-08-12T20:00:00Z', value: 8, cost: '1.20', quality: 1 },
+          { timestamp: '2026-08-13T12:00:00Z', value: 10, cost: '1.50', quality: 1 },
+        ], energy_kwh: 18, resolution_seconds: Number(url.searchParams.get('resolution_seconds') ?? 300) });
+      } else await json(route, history);
+      return;
+    }
     if (path.endsWith('/billing')) { await json(route, options.billingById?.[homeId] ?? billing); return; }
     if (path.endsWith('/bill-rate-imports')) { await json(route, { extractions: [] }); return; }
     if (path.endsWith('/rate-sources/status')) { await json(route, options.rateStatusById?.[homeId] ?? { ...rateSourceStatus, home_id: homeId }); return; }

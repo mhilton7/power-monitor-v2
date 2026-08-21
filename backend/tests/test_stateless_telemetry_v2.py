@@ -183,6 +183,13 @@ async def test_authenticated_samples_are_independent_idempotent_and_have_no_ack_
     assert sensor["protocol"] == "pm-telemetry/2.0.0"
     assert sensor["backlog"] is None
     assert sensor["acknowledgement"] is None
+    assert sensor["server_delivery_status"] in {"accepted", "delayed"}
+    assert sensor["last_server_received_at"] is not None
+    assert sensor["last_sensor_sampled_at"] is None
+    assert sensor["sensor_time_trusted"] is False
+    assert sensor["latest_stored_history_interval_at"] is not None
+    assert sensor["recent_accepted_sample_count"] == 2
+    assert sensor["recent_acceptance_window_seconds"] == 3600
     assert sensor["synchronization"]["mode"] == "stateless_delivery"
 
     async with session_factory() as session:

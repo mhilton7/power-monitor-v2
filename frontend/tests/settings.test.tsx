@@ -91,10 +91,32 @@ describe('Settings', () => {
       return apiResponse(path, method);
     });
     renderWithProviders(<SettingsPage />);
-    await userEvent.selectOptions(await screen.findByLabelText('Cost scope'), 'full_account');
+    await userEvent.click(await screen.findByRole('button', { name: 'Rates & data sources' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Billing cost scope'), 'full_account');
     await userEvent.type(screen.getByLabelText(/Type I UNDERSTAND FULL ACCOUNT SCOPE/), 'I UNDERSTAND FULL ACCOUNT SCOPE');
-    await userEvent.click(screen.getByRole('button', { name: 'Save home settings' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save billing configuration' }));
     await waitFor(() => expect(update).toMatchObject({ cost_scope: 'full_account', full_account_confirmation: 'I UNDERSTAND FULL ACCOUNT SCOPE' }));
+  });
+
+  it('keeps every mutable billing control only in Rates and data sources', async () => {
+    installFetchMock(apiResponse);
+    renderWithProviders(<SettingsPage />);
+
+    expect(await screen.findByLabelText('Home name')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Home timezone')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Billing cost scope')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Sensors' }));
+    expect(await screen.findByRole('heading', { name: 'Sensors' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Main service billing source' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('History interval')).not.toBeInTheDocument();
+    expect(screen.getByText(/Managed in/)).toHaveTextContent('Rates & data sources');
+    await userEvent.click(screen.getByRole('button', { name: 'Rates & data sources' }));
+    expect(await screen.findByLabelText('Home timezone')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('Home timezone')).toHaveLength(1);
+    expect(screen.getAllByLabelText('Billing cost scope')).toHaveLength(1);
+    expect(screen.getAllByRole('heading', { name: 'Main service billing source' })).toHaveLength(1);
+    expect(screen.queryByLabelText(/Calculation evidence retention/)).not.toBeInTheDocument();
+    expect(screen.getByText('Retained indefinitely')).toBeInTheDocument();
   });
 
   it('refreshes the visible home name immediately after rename without showing its UUID', async () => {
@@ -115,7 +137,7 @@ describe('Settings', () => {
     renderWithProviders(<Harness />);
     await userEvent.clear(await screen.findByLabelText('Home name'));
     await userEvent.type(screen.getByLabelText('Home name'), 'Primary residence');
-    await userEvent.click(screen.getByRole('button', { name: 'Save home settings' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save home name' }));
     await waitFor(() => expect(screen.getByTestId('visible-home-name')).toHaveTextContent('Primary residence'));
     expect(screen.queryByText(homeId)).not.toBeInTheDocument();
   });
@@ -163,7 +185,7 @@ describe('Settings', () => {
       return apiResponse(path, method);
     });
     renderWithProviders(<SettingsPage />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Sensors' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Rates & data sources' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Manage' }));
     await userEvent.clear(screen.getByLabelText('Service branch name'));
     await userEvent.type(screen.getByLabelText('Service branch name'), 'Main service updated');
@@ -251,7 +273,7 @@ describe('Settings', () => {
           body: {
             ...systemHealth,
             sensors: [
-              { ...systemHealth.sensors[0]!, acknowledgement: null },
+              { ...systemHealth.sensors[0]!, server_delivery_status: null, last_server_received_at: null, last_sensor_sampled_at: null, sensor_time_trusted: null, acknowledgement: null, synchronization: { server_delivery_status: 'accepted', last_server_received_at: '2026-08-13T17:32:11Z', last_sensor_sampled_at: '2026-08-13T17:32:10Z', sensor_time_trusted: true }, latest_stored_history_interval_at: '2026-08-13T17:31:00Z', recent_accepted_sample_count: 720, recent_acceptance_window_seconds: 3600 },
               { ...systemHealth.sensors[0]!, device_id: 'device-outdoor', device_name: 'Outdoor AC', acknowledgement: null },
             ],
           },
@@ -274,7 +296,8 @@ describe('Settings', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Diagnostics' }));
     expect(screen.getByText('reachable')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Sensor delivery' })).toBeInTheDocument();
-    expect(screen.getAllByText('received')).toHaveLength(2);
+    expect(screen.getAllByText('Receiving normally')).toHaveLength(2);
+    expect(screen.getByText('720 accepted samples in the last 1 hour')).toBeInTheDocument();
     const diagnostics = screen.getByRole('heading', { name: 'Diagnostics' }).closest('.card');
     expect(diagnostics).not.toBeNull();
     expect(within(diagnostics as HTMLElement).getByText('Frontend')).toBeInTheDocument();

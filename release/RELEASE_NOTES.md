@@ -1,13 +1,13 @@
-# PowerMeter V2 v0.1.0-rc.24
+# PowerMeter V2 v0.1.0-rc.25
 
-RC24 carries forward the server-owned History, billing presentation,
+RC25 carries forward the public RC24 server-owned History, billing presentation,
 official-rate catalog, responsive chart, and firmware/deployment lifecycle
-work while correcting three production UI/API integration defects. The
+work while completing the remaining web application repairs. The
 firmware runtime remains stateless; this candidate advances its coordinated
 release binding without reintroducing storage or backlog behavior. It remains
 a release candidate because marked-unit hardware certification is pending.
 
-## RC24 dashboard and OTA corrections
+## Public RC24 baseline retained
 
 - Power History now tracks the active brush selection and formats the selected
   local-time range compactly. Its footer uses a bounded responsive grid so the
@@ -23,7 +23,7 @@ a release candidate because marked-unit hardware certification is pending.
   `artifact_quarantines`. The response remains strict about the typed evidence
   while tolerating future additive lifecycle fields, so the view no longer
   fails when the current server returns those fields.
-- Firmware/server RC23 remain immutable public prereleases. RC22 remains
+- Firmware/server RC24 and RC23 remain immutable public prereleases. RC22 remains
   immutable failed-candidate evidence and is not rewritten or relabeled.
 
 The signed server `v0.1.0-rc.22` tag and run
@@ -33,6 +33,28 @@ publications, and anonymous GHCR verification passed, but deployment smoke
 failed when a published bill-derived day-sensitive rate had no authoritative
 holiday calendar. Assembly was skipped, so RC22 has no server GitHub Release
 or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
+
+## Remaining web application repair
+
+- Official SCE discovery is rooted at the residential TOU page and accepts
+  only Schedule D, TOU-D 4–9 PM, TOU-D 5–8 PM, and TOU-D-PRIME from the
+  primary page content. Navigation, footer, marketing, solar, comparison,
+  FAQ, and cross-family enrichment links cannot become rate candidates.
+- Billing keeps authenticated measured, cumulative-meter recovered, bounded
+  estimated, and unknown energy separate. Tiered totals may remain exact when
+  the PZEM cumulative counter safely closes a chart gap; TOU cost remains
+  partial when recovered or estimated energy cannot be placed in an exact
+  period.
+- Mutable utility, baseline, billing-source, estimate, projection, and History
+  interval controls are centralized under Settings → Rates & data sources.
+  Billing is a read-focused explanation of server calculations and evidence.
+- Daily Energy groups accepted intervals by the configured local calendar day
+  and labels accepted, recovered, estimated, and unallocated gap energy
+  without rewriting History. Chart range selection remains stable across
+  refreshes and exposes explicit reset/resume controls.
+- Diagnostics now distinguishes server receipt time from trusted sensor sample
+  time and reports only server-owned stored-History and accepted-sample
+  evidence. Additive OTA lifecycle response evidence remains schema-compatible.
 
 ## RC22 smoke remediation
 
@@ -93,6 +115,11 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
   preserves prior History, rates, artifacts, OTA results, and audit evidence;
   destructive lifecycle actions require authorization, exact confirmation,
   transactional revalidation, and an audit tombstone.
+- Additive revision `20260821_0019` makes utility, baseline, estimation, and
+  projection controls authoritative under Settings → Rates & data sources.
+  Its downgrade refuses to discard customized configuration; accepted
+  telemetry, immutable History, published rates, and bill-source boundaries
+  remain unchanged.
 
 ## Main service and Billing
 
@@ -141,25 +168,25 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
 
 ## Release binding
 
-- Server and frontend version: `0.1.0-rc.24`.
-- Compatible firmware tag: `v0.1.0-rc.24`, build number `27`.
+- Server and frontend version: `0.1.0-rc.25`.
+- Compatible firmware tag: `v0.1.0-rc.25`, build number `28`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
-- Alembic head: `20260820_0018`.
+- Alembic head: `20260821_0019`.
 - Generated contract-document SHA-256:
-  `849b51d0c706708a5581f6d8f4e2790cfd6fe229f83cdfabcaf2458c2fd82e10`.
+  `f40aed47eb572db1d328e3130fd0a86e6a8c9c123ba244d4cb90db3a4dd039bb`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned
-`power-monitor-v2-v0.1.0-rc.24.yaml`, release manifest, migration/security/test
+`power-monitor-v2-v0.1.0-rc.25.yaml`, release manifest, migration/security/test
 evidence, and checksums. The firmware prerelease must be published and
 independently verified first, then the server compatibility variable must be
-set to the exact RC24 firmware tag.
+set to the exact RC25 firmware tag.
 
 ## Deployment boundary
 
-Deploy the server RC24 YAML before applying the firmware RC24 update. Existing
-RC21 through RC23 sensors remain protocol-compatible throughout. Automated
+Deploy the server RC25 YAML before applying the firmware RC25 update. Existing
+RC21 through RC24 sensors remain protocol-compatible throughout. Automated
 tests do not install firmware on physical sensors. No card was formatted and no
 NVS namespace was erased while preparing this release.
 

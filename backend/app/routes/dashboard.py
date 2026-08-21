@@ -336,6 +336,7 @@ async def _current_rate(
     if len(rows) != 1:
         return None
     assignment, version, plan, account = rows[0]
+    scope_end = now.replace(second=0, microsecond=0)
     local = now.astimezone(ZoneInfo(version.timezone))
     season = season_from_storage(version.season_definitions, local)
     holidays = frozenset(
@@ -369,13 +370,15 @@ async def _current_rate(
                     RawReading.reset_generation == Device.reset_generation,
                 ),
                 NormalizedInterval.start_utc >= cycle_start,
-                NormalizedInterval.end_utc <= now,
+                NormalizedInterval.end_utc <= scope_end,
                 NormalizedInterval.source_authenticated.is_(True),
             )
         )
         or 0
     )
-    cumulative_kwh = Decimal(cumulative_mwh) / Decimal(1_000_000)
+    cycle_summary = await _summary(session, device_ids, cycle_start, scope_end)
+    recovered_gap_kwh = Decimal(str(cycle_summary["recovered_gap_energy_kwh"]))
+    cumulative_kwh = Decimal(cumulative_mwh) / Decimal(1_000_000) + recovered_gap_kwh
     effective_tier_threshold: Decimal | None = None
     cycle_local = cycle_start.astimezone(ZoneInfo(account.timezone))
     next_year = cycle_local.year + (1 if cycle_local.month == 12 else 0)
@@ -405,6 +408,18 @@ async def _current_rate(
     if account_threshold is not None:
         effective_tier_threshold = account_threshold.total_kwh
     elif (
+        account.summer_baseline_kwh_per_day
+        if season == "summer"
+        else account.winter_baseline_kwh_per_day
+    ) is not None:
+        configured_daily_baseline = (
+            account.summer_baseline_kwh_per_day
+            if season == "summer"
+            else account.winter_baseline_kwh_per_day
+        )
+        assert configured_daily_baseline is not None
+        effective_tier_threshold = configured_daily_baseline * billing_cycle_days
+    elif (
         one_version_for_cycle
         and version.tier_threshold_kwh_per_day is not None
         and version.tier_threshold_season in (season, "all")
@@ -418,9 +433,55 @@ async def _current_rate(
     tier_requires_account_threshold = any(
         period.threshold_basis == "account_daily_baseline" for period in period_rows
     )
-    cycle_summary = await _summary(session, device_ids, cycle_start, now)
     reading_coverage = Decimal(str(cycle_summary["completeness"]))
-    tier_confirmed = (not tier_requires_usage or reading_coverage >= Decimal("1")) and (
+    recovered_events = list(
+        (
+            await session.scalars(
+                select(TelemetryEnergyEvent).where(
+                    TelemetryEnergyEvent.device_id.in_(device_ids),
+                    TelemetryEnergyEvent.billing_status == "included",
+                    TelemetryEnergyEvent.gap_end_utc > cycle_start,
+                    TelemetryEnergyEvent.gap_end_utc <= scope_end,
+                )
+            )
+        ).all()
+    )
+    recovered_gap_seconds = sum(
+        max(
+            0,
+            int((aware_utc(item.gap_end_utc) - aware_utc(item.gap_start_utc)).total_seconds()),
+        )
+        for item in recovered_events
+        if item.gap_start_utc is not None and item.gap_end_utc is not None
+    )
+    expected_member_seconds = Decimal(str((scope_end - cycle_start).total_seconds())) * Decimal(
+        len(device_ids)
+    )
+    missing_member_seconds = int(
+        expected_member_seconds * max(Decimal("0"), Decimal("1") - reading_coverage)
+    )
+    unresolved_gap_count = int(str(cycle_summary["unresolved_connection_gap_count"]))
+    unresolved_counter_reset_count = int(
+        await session.scalar(
+            select(func.count(Alert.id)).where(
+                Alert.device_id.in_(device_ids),
+                Alert.alert_type == "pzem_energy_counter_reset",
+                Alert.state == "open",
+                Alert.opened_at >= cycle_start,
+                Alert.opened_at < scope_end,
+            )
+        )
+        or 0
+    )
+    cycle_energy_resolved = bool(
+        reading_coverage >= Decimal("1")
+        or (
+            unresolved_gap_count == 0
+            and unresolved_counter_reset_count == 0
+            and recovered_gap_seconds >= missing_member_seconds
+        )
+    )
+    tier_confirmed = (not tier_requires_usage or cycle_energy_resolved) and (
         not tier_requires_account_threshold or effective_tier_threshold is not None
     )
     period = None
@@ -532,9 +593,57 @@ async def _current_rate(
         ),
         "tier_confirmed": tier_confirmed,
         "tier_confirmation_rule": (
-            "requires_100_percent_reading_coverage" if tier_requires_usage else "not_applicable"
+            "cycle_total_including_recovered_energy" if tier_requires_usage else "not_applicable"
         ),
         "reading_coverage": reading_coverage,
+        "measured_cycle_kwh": Decimal(cumulative_mwh) / Decimal(1_000_000),
+        "recovered_gap_energy_kwh": recovered_gap_kwh,
+        "unknown_gap_count": unresolved_gap_count,
+        "unresolved_counter_reset_count": unresolved_counter_reset_count,
+        "availability_reasons": [
+            *(
+                [
+                    {
+                        "code": "home_baseline_not_configured",
+                        "message": "Home baseline is not configured for this billing cycle.",
+                    }
+                ]
+                if tier_requires_account_threshold and effective_tier_threshold is None
+                else []
+            ),
+            *(
+                [
+                    {
+                        "code": "unknown_gap_energy",
+                        "message": "One or more billing gaps have unresolved energy.",
+                    }
+                ]
+                if unresolved_gap_count
+                else []
+            ),
+            *(
+                [
+                    {
+                        "code": "unclassified_missing_energy",
+                        "message": (
+                            "Missing reading time is not covered by cumulative-meter evidence."
+                        ),
+                    }
+                ]
+                if not cycle_energy_resolved and not unresolved_gap_count
+                else []
+            ),
+            *(
+                [
+                    {
+                        "code": "cumulative_energy_recovered",
+                        "message": "Gap energy is included from the cumulative PZEM meter total.",
+                    }
+                ]
+                if recovered_gap_kwh
+                else []
+            ),
+        ],
         "tier_1_allowance_kwh": effective_tier_threshold,
         "price_per_kwh": effective_price,
         "base_price_per_kwh": period.price_per_kwh if period else None,
@@ -1324,6 +1433,7 @@ async def history(
         "missing_ranges": missing_ranges,
         "connection_gaps": [
             {
+                "event_id": item.id,
                 "device_id": item.device_id,
                 "start_utc": item.gap_start_utc,
                 "end_utc": item.gap_end_utc,
