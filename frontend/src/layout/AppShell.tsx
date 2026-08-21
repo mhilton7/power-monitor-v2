@@ -59,6 +59,7 @@ export function AppShell() {
   const homeNameCounts = new Map<string, number>();
   for (const homeScope of homeScopes) homeNameCounts.set(homeScope.name, (homeNameCounts.get(homeScope.name) ?? 0) + 1);
   const homeNameOrdinals = new Map<string, number>();
+  const selectedHomeName = homeScopes.find((scope) => scope.id === selectedHomeId)?.name;
 
   async function logout() {
     await api.logout();
@@ -78,7 +79,7 @@ export function AppShell() {
     </aside>
     <div className="app-main">
       <header className="topbar">
-        <div className="system-search home-switcher"><span className={`health-dot health-${overallState}`} aria-hidden="true" /><label htmlFor="active-home">Active home</label><select id="active-home" value={selectedHomeId} onChange={(event) => setSelectedHomeId(event.target.value)} disabled={homeScopesLoading || homeScopesError || homeScopes.length === 0} aria-describedby="active-home-status">
+        <div className="system-search home-switcher" title={selectedHomeName}><span className={`health-dot health-${overallState}`} aria-hidden="true" /><label htmlFor="active-home">Active home</label><select id="active-home" value={selectedHomeId} onChange={(event) => setSelectedHomeId(event.target.value)} disabled={homeScopesLoading || homeScopesError || homeScopes.length === 0} aria-describedby="active-home-status" title={selectedHomeName}>
           {homeScopesLoading && <option value="">Loading homes…</option>}
           {homeScopesError && <option value="">Homes unavailable</option>}
           {!homeScopesLoading && !homeScopesError && homeScopes.length === 0 && <option value="">No authorized homes</option>}

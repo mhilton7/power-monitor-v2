@@ -83,7 +83,7 @@ def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]
         "version": VERSION,
         "revision": COMMIT,
         "release_status": "candidate_physical_certification_pending",
-        "database": {"expected_migration": "20260820_0018"},
+        "database": {"expected_migration": "20260821_0019"},
         "frontend": {
             "version": VERSION,
             "revision": COMMIT,
@@ -697,7 +697,7 @@ def test_release_template_requires_exact_sentinels_and_real_digests() -> None:
     assert "UNPUBLISHED" not in output
     assert f'PM_RELEASE_VERSION: "{VERSION}"' in output
     assert f'PM_RELEASE_REVISION: "{"0" * 40}"' in output
-    assert 'PM_EXPECTED_DATABASE_REVISION: "20260820_0018"' in output
+    assert 'PM_EXPECTED_DATABASE_REVISION: "20260821_0019"' in output
     validate_compose(load_yaml(output), published=True)
     with pytest.raises(ReleaseError):
         render(

@@ -87,6 +87,39 @@ async def _logged_in_client(email: str) -> AsyncClient:
 
 
 @pytest.mark.asyncio
+async def test_billing_configuration_is_viewable_but_admin_write_is_server_enforced(
+    owner_client: AsyncClient,
+) -> None:
+    _owner_id, home_id = await _owner_home()
+    async with session_factory() as session:
+        viewer_role_id = await session.scalar(select(Role.id).where(Role.name == "Viewer"))
+        assert viewer_role_id is not None
+        viewer = User(
+            email="billing-viewer@example.com",
+            display_name="Billing viewer",
+            password_hash=hash_password(PASSWORD),
+        )
+        session.add(viewer)
+        await session.flush()
+        await session.execute(user_roles.insert().values(user_id=viewer.id, role_id=viewer_role_id))
+        await session.execute(user_home_scopes.insert().values(user_id=viewer.id, home_id=home_id))
+        await session.commit()
+
+    viewer_client = await _logged_in_client("billing-viewer@example.com")
+    try:
+        visible = await viewer_client.get("/api/v1/settings/home-utility")
+        assert visible.status_code == 200, visible.text
+        assert visible.json()["billing_configuration_writable"] is False
+        denied = await viewer_client.patch(
+            "/api/v1/settings/home-utility",
+            json={"estimate_high_coverage": "0.98"},
+        )
+        assert denied.status_code == 403, denied.text
+    finally:
+        await viewer_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_device_listing_exposes_only_authorized_home_scopes_before_enrollment(
     owner_client: AsyncClient,
 ) -> None:

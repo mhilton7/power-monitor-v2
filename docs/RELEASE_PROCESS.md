@@ -15,7 +15,7 @@ confirmed that firmware rc.1 through rc.5 crash in the main stack before
 provisioning. Public `v0.1.0-rc.16` is installation evidence for the prior
 durable sensor-backlog architecture. Candidate `v0.1.0-rc.24` retains
 `pm-protocol/1.0.0`, adds `pm-telemetry/2.0.0`, and extends the Alembic head to
-`20260820_0018`. It retains PostgreSQL telemetry and History ownership, removes
+`20260821_0019`. It retains PostgreSQL telemetry and History ownership, removes
 active microSD/backlog behavior from new firmware, preserves
 NVS identity/configuration, and adds Main-service History and exact tiered
 Billing. Firmware and server rc.16 remain immutable and must not be relabeled.
@@ -104,14 +104,16 @@ unexecutable holiday-sensitive bill-rate publication, isolates any legacy
 unpriceable rate evidence without degrading unrelated worker work, and requires
 post-pricing worker health in deployment smoke. Control remains
 `pm-protocol/1.0.0`, telemetry is `pm-telemetry/2.0.0`, and the Alembic head is
-`20260820_0018`. The generated rc.24 OpenAPI SHA-256 is
-`849b51d0c706708a5581f6d8f4e2790cfd6fe229f83cdfabcaf2458c2fd82e10`.
+`20260821_0019`. The generated rc.24 OpenAPI SHA-256 is
+`fa2bc9b78b7ca3d6ddb630807edf2592a8eda133b80dc8ac7763e1b5b9c54098`.
 The checked-in YAML retains `UNPUBLISHED_*` sentinels until its tagged workflow
 supplies exact registry digests. Rc.24 must pass clean
 dependency/backend/PostgreSQL gates, security scans, public package
 verification, first-run plus idempotent initializer smoke, checksums, and
-attestations. Its explicit migration chain extends to `20260820_0018`;
-revision 0018 adds catalog/lifecycle evidence and fails closed on unsafe
+attestations. Its explicit migration chain extends to `20260821_0019`;
+revision 0019 adds Settings-owned billing calculation configuration and fails
+closed rather than discarding customized values on downgrade; revision 0018
+adds catalog/lifecycle evidence and fails closed on unsafe
 downgrade; revision 0017 remains additive and refuses to delete accepted
 stateless telemetry or cutover evidence. The
 0008 preflight refuses conflicting immutable ingestion evidence without

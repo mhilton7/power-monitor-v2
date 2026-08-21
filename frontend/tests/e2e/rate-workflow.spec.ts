@@ -4,7 +4,7 @@ import { mockApi } from './mocks';
 
 test('official candidate advances through explicit review, publish and exact-account activation', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/billing');
+  await page.goto('/settings?section=rates');
   await page.getByText('Last accepted rate information').locator('xpath=ancestor::details').getByText('Technical details').click();
   await expect(page.getByText('Last accepted rate information')).toBeVisible();
   await expect(page.getByText(`${rateCandidate.source.name} · official_https · ${rateCandidate.source.url}`)).toBeVisible();
@@ -43,7 +43,7 @@ test('candidate rejection confirms, exposes loading and error, resets, then beco
     if (url.pathname.endsWith('/reject')) requests.push({ url, body: request.postData() });
   });
   await mockApi(page, { rateRejectFailureOnce: true, rateRejectDelayMs: 250 });
-  await page.goto('/billing');
+  await page.goto('/settings?section=rates');
   await page.getByRole('button', { name: new RegExp(`Open official rate update ${rateCandidate.id}`) }).click();
 
   await page.getByRole('button', { name: 'Reject candidate' }).click();
@@ -67,7 +67,7 @@ test('candidate rejection confirms, exposes loading and error, resets, then beco
 
 test('synchronous failed source check is never described as queued or successful', async ({ page }) => {
   await mockApi(page, { rateCheckOverride: { run_id: 'run-failed', state: 'failed', event_code: 'RATE_SOURCE_VALIDATION_FAILED', revision_id: null, candidate_id: null, error_code: 'HOLIDAY_RULE_MISSING' } });
-  await page.goto('/billing');
+  await page.goto('/settings?section=rates');
   await page.getByRole('button', { name: 'Check now' }).click();
   await expect(page.getByText(/HOLIDAY_RULE_MISSING/)).toBeVisible();
   await expect(page.getByText(/No candidate or active rate was changed/)).toBeVisible();
@@ -76,7 +76,7 @@ test('synchronous failed source check is never described as queued or successful
 
 test('manual fallback sends only rate facts and remains review-required', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/billing');
+  await page.goto('/settings?section=rates');
   await page.getByRole('button', { name: 'Enter rates manually' }).click();
   await page.getByLabel('Official source title').fill('SCE Schedule D official tariff');
   await page.getByLabel('Tariff identifier').fill('Schedule D 2026-08-01');
@@ -116,7 +116,7 @@ test('multi-home selection scopes candidate reads and clears prior-home review s
       [secondHome]: { home_id: secondHome, candidates: [secondCandidate] },
     },
   });
-  await page.goto('/billing');
+  await page.goto('/settings?section=rates');
   const selector = page.getByLabel('Active home');
   await selector.selectOption(firstHome);
   await page.getByRole('button', { name: new RegExp(`Open official rate update ${rateCandidate.id}`) }).click();

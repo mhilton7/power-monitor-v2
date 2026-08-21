@@ -875,10 +875,54 @@ class UtilityAccount(Base):
     cost_scope: Mapped[str] = mapped_column(String(32), default="energy_only")
     baseline_allocation_kwh: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     cca_provider: Mapped[str | None] = mapped_column(String(120))
+    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    generation_service_kind: Mapped[str] = mapped_column(
+        String(24), default="sce_generation", nullable=False
+    )
+    baseline_region: Mapped[str | None] = mapped_column(String(80))
+    summer_baseline_kwh_per_day: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    winter_baseline_kwh_per_day: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    all_electric: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    medical_baseline: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    heat_pump_allocation: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    estimate_high_coverage: Mapped[Decimal] = mapped_column(
+        Numeric(7, 6), default=Decimal("0.99"), nullable=False
+    )
+    estimate_min_coverage: Mapped[Decimal] = mapped_column(
+        Numeric(7, 6), default=Decimal("0.95"), nullable=False
+    )
+    max_estimatable_gap_seconds: Mapped[int] = mapped_column(Integer, default=900, nullable=False)
+    projection_minimum_hours: Mapped[int] = mapped_column(Integer, default=24, nullable=False)
     __table_args__ = (
         CheckConstraint("billing_day >= 1 AND billing_day <= 28", name="billing_day"),
         CheckConstraint(
             "cost_scope IN ('energy_only','allocated_account','full_account')", name="cost_scope"
+        ),
+        CheckConstraint("currency = upper(currency) AND length(currency) = 3", name="currency"),
+        CheckConstraint(
+            "generation_service_kind IN ('sce_generation','cca','direct_access','unknown')",
+            name="generation_service_kind",
+        ),
+        CheckConstraint(
+            "summer_baseline_kwh_per_day IS NULL OR summer_baseline_kwh_per_day >= 0",
+            name="summer_baseline_nonnegative",
+        ),
+        CheckConstraint(
+            "winter_baseline_kwh_per_day IS NULL OR winter_baseline_kwh_per_day >= 0",
+            name="winter_baseline_nonnegative",
+        ),
+        CheckConstraint(
+            "estimate_min_coverage >= 0 AND estimate_high_coverage <= 1 "
+            "AND estimate_min_coverage <= estimate_high_coverage",
+            name="estimate_coverage_order",
+        ),
+        CheckConstraint(
+            "max_estimatable_gap_seconds >= 60 AND max_estimatable_gap_seconds <= 86400",
+            name="max_estimatable_gap",
+        ),
+        CheckConstraint(
+            "projection_minimum_hours >= 1 AND projection_minimum_hours <= 720",
+            name="projection_minimum_hours",
         ),
     )
 

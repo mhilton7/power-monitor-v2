@@ -37,6 +37,7 @@ from .rate_sources import SourceFetch, SourceFetchError, fetch_official_source
 from .sce_catalog import (
     CATALOG_CRAWLER_VERSION,
     OFFICIAL_SCE_PUBLIC_PATH_PREFIXES,
+    SCE_CATALOG_DISCOVERY_URL,
     DiscoveredSceCatalogLink,
     DiscoveredScePlan,
     discover_sce_catalog,
@@ -55,7 +56,7 @@ from .sce_rate_parser import (
 
 SCE_TOU_URL = DEFAULT_SCE_RATE_SOURCE_URL
 SCE_SOURCE_NAME = "SCE residential rate-plan public page"
-SCE_CATALOG_URL = "https://www.sce.com/save-money/rates-financing/residential-rate-plans"
+SCE_CATALOG_URL = SCE_CATALOG_DISCOVERY_URL
 SCE_CATALOG_SOURCE_NAME = "SCE residential rate catalog inventory"
 
 FetchCallable = Callable[..., Awaitable[SourceFetch]]
@@ -816,6 +817,7 @@ async def _crawl_sce_catalog(
             fetched.body,
             fetched.media_type,
             source_url=fetched.url,
+            enrichment_for=link.canonical_name,
         )
         nested_links = nested_inspection.links
         add_links(nested_links, depth + 1)

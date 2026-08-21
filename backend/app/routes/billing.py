@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from typing import cast
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
@@ -80,12 +81,166 @@ from ..services.rate_workflow import (
     review_rate_candidate,
     safe_review,
 )
-from ..services.tiered_billing import billing_projection, tiered_cost
+from ..services.tiered_billing import (
+    EnergyQuality,
+    billing_calculation_state,
+    billing_projection,
+    estimate_confidence,
+    tier_state_for_quality,
+    tiered_cost,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["billing"])
 # Compatibility seam for existing API tests that replace the parser with a sanitized
 # fixture. It is reached only under PM_ENV=test; production always calls the sandbox.
 extract_rate_plan_from_pdf = extract_rate_plan_portable_for_tests
+
+
+async def _estimate_short_gap_energy(
+    session: AsyncSession,
+    *,
+    events: list[TelemetryEnergyEvent],
+    cycle_start: datetime,
+    scope_end: datetime,
+    reading_coverage: Decimal,
+    minimum_coverage: Decimal,
+    maximum_gap_seconds: int,
+    unresolved_counter_resets: int,
+) -> dict[str, object]:
+    """Estimate billing-only energy without creating or changing History rows."""
+
+    estimated_mwh = Decimal("0")
+    lower_mwh = Decimal("0")
+    upper_mwh = Decimal("0")
+    estimated_seconds = 0
+    unknown_seconds = 0
+    unknown_count = 0
+    methods: set[str] = set()
+    details: list[dict[str, object]] = []
+    for event in events:
+        gap_start = aware_utc(event.gap_start_utc) if event.gap_start_utc else None
+        gap_end = aware_utc(event.gap_end_utc) if event.gap_end_utc else None
+        duration_seconds = (
+            max(0, int((gap_end - gap_start).total_seconds()))
+            if gap_start is not None and gap_end is not None and gap_end > gap_start
+            else 0
+        )
+        blocked_reason: str | None = None
+        if gap_start is None or gap_end is None or duration_seconds <= 0:
+            blocked_reason = "gap_bounds_unavailable"
+        elif (
+            gap_start < cycle_start
+            or gap_end > scope_end
+            or bool(event.evidence.get("crosses_billing_cycle") is True)
+        ):
+            blocked_reason = "gap_crosses_billing_cycle_boundary"
+        elif unresolved_counter_resets:
+            blocked_reason = "unresolved_counter_reset"
+        elif reading_coverage < minimum_coverage:
+            blocked_reason = "reading_coverage_below_minimum_threshold"
+        elif duration_seconds > maximum_gap_seconds:
+            blocked_reason = "gap_exceeds_maximum_estimatable_duration"
+
+        before: NormalizedInterval | None = None
+        after: NormalizedInterval | None = None
+        if blocked_reason is None:
+            assert gap_start is not None and gap_end is not None
+            before = (
+                await session.scalars(
+                    select(NormalizedInterval)
+                    .where(
+                        NormalizedInterval.device_id == event.device_id,
+                        NormalizedInterval.source_authenticated.is_(True),
+                        NormalizedInterval.energy_mwh.is_not(None),
+                        NormalizedInterval.end_utc <= gap_start,
+                        NormalizedInterval.end_utc
+                        >= gap_start - timedelta(seconds=maximum_gap_seconds),
+                    )
+                    .order_by(NormalizedInterval.end_utc.desc())
+                    .limit(1)
+                )
+            ).first()
+            after = (
+                await session.scalars(
+                    select(NormalizedInterval)
+                    .where(
+                        NormalizedInterval.device_id == event.device_id,
+                        NormalizedInterval.source_authenticated.is_(True),
+                        NormalizedInterval.energy_mwh.is_not(None),
+                        NormalizedInterval.start_utc >= gap_end,
+                        NormalizedInterval.start_utc
+                        <= gap_end + timedelta(seconds=maximum_gap_seconds),
+                    )
+                    .order_by(NormalizedInterval.start_utc)
+                    .limit(1)
+                )
+            ).first()
+            if before is None or after is None:
+                blocked_reason = "neighboring_intervals_unavailable"
+
+        if blocked_reason is not None:
+            unknown_count += 1
+            unknown_seconds += duration_seconds
+            details.append(
+                {
+                    "event_id": event.id,
+                    "status": "unknown",
+                    "duration_seconds": duration_seconds,
+                    "reason": blocked_reason,
+                }
+            )
+            continue
+
+        assert before is not None and after is not None
+        before_seconds = Decimal(str((before.end_utc - before.start_utc).total_seconds()))
+        after_seconds = Decimal(str((after.end_utc - after.start_utc).total_seconds()))
+        if before_seconds <= 0 or after_seconds <= 0:
+            unknown_count += 1
+            unknown_seconds += duration_seconds
+            details.append(
+                {
+                    "event_id": event.id,
+                    "status": "unknown",
+                    "duration_seconds": duration_seconds,
+                    "reason": "neighboring_interval_duration_invalid",
+                }
+            )
+            continue
+        before_rate = Decimal(before.energy_mwh or 0) / before_seconds
+        after_rate = Decimal(after.energy_mwh or 0) / after_seconds
+        gap_seconds = Decimal(duration_seconds)
+        estimate = (((before_rate + after_rate) / Decimal(2)) * gap_seconds).quantize(
+            Decimal("0.000001")
+        )
+        lower = (min(before_rate, after_rate) * gap_seconds).quantize(Decimal("0.000001"))
+        upper = (max(before_rate, after_rate) * gap_seconds).quantize(Decimal("0.000001"))
+        estimated_mwh += estimate
+        lower_mwh += lower
+        upper_mwh += upper
+        estimated_seconds += duration_seconds
+        methods.add("short_gap_neighbor_interpolation")
+        details.append(
+            {
+                "event_id": event.id,
+                "status": "estimated",
+                "duration_seconds": duration_seconds,
+                "method": "short_gap_neighbor_interpolation",
+                "energy_kwh": estimate / Decimal(1_000_000),
+                "lower_kwh": lower / Decimal(1_000_000),
+                "upper_kwh": upper / Decimal(1_000_000),
+            }
+        )
+    return {
+        "estimated_mwh": estimated_mwh,
+        "lower_mwh": lower_mwh,
+        "upper_mwh": upper_mwh,
+        "estimated_seconds": estimated_seconds,
+        "unknown_seconds": unknown_seconds,
+        "unknown_count": unknown_count,
+        "methods": tuple(sorted(methods)),
+        "details": details,
+        "raw_history_modified": False,
+    }
 
 
 async def _user_homes(session: AsyncSession, user_id: str) -> tuple[str, ...]:
@@ -1179,10 +1334,13 @@ async def billing_overview(
         saved_energy_mwh = 0
         reading_coverage = Decimal("0")
         readings_waiting = 0
-        reliable_elapsed_hours = Decimal("0")
+        expected_member_seconds = Decimal("0")
+        reliable_member_seconds = Decimal("0")
         recovered_gap_mwh = 0
+        recovered_gap_seconds = 0
         billing_adjustment_mwh = 0
         unresolved_connection_gap_count = 0
+        unresolved_gap_events: list[TelemetryEnergyEvent] = []
         unresolved_counter_reset_count = 0
         adjustment = await session.scalar(
             select(BillingCycleAdjustment).where(
@@ -1223,9 +1381,12 @@ async def billing_overview(
                 if interval.energy_mwh is not None
             )
             reliable_seconds = sum(
-                Decimal(str((interval.end_utc - interval.start_utc).total_seconds()))
-                * interval.completeness
-                for interval in cycle_intervals
+                (
+                    Decimal(str((interval.end_utc - interval.start_utc).total_seconds()))
+                    * interval.completeness
+                    for interval in cycle_intervals
+                ),
+                Decimal("0"),
             )
             if adjustment is not None:
                 reliable_seconds += Decimal(
@@ -1234,35 +1395,52 @@ async def billing_overview(
             expected_seconds = Decimal(str((scope_end - cycle_start).total_seconds())) * Decimal(
                 len(member_ids)
             )
+            reliable_member_seconds = reliable_seconds
+            expected_member_seconds = expected_seconds
             reading_coverage = min(
                 Decimal("1"),
                 reliable_seconds / expected_seconds if expected_seconds else Decimal("0"),
             )
-            # Whole-home reliable time requires simultaneous evidence from every
-            # designated non-overlapping member, so member-seconds are divided here.
-            reliable_elapsed_hours = reliable_seconds / Decimal(len(member_ids)) / Decimal(3600)
-            recovered_gap_mwh = int(
-                await session.scalar(
-                    select(func.sum(TelemetryEnergyEvent.recovered_energy_mwh)).where(
-                        TelemetryEnergyEvent.device_id.in_(member_ids),
-                        TelemetryEnergyEvent.billing_status == "included",
-                        TelemetryEnergyEvent.gap_end_utc > automatic_start,
-                        TelemetryEnergyEvent.gap_end_utc <= scope_end,
+            recovered_events = list(
+                (
+                    await session.scalars(
+                        select(TelemetryEnergyEvent).where(
+                            TelemetryEnergyEvent.device_id.in_(member_ids),
+                            TelemetryEnergyEvent.billing_status == "included",
+                            TelemetryEnergyEvent.gap_end_utc > automatic_start,
+                            TelemetryEnergyEvent.gap_end_utc <= scope_end,
+                        )
                     )
-                )
-                or 0
+                ).all()
             )
-            unresolved_connection_gap_count = int(
-                await session.scalar(
-                    select(func.count(TelemetryEnergyEvent.id)).where(
-                        TelemetryEnergyEvent.device_id.in_(member_ids),
-                        TelemetryEnergyEvent.billing_status == "unresolved",
-                        TelemetryEnergyEvent.gap_end_utc > automatic_start,
-                        TelemetryEnergyEvent.gap_start_utc < scope_end,
+            recovered_gap_mwh = sum(
+                int(item.recovered_energy_mwh or 0) for item in recovered_events
+            )
+            recovered_gap_seconds = sum(
+                max(
+                    0,
+                    int(
+                        (
+                            aware_utc(item.gap_end_utc) - aware_utc(item.gap_start_utc)
+                        ).total_seconds()
+                    ),
+                )
+                for item in recovered_events
+                if item.gap_start_utc is not None and item.gap_end_utc is not None
+            )
+            unresolved_gap_events = list(
+                (
+                    await session.scalars(
+                        select(TelemetryEnergyEvent).where(
+                            TelemetryEnergyEvent.device_id.in_(member_ids),
+                            TelemetryEnergyEvent.billing_status == "unresolved",
+                            TelemetryEnergyEvent.gap_end_utc > automatic_start,
+                            TelemetryEnergyEvent.gap_start_utc < scope_end,
+                        )
                     )
-                )
-                or 0
+                ).all()
             )
+            unresolved_connection_gap_count = len(unresolved_gap_events)
             unresolved_counter_reset_count = int(
                 await session.scalar(
                     select(func.count(Alert.id)).where(
@@ -1286,6 +1464,51 @@ async def billing_overview(
                 )
                 if latest_heartbeat is not None:
                     readings_waiting += latest_heartbeat.backlog
+
+        gap_estimate = await _estimate_short_gap_energy(
+            session,
+            events=unresolved_gap_events,
+            cycle_start=automatic_start,
+            scope_end=scope_end,
+            reading_coverage=reading_coverage,
+            minimum_coverage=account.estimate_min_coverage,
+            maximum_gap_seconds=account.max_estimatable_gap_seconds,
+            unresolved_counter_resets=unresolved_counter_reset_count,
+        )
+        estimated_gap_mwh = Decimal(str(gap_estimate["estimated_mwh"]))
+        estimated_lower_mwh = Decimal(str(gap_estimate["lower_mwh"]))
+        estimated_upper_mwh = Decimal(str(gap_estimate["upper_mwh"]))
+        known_gap_seconds = (
+            recovered_gap_seconds
+            + cast(int, gap_estimate["estimated_seconds"])
+            + cast(int, gap_estimate["unknown_seconds"])
+        )
+        coverage_gap_seconds = max(
+            0,
+            int(expected_member_seconds - min(expected_member_seconds, reliable_member_seconds)),
+        )
+        unclassified_gap_seconds = max(0, coverage_gap_seconds - known_gap_seconds)
+        unknown_gap_count = cast(int, gap_estimate["unknown_count"]) + (
+            1 if unclassified_gap_seconds else 0
+        )
+        unknown_gap_seconds = cast(int, gap_estimate["unknown_seconds"]) + unclassified_gap_seconds
+        energy_quality = EnergyQuality(
+            measured_kwh=Decimal(saved_energy_mwh) / Decimal(1_000_000),
+            recovered_kwh=Decimal(recovered_gap_mwh) / Decimal(1_000_000),
+            estimated_kwh=estimated_gap_mwh / Decimal(1_000_000),
+            estimate_lower_kwh=estimated_lower_mwh / Decimal(1_000_000),
+            estimate_upper_kwh=estimated_upper_mwh / Decimal(1_000_000),
+            unknown_gap_count=unknown_gap_count,
+            unknown_gap_seconds=unknown_gap_seconds,
+            estimation_methods=cast(tuple[str, ...], gap_estimate["methods"]),
+        )
+        confidence, confidence_reasons = estimate_confidence(
+            reading_coverage=reading_coverage,
+            quality=energy_quality,
+            high_coverage=account.estimate_high_coverage,
+            minimum_coverage=account.estimate_min_coverage,
+            unresolved_counter_resets=unresolved_counter_reset_count,
+        )
 
         periods = (
             (
@@ -1347,9 +1570,16 @@ async def billing_overview(
             if version is not None
             else None
         )
+        configured_daily_baseline = (
+            account.summer_baseline_kwh_per_day
+            if season == "summer"
+            else account.winter_baseline_kwh_per_day
+        )
         tier_1_allowance = (
             account_cycle_threshold.total_kwh
             if account_cycle_threshold is not None
+            else configured_daily_baseline * cycle_days
+            if configured_daily_baseline is not None
             else version.tier_threshold_kwh_per_day * cycle_days
             if version is not None
             and one_version_for_cycle
@@ -1357,23 +1587,32 @@ async def billing_overview(
             and version.tier_threshold_season in (season, "all")
             else None
         )
-        saved_usage_kwh = Decimal(
-            saved_energy_mwh + recovered_gap_mwh + billing_adjustment_mwh
-        ) / Decimal(1_000_000)
+        billing_adjustment_kwh = Decimal(billing_adjustment_mwh) / Decimal(1_000_000)
+        saved_usage_kwh = energy_quality.saved_usage_kwh + billing_adjustment_kwh
+        current_usage_kwh = saved_usage_kwh + energy_quality.estimated_kwh
         tier_state = "not_confirmed"
-        cycle_energy_resolved = (
-            unresolved_connection_gap_count == 0 and unresolved_counter_reset_count == 0
+        tier_quality = EnergyQuality(
+            measured_kwh=energy_quality.measured_kwh + billing_adjustment_kwh,
+            recovered_kwh=energy_quality.recovered_kwh,
+            estimated_kwh=energy_quality.estimated_kwh,
+            estimate_lower_kwh=energy_quality.estimate_lower_kwh,
+            estimate_upper_kwh=energy_quality.estimate_upper_kwh,
+            unknown_gap_count=energy_quality.unknown_gap_count,
+            unknown_gap_seconds=energy_quality.unknown_gap_seconds,
+            estimation_methods=energy_quality.estimation_methods,
         )
-        if (
-            reading_coverage >= Decimal("1")
-            and tier_1_allowance is not None
-            and cycle_energy_resolved
-        ):
-            tier_state = "tier_1" if saved_usage_kwh <= tier_1_allowance else "tier_2"
+        if tier_1_allowance is not None and unresolved_counter_reset_count == 0:
+            tier_state = tier_state_for_quality(
+                quality=tier_quality,
+                threshold_kwh=tier_1_allowance,
+            )
         local_cycle_start = cycle_start.astimezone(ZoneInfo(account.timezone)).date()
         local_scope_end = scope_end.astimezone(ZoneInfo(account.timezone)).date()
         elapsed_cycle_days = min(cycle_days, max(0, (local_scope_end - local_cycle_start).days))
         tier_breakdown: dict[str, object] | None = None
+        calculated_energy_charge: Decimal | None = None
+        calculated_fixed_charge: Decimal | None = None
+        calculated_total: Decimal | None = None
         projection: dict[str, object] = {
             "status": "insufficient_data",
             "confidence": None,
@@ -1407,15 +1646,20 @@ async def billing_overview(
             and tier_2_period is not None
             and version is not None
             and one_version_for_cycle
+            and unknown_gap_count == 0
+            and unresolved_counter_reset_count == 0
         ):
             known = tiered_cost(
-                usage_kwh=saved_usage_kwh,
+                usage_kwh=current_usage_kwh,
                 threshold_kwh=tier_1_allowance,
                 tier_1_rate=tier_1_period.price_per_kwh,
                 tier_2_rate=tier_2_period.price_per_kwh,
                 service_days=Decimal(elapsed_cycle_days),
                 daily_service_charge=version.daily_fixed_charge,
             )
+            calculated_energy_charge = known.tier_1_cost + known.tier_2_cost
+            calculated_fixed_charge = None if has_non_daily_fixed_charge else known.service_charge
+            calculated_total = None if has_non_daily_fixed_charge else known.total
             tier_breakdown = {
                 "tier_1": {
                     "usage_kwh": known.tier_1_usage_kwh,
@@ -1436,6 +1680,29 @@ async def billing_overview(
                     None if has_non_daily_fixed_charge else known.service_charge
                 ),
                 "total_to_date": None if has_non_daily_fixed_charge else known.total,
+                "calculation_basis": "estimated" if energy_quality.estimated_kwh else "exact",
+                "cost_range": (
+                    None
+                    if not energy_quality.estimated_kwh
+                    else {
+                        "lower": tiered_cost(
+                            usage_kwh=tier_quality.lower_usage_kwh,
+                            threshold_kwh=tier_1_allowance,
+                            tier_1_rate=tier_1_period.price_per_kwh,
+                            tier_2_rate=tier_2_period.price_per_kwh,
+                            service_days=Decimal(elapsed_cycle_days),
+                            daily_service_charge=version.daily_fixed_charge,
+                        ).total,
+                        "upper": tiered_cost(
+                            usage_kwh=tier_quality.upper_usage_kwh,
+                            threshold_kwh=tier_1_allowance,
+                            tier_1_rate=tier_1_period.price_per_kwh,
+                            tier_2_rate=tier_2_period.price_per_kwh,
+                            service_days=Decimal(elapsed_cycle_days),
+                            daily_service_charge=version.daily_fixed_charge,
+                        ).total,
+                    }
+                ),
             }
             if has_non_daily_fixed_charge:
                 projection["confidence_reasons"] = [
@@ -1443,8 +1710,9 @@ async def billing_overview(
                 ]
             else:
                 projection = billing_projection(
-                    reliable_usage_kwh=saved_usage_kwh,
-                    reliable_elapsed_hours=reliable_elapsed_hours,
+                    reliable_usage_kwh=current_usage_kwh,
+                    reliable_elapsed_hours=Decimal(str((scope_end - cycle_start).total_seconds()))
+                    / Decimal(3600),
                     total_cycle_days=cycle_days,
                     threshold_kwh=tier_1_allowance,
                     tier_1_rate=tier_1_period.price_per_kwh,
@@ -1453,6 +1721,11 @@ async def billing_overview(
                     reading_coverage=reading_coverage,
                     unresolved_counter_resets=unresolved_counter_reset_count,
                     unresolved_connection_gaps=unresolved_connection_gap_count,
+                    estimated_energy_kwh=energy_quality.estimated_kwh,
+                    unknown_gap_count=unknown_gap_count,
+                    minimum_reliable_hours=Decimal(account.projection_minimum_hours),
+                    high_coverage=account.estimate_high_coverage,
+                    minimum_coverage=account.estimate_min_coverage,
                 )
         home_estimate = next(
             (
@@ -1464,10 +1737,13 @@ async def billing_overview(
             ),
             None,
         )
-        estimate_is_current = bool(
+        home_estimate_matches_rate = bool(
             home_estimate is not None
             and version is not None
             and home_estimate.rate_plan_version_id == version.id
+        )
+        estimate_is_current = bool(
+            home_estimate_matches_rate
             and tier_state != "not_confirmed"
             and recovered_gap_mwh == 0
             and billing_adjustment_mwh == 0
@@ -1479,6 +1755,129 @@ async def billing_overview(
             tier_breakdown["total_to_date"] = Decimal(home_estimate.total_microdollars) / Decimal(
                 1_000_000
             )
+        availability_reasons: list[dict[str, str]] = []
+        if not selected_rates:
+            availability_reasons.append(
+                {
+                    "code": "active_rate_plan_not_assigned",
+                    "message": "An active rate plan is not assigned for this date.",
+                    "severity": "error",
+                }
+            )
+        elif len(selected_rates) > 1:
+            availability_reasons.append(
+                {
+                    "code": "active_rate_plan_ambiguous",
+                    "message": "More than one active rate assignment applies to this date.",
+                    "severity": "error",
+                }
+            )
+        if home_total_branch is None or not member_ids:
+            availability_reasons.append(
+                {
+                    "code": "billing_source_service_branch_not_configured",
+                    "message": "A verified Main service billing source is not configured.",
+                    "severity": "error",
+                }
+            )
+        if version is not None and not one_version_for_cycle:
+            availability_reasons.append(
+                {
+                    "code": "rate_not_effective_for_full_billing_cycle",
+                    "message": "The active rate version does not cover the complete billing cycle.",
+                    "severity": "error",
+                }
+            )
+        if version is not None and version.pricing_model in ("tiered", "seasonal_tiered"):
+            if tier_1_allowance is None:
+                availability_reasons.append(
+                    {
+                        "code": "home_baseline_not_configured",
+                        "message": "Home baseline is not configured for this billing cycle.",
+                        "severity": "error",
+                    }
+                )
+            if tier_1_period is None or tier_2_period is None:
+                availability_reasons.append(
+                    {
+                        "code": "active_rate_plan_incomplete",
+                        "message": (
+                            "The active tiered rate plan is missing a Tier 1 or Tier 2 price."
+                        ),
+                        "severity": "error",
+                    }
+                )
+        if unresolved_counter_reset_count:
+            availability_reasons.append(
+                {
+                    "code": "unresolved_counter_reset",
+                    "message": "A meter reset prevents supported billing estimation.",
+                    "severity": "error",
+                }
+            )
+        if unknown_gap_count:
+            availability_reasons.append(
+                {
+                    "code": "unknown_gap_energy",
+                    "message": (
+                        f"Energy remains unknown across {unknown_gap_count} billing gap"
+                        f"{'s' if unknown_gap_count != 1 else ''}."
+                    ),
+                    "severity": "error",
+                }
+            )
+        elif energy_quality.estimated_kwh:
+            availability_reasons.append(
+                {
+                    "code": "estimated_missing_energy",
+                    "message": (
+                        f"Some energy is estimated because "
+                        f"{(Decimal('1') - reading_coverage) * Decimal('100'):.2f}% "
+                        "of expected reading time is missing."
+                    ),
+                    "severity": "warning",
+                }
+            )
+        elif energy_quality.recovered_kwh:
+            availability_reasons.append(
+                {
+                    "code": "cumulative_energy_recovered",
+                    "message": (
+                        "Gap energy was recovered from the authenticated cumulative meter total; "
+                        "the exact power pattern remains unavailable."
+                    ),
+                    "severity": "info",
+                }
+            )
+        tou_gap_unallocated = bool(
+            version is not None
+            and version.pricing_model
+            in (
+                "time_of_use",
+                "seasonal_time_of_use",
+                "time_of_use_with_baseline_credit",
+            )
+            and (energy_quality.recovered_kwh or energy_quality.estimated_kwh)
+        )
+        if tou_gap_unallocated:
+            availability_reasons.append(
+                {
+                    "code": "tou_gap_time_allocation_unavailable",
+                    "message": (
+                        "Recovered or estimated gap energy cannot be assigned to a TOU period "
+                        "exactly; only measured-period cost is exact."
+                    ),
+                    "severity": "warning",
+                }
+            )
+        blocking_reason_codes = {
+            item["code"] for item in availability_reasons if item["severity"] == "error"
+        }
+        calculation_state = billing_calculation_state(
+            has_blocking_reason=bool(blocking_reason_codes),
+            has_estimated_energy=bool(energy_quality.estimated_kwh),
+            tou_gap_unallocated=tou_gap_unallocated,
+        )
         current_rate_plan = {
             "rate_plan_id": plan.id if plan else None,
             "rate_plan_version_id": version.id if version else None,
@@ -1497,11 +1896,30 @@ async def billing_overview(
             "daily_baseline_allowance_kwh": (
                 account_daily_threshold.kwh_per_day
                 if account_daily_threshold is not None
+                else account.summer_baseline_kwh_per_day
+                if season == "summer" and account.summer_baseline_kwh_per_day is not None
+                else account.winter_baseline_kwh_per_day
+                if season == "winter" and account.winter_baseline_kwh_per_day is not None
                 else version.tier_threshold_kwh_per_day
                 if version is not None
                 else None
             ),
+            "daily_baseline_source": (
+                "account_effective_evidence"
+                if account_daily_threshold is not None
+                else "settings_seasonal_baseline"
+                if configured_daily_baseline is not None
+                else "legacy_rate_version"
+                if version is not None and version.tier_threshold_kwh_per_day is not None
+                else None
+            ),
             "generation_service": account.cca_provider or "SCE",
+            "generation_service_kind": account.generation_service_kind,
+            "currency": account.currency,
+            "baseline_region": account.baseline_region,
+            "all_electric": account.all_electric,
+            "medical_baseline": account.medical_baseline,
+            "heat_pump_allocation": account.heat_pump_allocation,
         }
         current_billing_cycle = {
             "start_utc": cycle_start,
@@ -1509,34 +1927,85 @@ async def billing_overview(
             "service_branch_id": home_total_branch.id if home_total_branch else None,
             "service_branch_name": home_total_branch.name if home_total_branch else None,
             "saved_usage_kwh": saved_usage_kwh if member_ids else None,
+            "current_usage_kwh": current_usage_kwh if member_ids else None,
             "reading_coverage": reading_coverage if member_ids else None,
             "readings_waiting_to_sync": readings_waiting if member_ids else None,
             "recovered_gap_energy_kwh": Decimal(recovered_gap_mwh) / Decimal(1_000_000),
-            "billing_adjustment_kwh": Decimal(billing_adjustment_mwh) / Decimal(1_000_000),
+            "measured_energy_kwh": energy_quality.measured_kwh,
+            "estimated_missing_energy_kwh": energy_quality.estimated_kwh,
+            "estimated_missing_energy_lower_kwh": energy_quality.estimate_lower_kwh,
+            "estimated_missing_energy_upper_kwh": energy_quality.estimate_upper_kwh,
+            "unknown_energy_kwh": None if unknown_gap_count else Decimal("0"),
+            "unknown_gap_seconds": unknown_gap_seconds,
+            "billing_adjustment_kwh": billing_adjustment_kwh,
+            "energy_quality": {
+                "measured_kwh": energy_quality.measured_kwh,
+                "recovered_kwh": energy_quality.recovered_kwh,
+                "estimated_kwh": energy_quality.estimated_kwh,
+                "unknown_kwh": None if unknown_gap_count else Decimal("0"),
+                "unknown_gap_count": unknown_gap_count,
+                "unknown_gap_seconds": unknown_gap_seconds,
+                "estimation_methods": energy_quality.estimation_methods,
+                "estimate_details": gap_estimate["details"],
+                "raw_history_modified": False,
+            },
             "unresolved_connection_gap_count": unresolved_connection_gap_count,
             "unresolved_counter_reset_count": unresolved_counter_reset_count,
             "tier_state": tier_state,
-            "tier_confirmation_rule": "requires_100_percent_reading_coverage",
+            "tier_confirmation_rule": (
+                "cycle_total_including_recovered_and_bounded_estimated_energy"
+            ),
             "tier_1_allowance_kwh": tier_1_allowance,
-            "tier_1_remaining_kwh": max(Decimal("0"), tier_1_allowance - saved_usage_kwh)
+            "tier_1_remaining_kwh": max(Decimal("0"), tier_1_allowance - current_usage_kwh)
             if tier_1_allowance is not None and tier_state != "not_confirmed"
             else None,
-            "amount_above_tier_1_kwh": max(Decimal("0"), saved_usage_kwh - tier_1_allowance)
+            "amount_above_tier_1_kwh": max(Decimal("0"), current_usage_kwh - tier_1_allowance)
             if tier_1_allowance is not None and tier_state != "not_confirmed"
             else None,
-            "estimated_energy_charges": Decimal(home_estimate.energy_cost_microdollars)
-            / Decimal(1_000_000)
-            if estimate_is_current and home_estimate is not None
-            else None,
-            "estimated_fixed_charges": Decimal(home_estimate.fixed_charge_microdollars)
-            / Decimal(1_000_000)
-            if estimate_is_current and home_estimate is not None
-            else None,
-            "estimated_total": Decimal(home_estimate.total_microdollars) / Decimal(1_000_000)
-            if estimate_is_current and home_estimate is not None
-            else None,
+            "estimated_energy_charges": (
+                Decimal(home_estimate.energy_cost_microdollars) / Decimal(1_000_000)
+                if estimate_is_current and home_estimate is not None
+                else (calculated_energy_charge)
+            ),
+            "estimated_fixed_charges": (
+                Decimal(home_estimate.fixed_charge_microdollars) / Decimal(1_000_000)
+                if estimate_is_current and home_estimate is not None
+                else calculated_fixed_charge
+            ),
+            "estimated_total": (
+                Decimal(home_estimate.total_microdollars) / Decimal(1_000_000)
+                if estimate_is_current and home_estimate is not None
+                else calculated_total
+            ),
             "tier_breakdown": tier_breakdown,
             "projection": projection,
+            "calculation_state": calculation_state,
+            "confidence": None if blocking_reason_codes else confidence,
+            "confidence_reasons": confidence_reasons,
+            "availability_reasons": availability_reasons,
+            "cost_to_date": (
+                tier_breakdown.get("total_to_date")
+                if tier_breakdown is not None
+                else Decimal(home_estimate.total_microdollars) / Decimal(1_000_000)
+                if tou_gap_unallocated and home_estimate_matches_rate and home_estimate is not None
+                else None
+            ),
+            "measured_cost_to_date": (
+                Decimal(home_estimate.total_microdollars) / Decimal(1_000_000)
+                if tou_gap_unallocated and home_estimate_matches_rate and home_estimate is not None
+                else None
+            ),
+            "cost_range": tier_breakdown.get("cost_range") if tier_breakdown is not None else None,
+            "cost_basis": (
+                "measured_periods_exact_gap_energy_unallocated"
+                if tou_gap_unallocated
+                else "cycle_total"
+            ),
+            "tou_unallocated_gap_energy_kwh": (
+                energy_quality.recovered_kwh + energy_quality.estimated_kwh
+                if tou_gap_unallocated
+                else Decimal("0")
+            ),
         }
         plans.append(
             {

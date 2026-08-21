@@ -1,10 +1,59 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { adaptiveTimeTicks, groupDailyEnergy, localCalendarDay } from '../src/lib/chart';
 import { HomePage } from '../src/pages/HomePage';
 import { apiResponse, billing, device, history, home } from './fixtures';
 import { installFetchMock, renderWithProviders } from './render';
 
 describe('Home', () => {
+  it('limits adaptive time ticks to the available label width', () => {
+    const start = Date.parse('2026-08-20T00:00:00Z');
+    const end = Date.parse('2026-08-21T00:00:00Z');
+    expect(adaptiveTimeTicks(start, end, 390)).toHaveLength(4);
+    expect(adaptiveTimeTicks(start, end, 1440).length).toBeLessThanOrEqual(8);
+    expect(adaptiveTimeTicks(start, end, 390)).toEqual(expect.arrayContaining([start, end]));
+  });
+
+  it('groups selected energy by Pacific calendar day and assigns only matched fully-contained gap evidence', () => {
+    const rangeStart = Date.parse('2026-08-21T07:00:00Z');
+    const rangeEnd = Date.parse('2026-08-22T07:00:00Z');
+    const result = groupDailyEnergy({
+      rangeStart,
+      rangeEnd,
+      timezone: 'America/Los_Angeles',
+      points: [
+        { timestamp: '2026-08-21T08:00:00Z', epoch: Date.parse('2026-08-21T08:00:00Z'), value: 1, cost: '0.2', quality: 1 },
+        { timestamp: '2026-08-21T12:00:00Z', epoch: Date.parse('2026-08-21T12:00:00Z'), value: 0, cost: '0', quality: 1 },
+        { timestamp: '2026-08-21T16:00:00Z', epoch: Date.parse('2026-08-21T16:00:00Z'), value: null, cost: null, quality: 0 },
+        { timestamp: '2026-08-22T02:00:00Z', epoch: Date.parse('2026-08-22T02:00:00Z'), value: 2, cost: '0.4', quality: 1 },
+      ],
+      gaps: [
+        { event_id: 'gap-recovered', start_utc: '2026-08-21T17:00:00Z', end_utc: '2026-08-21T18:00:00Z', recovered_energy_kwh: '0.4', status: 'recovered' },
+        { event_id: 'gap-estimated', start_utc: '2026-08-21T19:00:00Z', end_utc: '2026-08-21T19:30:00Z', recovered_energy_kwh: null, status: 'unresolved' },
+        { event_id: 'gap-cross-day', start_utc: '2026-08-22T06:30:00Z', end_utc: '2026-08-22T07:30:00Z', recovered_energy_kwh: null, status: 'unresolved' },
+      ],
+      estimates: [
+        { event_id: 'gap-estimated', status: 'estimated', energy_kwh: '0.2' },
+        { event_id: 'gap-cross-day', status: 'estimated', energy_kwh: '0.3' },
+      ],
+    });
+
+    expect(localCalendarDay(Date.parse('2026-08-22T02:00:00Z'), 'America/Los_Angeles')).toBe('2026-08-21');
+    expect(result.days).toHaveLength(1);
+    expect(result.days[0]).toMatchObject({ acceptedEnergyKwh: 3, recoveredEnergyKwh: 0.4, estimatedEnergyKwh: 0.2, value: 3.6, hasMissingIntervals: true });
+    expect(result.assignedTotalKwh).toBeCloseTo(3.6);
+    expect(result.unallocated).toEqual([{ eventId: 'gap-cross-day', energyKwh: 0.3, kind: 'estimated', reason: 'partially_selected' }]);
+  });
+
+  it('keeps a missing local-day energy bucket missing rather than converting it to zero', () => {
+    const result = groupDailyEnergy({
+      rangeStart: Date.parse('2026-08-21T07:00:00Z'), rangeEnd: Date.parse('2026-08-22T07:00:00Z'), timezone: 'America/Los_Angeles',
+      points: [{ timestamp: '2026-08-21T12:00:00Z', epoch: Date.parse('2026-08-21T12:00:00Z'), value: null, cost: null, quality: 0 }],
+      gaps: [], estimates: [],
+    });
+    expect(result.days[0]?.value).toBeNull();
+    expect(result.assignedTotalKwh).toBeNull();
+  });
   it('consolidates multiple sensors and preserves unavailable and offline states', async () => {
     const absentMeasurement = {
       voltage_v: null,
@@ -221,14 +270,14 @@ describe('Home', () => {
     expect(within(summary!).getByText('Current Tier')).toBeInTheDocument();
     expect(within(summary!).getByText('Estimated Monthly Bill')).toBeInTheDocument();
     expect(summary!.querySelectorAll('.dashboard-summary-metric')).toHaveLength(4);
-    expect(await within(summary!).findByText('Estimate may be incomplete because some readings were not received.')).toBeInTheDocument();
+    expect(await within(summary!).findByText('Some energy is estimated because reading coverage is 0.4%.')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Voltage' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Current' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Frequency' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Power Factor' })).not.toBeInTheDocument();
     expect(screen.queryByText('Today Completeness')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Power History – Today' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Daily Energy (kWh)' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Daily Energy' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Recent Activity / Commands' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Alerts & Notifications' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /^Reboot/ }));
@@ -260,9 +309,9 @@ describe('Home', () => {
     const chart = await screen.findByTestId('daily-chart');
     expect(chart).toHaveAttribute('data-day-source', 'calendar-summaries');
     expect(chart).toHaveAttribute('data-day-count', '2');
-    expect(screen.getByText('Yesterday + today')).toBeInTheDocument();
+    expect(screen.getByText('Local calendar-day total')).toBeInTheDocument();
     expect(screen.getByText('38.44 kWh')).toBeInTheDocument();
-    expect(energyHistoryRequests).toHaveLength(0);
+    expect(energyHistoryRequests).toHaveLength(1);
   });
 
   it('shows stateless delivery details and only the supported sensor commands', async () => {
@@ -290,7 +339,7 @@ describe('Home', () => {
       return { status: 200, body: { alerts: [], active_count: 0 } };
     });
     renderWithProviders(<HomePage />);
-    expect(await screen.findByRole('heading', { name: 'Daily Energy (kWh)' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Daily Energy' })).toBeInTheDocument();
     expect(screen.getByText('30 Days')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Live Power Usage' })).not.toBeInTheDocument();
     expect(screen.queryByText('Estimated Monthly Bill')).not.toBeInTheDocument();

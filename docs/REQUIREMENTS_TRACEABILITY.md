@@ -27,11 +27,11 @@ deployment smoke failed on an unexecutable holiday-sensitive bill rate, and
 assembly was skipped, so no server Release or generated YAML exists. Public
 rc.23 is immutable release evidence. Candidate rc.24 retains
 `pm-protocol/1.0.0` and stateless
-`pm-telemetry/2.0.0`, and advances the migration head to `20260820_0018`.
+`pm-telemetry/2.0.0`, and advances the migration head to `20260821_0019`.
 It makes PostgreSQL the durable telemetry/History owner, removes sensor
 microSD/backlog behavior, preserves NVS identity/configuration, and has
 generated OpenAPI SHA-256
-`849b51d0c706708a5581f6d8f4e2790cfd6fe229f83cdfabcaf2458c2fd82e10`.
+`fa2bc9b78b7ca3d6ddb630807edf2592a8eda133b80dc8ac7763e1b5b9c54098`.
 Counts, hashes, artifacts, and Docker image IDs remain
 evidence only for the version and workflow phase that produced them and must
 not be relabeled as results for a later release.
@@ -54,7 +54,7 @@ not be relabeled as results for a later release.
 | 13 | Durable outbound command lifecycle, OTA/destructive prepare/commit, credential rotation, and recovery | server command contracts remain authenticated; rc.14 adds per-sensor OTA batches, bounded stage deadlines, startup reconciliation, exact post-reboot version confirmation, rollback/mismatch evidence, and safe retry/cancel coverage; marked-unit command round trips remain pending |
 | 14 | OTA metadata/download/manifest/queue/rollback implementation and local release pack | rc.14 separates immutable artifact, batch, and per-sensor attempt state; simulator tests prove one success plus one old-version failure becomes partial, retries only the outdated sensor, preserves attempt history, and never treats delivery as installation success; no production sensor was targeted by these tests |
 | 15 | FastAPI/PostgreSQL/React/Caddy Compose structure and exact dependency pins | implemented; prior GHCR images remain historical evidence; rc.24 retains the eight-service one-shot initializer and requires its own release build/scan |
-| 16 | immutable PZEM ingestion/cost lineage, bill separation, and frozen explicit migrations through current `20260820_0018` | revision 0017 adds immutable stateless telemetry; revision 0018 adds rate-catalog and firmware/deployment lifecycle evidence without rewriting prior data; downgrades fail closed when newer evidence exists |
+| 16 | immutable PZEM ingestion/cost lineage, bill separation, and frozen explicit migrations through current `20260821_0019` | revision 0017 adds immutable stateless telemetry; revision 0018 adds rate-catalog and firmware/deployment lifecycle evidence; revision 0019 adds Settings-owned billing calculation configuration without rewriting prior data; downgrades fail closed when newer evidence exists |
 | 17 | sessions/MFA/CSRF/throttling/roles/last-owner/home scope/server permissions, including authorized first-sensor home discovery with no enrolled devices and explicit multi-home selection | public rc.3 already exposed authorized scopes with the sensor list before first enrollment; later source adds the permission-independent `/home-scopes` authority and exact-home isolation, retained in rc.16 |
 | 18 | exact four-item navigation, responsive/accessibility surfaces, Main-service dashboard/History, stateless sensor UI, and exact-tier Billing | frontend lint/type/build, 68 unit tests, and 42 Playwright desktop/mobile/WCAG tests passed |
 | 19 | signed independently accepted telemetry, server-owned History, SSE, idempotency, cost, and guarded commands | automated API/frontend round trips passed; physical device round trip pending |

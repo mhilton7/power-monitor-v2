@@ -13,11 +13,12 @@ import { bytes, dateTime, download } from '../lib/format';
 import { HeartbeatAge } from '../components/HeartbeatAge';
 import { firmwareUpgradeAvailable, prepareFirmwareUpload, type FirmwareUploadFields, type PreparedFirmwareUpload } from '../lib/firmwareUpload';
 import { useHomeScope } from '../home/useHomeScope';
+import { BillingPage } from './BillingPage';
 
 type SectionId = 'home' | 'sensors' | 'users' | 'rates' | 'firmware' | 'backups' | 'appearance' | 'privacy' | 'health' | 'logs';
 interface SettingsSection { id: SectionId; label: string; icon: ReactNode; permission: string; }
 const sections: SettingsSection[] = [
-  { id: 'home', label: 'Home & utility', icon: <Home aria-hidden="true" />, permission: 'billing.view' },
+  { id: 'home', label: 'Home', icon: <Home aria-hidden="true" />, permission: 'billing.view' },
   { id: 'sensors', label: 'Sensors', icon: <Wifi aria-hidden="true" />, permission: 'sensors.view' },
   { id: 'users', label: 'Profile & users', icon: <Users aria-hidden="true" />, permission: 'dashboard.view' },
   { id: 'rates', label: 'Rates & data sources', icon: <FileClock aria-hidden="true" />, permission: 'rates.view' },
@@ -56,7 +57,7 @@ export function SettingsPage() {
       {selected === 'home' && <HomeSettings />}
       {selected === 'sensors' && <SensorSettings homeScopes={selectedHome ? [selectedHome] : []} devices={devices.data?.devices ?? []} loading={homeScope.isLoading || devices.isLoading} error={homeScope.error ?? devices.error} />}
       {selected === 'users' && <UserSettings users={users.data?.users ?? []} roles={roles.data?.roles ?? []} loading={users.isLoading || roles.isLoading} error={users.error ?? roles.error} />}
-      {selected === 'rates' && <RateSettings homeId={selectedHomeId} />}
+      {selected === 'rates' && <><RateSettings homeId={selectedHomeId} /><SensorSettings mode="billing" homeScopes={selectedHome ? [selectedHome] : []} devices={devices.data?.devices ?? []} loading={homeScope.isLoading || devices.isLoading} error={homeScope.error ?? devices.error} /></>}
       {selected === 'firmware' && <FirmwareSettings devices={devices.data?.devices ?? []} releases={firmware.data?.releases ?? []} reconciliation={firmware.data?.reconciliation} loading={firmware.isLoading} error={firmware.error} />}
       {selected === 'backups' && <BackupSettings backup={backups.data} loading={backups.isLoading} error={backups.error} />}
       {selected === 'appearance' && <AppearanceSettings />}
@@ -73,45 +74,28 @@ function HomeSettings() {
   const { selectedHomeId } = homeScope;
   const queryClient = useQueryClient();
   const query = useQuery({ queryKey: ['home-utility', selectedHomeId], queryFn: () => api.homeUtility(selectedHomeId), enabled: Boolean(selectedHomeId) });
-  const [scopeOverride, setScopeOverride] = useState<{ homeId: string; value: string }>();
-  const update = useMutation({ mutationFn: (payload: Record<string, unknown>) => api.updateHomeUtility(selectedHomeId, payload), onSuccess: () => { setScopeOverride(undefined); void queryClient.invalidateQueries({ queryKey: ['home-utility'] }); void queryClient.invalidateQueries({ queryKey: ['home'] }); void queryClient.invalidateQueries({ queryKey: ['home-scopes'] }); homeScope.refetch(); } });
-  if (homeScope.isLoading) return <Card title="Home & utility"><Loading label="Loading authorized homes" /></Card>;
+  const update = useMutation({ mutationFn: (payload: Record<string, unknown>) => api.updateHomeUtility(selectedHomeId, payload), onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['home-utility'] }); void queryClient.invalidateQueries({ queryKey: ['home'] }); void queryClient.invalidateQueries({ queryKey: ['home-scopes'] }); homeScope.refetch(); } });
+  if (homeScope.isLoading) return <Card title="Home"><Loading label="Loading authorized homes" /></Card>;
   if (homeScope.isError) return <ErrorState error={homeScope.error} retry={homeScope.refetch} />;
-  if (!selectedHomeId) return <EmptyState title={homeScope.homeScopes.length === 0 ? 'No authorized home' : 'Choose an active home'} detail={homeScope.homeScopes.length === 0 ? 'Your account has no authorized home scope. Home and utility settings remain unavailable.' : 'Select a home from the Active home control before loading or changing settings.'} />;
-  if (query.isLoading) return <Card title="Home & utility"><Loading /></Card>;
+  if (!selectedHomeId) return <EmptyState title={homeScope.homeScopes.length === 0 ? 'No authorized home' : 'Choose an active home'} detail={homeScope.homeScopes.length === 0 ? 'Your account has no authorized home scope. Home settings remain unavailable.' : 'Select a home from the Active home control before loading or changing settings.'} />;
+  if (query.isLoading) return <Card title="Home"><Loading /></Card>;
   if (query.isError) return <ErrorState error={query.error} retry={() => void query.refetch()} />;
   if (!query.data) return <EmptyState title="Home settings unavailable" detail="The server returned no home or utility account." />;
-  const scope = scopeOverride?.homeId === selectedHomeId ? scopeOverride.value : query.data.utility.cost_scope;
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const baseline = formString(form, 'baselineAllocation');
-    const cca = formString(form, 'ccaProvider');
-    update.mutate({
-      home_name: formString(form, 'homeName'),
-      timezone: formString(form, 'timezone'),
-      billing_day: Number(formString(form, 'billingDay')),
-      cost_scope: formString(form, 'costScope'),
-      baseline_allocation_kwh: baseline === '' ? null : baseline,
-      cca_provider: cca === '' ? null : cca,
-      ...(scope === 'full_account' ? { full_account_confirmation: formString(form, 'fullAccountConfirmation') } : {}),
-      ...(scope === 'allocated_account' ? { allocated_account_confirmation: formString(form, 'allocatedAccountConfirmation') } : {}),
-    });
+    update.mutate({ home_name: formString(form, 'homeName') });
   }
-  return <Card title="Home & utility" eyebrow="Billing schedule and measurement source"><form key={query.data.home.id} className="settings-form" onSubmit={submit}>
-    <div className="filter-row"><div className="field"><label htmlFor="home-setting-name">Home name</label><input id="home-setting-name" name="homeName" defaultValue={query.data.home.name} required maxLength={120} disabled={!can('system.manage')} /></div><div className="field"><label htmlFor="home-setting-timezone">IANA schedule timezone</label><input id="home-setting-timezone" name="timezone" defaultValue={query.data.home.timezone} required maxLength={80} disabled={!can('system.manage')} /></div><div className="field"><label htmlFor="home-setting-billing-day">Billing day</label><input id="home-setting-billing-day" name="billingDay" type="number" min={1} max={28} defaultValue={query.data.utility.billing_day} required disabled={!can('system.manage')} /></div></div>
-    <div className="filter-row"><div className="field"><label htmlFor="home-setting-scope">Cost scope</label><select id="home-setting-scope" name="costScope" value={scope} onChange={(event) => setScopeOverride({ homeId: selectedHomeId, value: event.target.value })} disabled={!can('system.manage')}><option value="energy_only">Energy charges only</option><option value="allocated_account">Allocated account</option><option value="full_account">Full account</option></select></div><div className="field"><label htmlFor="home-setting-baseline">Baseline allocation (kWh)</label><input id="home-setting-baseline" name="baselineAllocation" inputMode="decimal" defaultValue={query.data.utility.baseline_allocation_kwh === null ? '' : String(query.data.utility.baseline_allocation_kwh)} disabled={!can('system.manage')} /></div><div className="field"><label htmlFor="home-setting-cca">CCA provider</label><input id="home-setting-cca" name="ccaProvider" defaultValue={query.data.utility.cca_provider ?? ''} maxLength={120} disabled={!can('system.manage')} /></div></div>
-    {scope === 'full_account' && <div className="field"><label htmlFor="full-account-confirmation">Type I UNDERSTAND FULL ACCOUNT SCOPE</label><input id="full-account-confirmation" name="fullAccountConfirmation" required pattern="I UNDERSTAND FULL ACCOUNT SCOPE" autoComplete="off" disabled={!can('system.manage')} /><small>Full-account estimates remain sensor-derived; this confirmation changes only which reviewed cost rules may be allocated.</small></div>}
-    {scope === 'allocated_account' && <div className="field"><label htmlFor="allocated-account-confirmation">Type I VERIFIED THIS ALLOCATION SCOPE</label><input id="allocated-account-confirmation" name="allocatedAccountConfirmation" required pattern="I VERIFIED THIS ALLOCATION SCOPE" autoComplete="off" disabled={!can('system.manage')} /><small>Allocated-account pricing is applied only to sensors whose matching allocation scope was explicitly verified.</small></div>}
-    <Notice>Usage comes from accepted sensor readings. SCE schedules evaluate in {query.data.home.timezone}.</Notice>
-    <details className="technical-details"><summary>Technical details</summary><p>Server source: {query.data.usage_source}. Timestamps are stored as UTC instants.</p></details>
+  return <Card title="Home" eyebrow="Identity"><form key={query.data.home.id} className="settings-form" onSubmit={submit}>
+    <div className="field"><label htmlFor="home-setting-name">Home name</label><input id="home-setting-name" name="homeName" defaultValue={query.data.home.name} required maxLength={120} disabled={!can('system.manage')} /></div>
+    <Notice>Billing schedule, timezone, baseline, generation service, estimate policy, and billing source are managed only in Rates &amp; data sources.</Notice>
     {update.isError && <Notice kind="warning">{update.error instanceof Error ? update.error.message : 'Settings could not be saved.'}</Notice>}
-    {update.isSuccess && <Notice kind="success">Home and utility settings were saved by the server.</Notice>}
-    {can('system.manage') && <button type="submit" className="button button-primary" disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save home settings'}</button>}
+    {update.isSuccess && <Notice kind="success">The home name was saved by the server.</Notice>}
+    {can('system.manage') && <button type="submit" className="button button-primary" disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save home name'}</button>}
   </form></Card>;
 }
 
-function SensorSettings({ homeScopes, devices, loading, error }: { homeScopes: Array<{ id: string; name: string }>; devices: DeviceDetail[]; loading: boolean; error: unknown }) {
+function SensorSettings({ homeScopes, devices, loading, error, mode = 'sensors' }: { homeScopes: Array<{ id: string; name: string }>; devices: DeviceDetail[]; loading: boolean; error: unknown; mode?: 'sensors' | 'billing' }) {
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<DeviceDetail>();
   const [enrollOpen, setEnrollOpen] = useState(false);
@@ -144,20 +128,17 @@ function SensorSettings({ homeScopes, devices, loading, error }: { homeScopes: A
   if (loading) return <Card title="Sensors"><Loading /></Card>;
   if (error) return <ErrorState error={error} />;
   return <>
-    <Card title="Sensors" eyebrow="Connected power sensors" action={<div className="card-actions"><PermissionGate permission="sensors.configure"><button type="button" className="button button-secondary" onClick={openNewBranch} disabled={scopedDevices.length === 0}><Activity aria-hidden="true" /> Add service branch</button></PermissionGate><PermissionGate permission="sensors.enroll"><button type="button" className="button button-primary" onClick={() => { setEnrollmentHomeId(onlyHomeId ?? ''); setEnrollOpen(true); }}><Wifi aria-hidden="true" /> Enroll sensor</button></PermissionGate></div>}>
+    {mode === 'sensors' ? <><Card title="Sensors" eyebrow="Connected power sensors" action={<PermissionGate permission="sensors.enroll"><button type="button" className="button button-primary" onClick={() => { setEnrollmentHomeId(onlyHomeId ?? ''); setEnrollOpen(true); }}><Wifi aria-hidden="true" /> Enroll sensor</button></PermissionGate>}>
       {devices.length === 0 ? <EmptyState title="No sensors" detail={homeScopes.length > 0 ? 'No sensors are enrolled yet. Create a one-time enrollment token to add the first sensor.' : 'Choose a home before enrolling a sensor.'} /> : <div className="settings-list">{devices.map((device) => <button type="button" key={device.id} onClick={() => setSelected(device)}><span className="settings-list-icon"><Wifi aria-hidden="true" /></span><div><strong>{device.friendly_name}</strong><small>Last contact {timeAgo(device.heartbeat_at)}</small></div><StatusPill state={device.heartbeat_at ? 'online' : 'offline'} /><ChevronRight aria-hidden="true" /></button>)}</div>}
-      <div className="aggregate-list"><strong>Service branches</strong>{circuits.isLoading ? <small>Loading service branches…</small> : circuits.data?.circuits.length ? circuits.data.circuits.map((branch) => <div className="service-branch-row" key={branch.id}><div><strong>{branch.name}</strong><small>{branch.is_billing_source ? 'Main service · billing source' : branch.is_home_total ? 'Whole-home total' : 'Electrical section'} · {branch.device_ids.length} sensor{branch.device_ids.length === 1 ? '' : 's'}</small></div><PermissionGate permission="sensors.configure"><button type="button" className="button button-secondary" onClick={() => openBranch(branch)}>Manage</button></PermissionGate></div>) : <small>No service branches have been added.</small>}</div>
-    </Card>
-    {activeHomeId && <TelemetrySettings homeId={activeHomeId} />}
-    <SensorDrawer device={selected} open={Boolean(selected)} onClose={() => setSelected(undefined)} />
-    <Dialog open={enrollOpen} title="Create one-time sensor enrollment" description="The token is short-lived, single-use, and shown only in this browser dialog." onClose={closeEnrollment}>
+    </Card>{activeHomeId && <TelemetrySettings homeId={activeHomeId} />}<SensorDrawer device={selected} open={Boolean(selected)} onClose={() => setSelected(undefined)} /></> : <Card title="Main service billing source" eyebrow="Rates & data sources" action={<PermissionGate permission="sensors.configure"><button type="button" className="button button-secondary" onClick={openNewBranch} disabled={scopedDevices.length === 0}><Activity aria-hidden="true" /> Add service branch</button></PermissionGate>}><p>Select and verify the non-overlapping whole-home sensor branch used for billing calculations.</p><div className="aggregate-list">{circuits.isLoading ? <small>Loading service branches…</small> : circuits.data?.circuits.length ? circuits.data.circuits.map((branch) => <div className="service-branch-row" key={branch.id}><div><strong>{branch.name}</strong><small>{branch.is_billing_source ? 'Main service · billing source' : branch.is_home_total ? 'Whole-home total' : 'Electrical section'} · {branch.device_ids.length} sensor{branch.device_ids.length === 1 ? '' : 's'}</small></div><PermissionGate permission="sensors.configure"><button type="button" className="button button-secondary" onClick={() => openBranch(branch)}>Manage</button></PermissionGate></div>) : <small>No service branches have been added.</small>}</div></Card>}
+    {mode === 'sensors' && <Dialog open={enrollOpen} title="Create one-time sensor enrollment" description="The token is short-lived, single-use, and shown only in this browser dialog." onClose={closeEnrollment}>
       {!enrollment.data && <Notice>New one-CT sensors start with energy charges only and are not added to Main service automatically.</Notice>}
       {enrollment.data ? <div className="enrollment-token"><Notice kind="warning">Copy this token into the physical USB provisioning workflow now. It cannot be shown again after this dialog closes.</Notice><code>{enrollment.data.token}</code><p>Expires {dateTime(enrollment.data.expires_at)}</p><button type="button" className="button button-primary" onClick={closeEnrollment}>I saved the token</button></div> : <form className="settings-form" onSubmit={submitEnrollment}>{homeScopes.length === 1 && <Notice>Enrollment home: {homeScopes[0]!.name}</Notice>}{homeScopes.length === 0 && <Notice kind="warning">No authorized sensor home scope is available. Choose a home before creating a token.</Notice>}<div className="field"><label htmlFor="enroll-friendly-name">Friendly name</label><input id="enroll-friendly-name" name="friendlyName" required maxLength={120} /></div><div className="field"><label htmlFor="enroll-ct-rating">CT rating (A)</label><input id="enroll-ct-rating" name="ctRating" type="number" min="1" max="1000" step="0.1" defaultValue="100" required /></div>{enrollment.isError && <Notice kind="warning">{enrollment.error instanceof Error ? enrollment.error.message : 'Enrollment token creation failed.'}</Notice>}<div className="dialog-actions"><button type="button" className="button button-secondary" onClick={closeEnrollment}>Cancel</button><button type="submit" className="button button-primary" disabled={enrollment.isPending || !scopedEnrollmentHomeId}>{enrollment.isPending ? 'Creating…' : 'Create token'}</button></div></form>}
-    </Dialog>
-    <Dialog open={branchOpen} title={editingBranch ? `Manage ${editingBranch.name}` : 'Add service branch'} description="A service branch groups sensors that measure one electrical section. Sensors that measure the same electricity must not be added together." onClose={() => setBranchOpen(false)}>
+    </Dialog>}
+    {mode === 'billing' && <Dialog open={branchOpen} title={editingBranch ? `Manage ${editingBranch.name}` : 'Add service branch'} description="A service branch groups sensors that measure one electrical section. Sensors that measure the same electricity must not be added together." onClose={() => setBranchOpen(false)}>
       <form className="settings-form" onSubmit={submitBranch}><div className="field"><label htmlFor="branch-name">Service branch name</label><input id="branch-name" name="branchName" required maxLength={120} defaultValue={editingBranch?.name ?? ''} placeholder="Main service" /></div><div className="field"><label htmlFor="branch-description">Description</label><textarea id="branch-description" name="branchDescription" maxLength={500} rows={2} defaultValue={editingBranch?.description ?? ''} /></div><div className="field"><label htmlFor="branch-purpose">Purpose</label><select id="branch-purpose" value={branchPurpose} onChange={(event) => { const next = event.target.value as typeof branchPurpose; setBranchPurpose(next); if (next !== 'whole_home_total') setBranchBillingSource(false); }}><option value="electrical_section">Electrical section</option><option value="whole_home_total">Whole-home total</option></select></div>{branchPurpose === 'whole_home_total' && <label className="checkbox-row"><input type="checkbox" checked={branchBillingSource} onChange={(event) => setBranchBillingSource(event.target.checked)} /><span><strong>Use as Main service and billing source</strong><small>Dashboard, History and billing default to this confirmed whole-home branch.</small></span></label>}<fieldset><legend>Included sensors</legend><div className="permission-grid">{scopedDevices.map((device) => <label key={device.id}><input type="checkbox" checked={branchDevices.includes(device.id)} onChange={(event) => setBranchDevices((current) => event.target.checked ? [...current, device.id] : current.filter((id) => id !== device.id))} /><span><strong>{device.friendly_name}</strong><small>{device.location ?? 'Location not set'}</small></span></label>)}</div></fieldset><div className="field"><label htmlFor="branch-confirmation">Type I VERIFIED THESE NON-OVERLAPPING METERS</label><input id="branch-confirmation" required pattern="I VERIFIED THESE NON-OVERLAPPING METERS" autoComplete="off" /></div><Notice kind="warning">Only sensors confirmed to measure separate electricity can be added. This prevents the same usage from being counted twice.</Notice>{saveBranch.isError && <Notice kind="warning">{saveBranch.error instanceof Error ? saveBranch.error.message : 'The service branch could not be saved.'}</Notice>}<div className="dialog-actions">{editingBranch && <button type="button" className="button button-danger" disabled={Boolean(editingBranch.is_billing_source)} title={editingBranch.is_billing_source ? 'Choose another Main service billing source before deleting this branch.' : undefined} onClick={() => setDeleteBranch(editingBranch)}><Trash2 aria-hidden="true" /> Delete</button>}<button type="button" className="button button-secondary" onClick={() => setBranchOpen(false)}>Cancel</button><button type="submit" className="button button-primary" disabled={saveBranch.isPending || branchDevices.length === 0}>{saveBranch.isPending ? 'Saving…' : 'Save service branch'}</button></div>{editingBranch?.is_billing_source && <Notice>Choose and save a replacement Main service billing source before deleting this branch.</Notice>}</form>
-    </Dialog>
-    <ConfirmDialog open={Boolean(deleteBranch)} title={`Delete ${deleteBranch?.name ?? 'this service branch'}?`} description="The named grouping will be removed. Sensor readings and sensor enrollment are preserved." confirmLabel="Delete service branch" busy={removeBranch.isPending} onCancel={() => setDeleteBranch(undefined)} onConfirm={() => removeBranch.mutate()} tone="danger" />
+    </Dialog>}
+    {mode === 'billing' && <ConfirmDialog open={Boolean(deleteBranch)} title={`Delete ${deleteBranch?.name ?? 'this service branch'}?`} description="The named grouping will be removed. Sensor readings and sensor enrollment are preserved." confirmLabel="Delete service branch" busy={removeBranch.isPending} onCancel={() => setDeleteBranch(undefined)} onConfirm={() => removeBranch.mutate()} tone="danger" />}
   </>;
 }
 
@@ -171,11 +152,13 @@ function TelemetrySettings({ homeId }: { homeId: string }) {
     mutationFn: (payload: TelemetryUpdate) => api.updateTelemetrySettings(homeId, payload),
     onSuccess: () => { setPendingRetention(undefined); setRetentionConfirmation(''); void queryClient.invalidateQueries({ queryKey: ['telemetry-settings', homeId] }); },
   });
+  const authoritativeHistoryInterval = query.data?.history_interval_seconds;
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (authoritativeHistoryInterval === undefined) return;
     const form = new FormData(event.currentTarget);
     const retention = formString(form, 'retentionDays');
-    const payload: TelemetryUpdate = { telemetry_interval_seconds: Number(formString(form, 'telemetryInterval')) as 2 | 5 | 10 | 15 | 30 | 60, history_interval_seconds: Number(formString(form, 'historyInterval')) as 15 | 30 | 60 | 300 | 900, retention_days: retention === '' ? null : Number(retention) as 30 | 90 | 180 | 365 };
+    const payload: TelemetryUpdate = { telemetry_interval_seconds: Number(formString(form, 'telemetryInterval')) as 2 | 5 | 10 | 15 | 30 | 60, history_interval_seconds: authoritativeHistoryInterval, retention_days: retention === '' ? null : Number(retention) as 30 | 90 | 180 | 365 };
     const shortensRetention = payload.retention_days !== null && (query.data?.retention_days === null || (query.data?.retention_days !== undefined && payload.retention_days < query.data.retention_days));
     if (shortensRetention) { setPendingRetention(payload); setRetentionConfirmation(''); return; }
     update.mutate(payload);
@@ -183,7 +166,7 @@ function TelemetrySettings({ homeId }: { homeId: string }) {
   if (query.isLoading) return <Card title="Reading schedule & retention"><Loading /></Card>;
   if (query.isError || !query.data) return <Card title="Reading schedule & retention"><Notice>This server does not yet provide stateless sensor schedule settings.</Notice></Card>;
   return <><Card title="Reading schedule & retention" eyebrow="Server-managed history"><form className="settings-form" onSubmit={submit}>
-    <div className="filter-row"><div className="field"><label htmlFor="telemetry-interval">Live reading interval</label><select id="telemetry-interval" name="telemetryInterval" defaultValue={String(query.data.telemetry_interval_seconds)}>{[2, 5, 10, 15, 30, 60].map((value) => <option key={value} value={value}>{value} seconds</option>)}</select></div><div className="field"><label htmlFor="history-interval">History interval</label><select id="history-interval" name="historyInterval" defaultValue={String(query.data.history_interval_seconds)}>{[15, 30, 60, 300, 900].map((value) => <option key={value} value={value}>{value < 60 ? `${value} seconds` : `${value / 60} minutes`}</option>)}</select></div><div className="field"><label htmlFor="retention-days">History retention</label><select id="retention-days" name="retentionDays" defaultValue={query.data.retention_days === null ? '' : String(query.data.retention_days)}><option value="">Keep until an administrator removes it</option>{[30, 90, 180, 365].map((value) => <option key={value} value={value}>{value} days</option>)}</select></div></div>
+    <div className="filter-row"><div className="field"><label htmlFor="telemetry-interval">Live reading interval</label><select id="telemetry-interval" name="telemetryInterval" defaultValue={String(query.data.telemetry_interval_seconds)}>{[2, 5, 10, 15, 30, 60].map((value) => <option key={value} value={value}>{value} seconds</option>)}</select></div><div className="field"><span>History interval</span><strong>{query.data.history_interval_seconds < 60 ? `${query.data.history_interval_seconds} seconds` : `${query.data.history_interval_seconds / 60} minutes`}</strong><small>Managed in <a href="/settings?section=rates">Rates &amp; data sources</a>.</small></div><div className="field"><label htmlFor="retention-days">History retention</label><select id="retention-days" name="retentionDays" defaultValue={query.data.retention_days === null ? '' : String(query.data.retention_days)}><option value="">Keep until an administrator removes it</option>{[30, 90, 180, 365].map((value) => <option key={value} value={value}>{value} days</option>)}</select></div></div>
     <Notice>Sensors send current measurements directly to the server. History retention is managed here and does not depend on removable sensor storage.</Notice>
     {update.isSuccess && <Notice kind="success">Reading schedule and retention were saved.</Notice>}{update.isError && <Notice kind="warning">{update.error instanceof Error ? update.error.message : 'Reading settings could not be saved.'}</Notice>}
     <PermissionGate permission="system.manage"><button type="submit" className="button button-primary" disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save reading settings'}</button></PermissionGate>
@@ -229,10 +212,52 @@ function UserSettings({ users, roles, loading, error }: { users: UserType[]; rol
   </>;
 }
 
-function RateSettings({ homeId }: { homeId: string }) {
+function BillingConfigurationSettings({ homeId }: { homeId: string }) {
   const queryClient = useQueryClient();
-  const check = useMutation({ mutationFn: () => api.checkRates(homeId), onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['rate-source-status', homeId] }); void queryClient.invalidateQueries({ queryKey: ['rate-source-candidates', homeId] }); } });
-  return <Card title="Rates & data sources" eyebrow="Official sources and reviewed versions"><div className="settings-callout"><FileClock aria-hidden="true" /><div><h3>Southern California Edison</h3><p>Official SCE rate checks preserve the source record and create a review item when verified pricing changes.</p></div><button type="button" className="button button-secondary" onClick={() => check.mutate()} disabled={check.isPending || !homeId}><RefreshCw className={check.isPending ? 'spin' : ''} aria-hidden="true" /> {check.isPending ? 'Checking…' : 'Check now'}</button></div>{!homeId && <Notice kind="warning">Choose an active home before starting a rate-source check.</Notice>}{check.data?.state === 'review_required' && <Notice kind="success">Check completed. A rate update requires review; it is not published or active.</Notice>}{check.data?.state === 'unchanged' && <Notice>Check completed. The official source is unchanged; no rate changed.</Notice>}{check.data?.state === 'failed' && <Notice kind="warning">The official rate check failed. No success was recorded and no rate changed.</Notice>}{check.isError && <Notice kind="warning">Check request failed: {check.error instanceof Error ? check.error.message : 'the server did not complete the request'}.</Notice>}<Notice>Utility PDF processing extracts rate information only. It cannot import consumption or create History.</Notice><a className="button button-primary inline-button" href="/billing">Open Billing & rate library</a></Card>;
+  const { can } = useSession();
+  const query = useQuery({ queryKey: ['home-utility', homeId], queryFn: () => api.homeUtility(homeId), enabled: Boolean(homeId) });
+  const [scopeOverride, setScopeOverride] = useState<string>();
+  const update = useMutation({
+    mutationFn: (payload: Record<string, unknown>) => api.updateHomeUtility(homeId, payload),
+    onSuccess: () => { setScopeOverride(undefined); void queryClient.invalidateQueries({ queryKey: ['home-utility', homeId] }); void queryClient.invalidateQueries({ queryKey: ['billing', homeId] }); void queryClient.invalidateQueries({ queryKey: ['home', homeId] }); },
+  });
+  if (!homeId) return <EmptyState title="Choose an active home" detail="Select a home before loading billing configuration." />;
+  if (query.isLoading) return <Card title="Billing configuration"><Loading label="Loading billing configuration" /></Card>;
+  if (query.isError || !query.data) return <ErrorState error={query.error ?? new Error('Billing configuration is unavailable.')} retry={() => void query.refetch()} />;
+  const utility = query.data.utility;
+  const scope = scopeOverride ?? utility.cost_scope;
+  const writable = can('system.manage') && (query.data.billing_configuration_writable ?? true);
+  const nullable = (form: FormData, name: string) => formString(form, name) || null;
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    update.mutate({
+      timezone: formString(form, 'timezone'), billing_day: Number(formString(form, 'billingDay')), cost_scope: scope,
+      baseline_allocation_kwh: nullable(form, 'baselineAllocation'), cca_provider: nullable(form, 'ccaProvider'), currency: formString(form, 'currency'),
+      generation_service_kind: formString(form, 'generationServiceKind'), baseline_region: nullable(form, 'baselineRegion'),
+      summer_baseline_kwh_per_day: nullable(form, 'summerBaseline'), winter_baseline_kwh_per_day: nullable(form, 'winterBaseline'),
+      all_electric: form.has('allElectric'), medical_baseline: form.has('medicalBaseline'), heat_pump_allocation: form.has('heatPumpAllocation'),
+      estimate_high_coverage: formString(form, 'estimateHighCoverage'), estimate_min_coverage: formString(form, 'estimateMinCoverage'),
+      max_estimatable_gap_seconds: Number(formString(form, 'maxEstimatableGap')), billing_history_interval_seconds: Number(formString(form, 'billingHistoryInterval')),
+      projection_minimum_hours: Number(formString(form, 'projectionMinimumHours')),
+      ...(scope === 'full_account' ? { full_account_confirmation: formString(form, 'fullAccountConfirmation') } : {}),
+      ...(scope === 'allocated_account' ? { allocated_account_confirmation: formString(form, 'allocatedAccountConfirmation') } : {}),
+    });
+  }
+  return <Card title="Utility and billing calculation" eyebrow="Rates & data sources"><form key={`${query.data.home.id}-${String(scope)}`} className="settings-form billing-configuration-form" onSubmit={submit}>
+    <dl><div><dt>Utility provider</dt><dd>{utility.utility_name}</dd></div><div><dt>Configuration owner</dt><dd>Rates &amp; data sources</dd></div></dl>
+    <div className="filter-row"><div className="field"><label htmlFor="billing-timezone">Home timezone</label><input id="billing-timezone" name="timezone" defaultValue={query.data.home.timezone} required maxLength={80} disabled={!writable} /></div><div className="field"><label htmlFor="billing-cycle-day">Billing-cycle start day</label><input id="billing-cycle-day" name="billingDay" type="number" min={1} max={28} defaultValue={utility.billing_day} required disabled={!writable} /></div><div className="field"><label htmlFor="billing-currency">Currency</label><input id="billing-currency" name="currency" pattern="[A-Z]{3}" maxLength={3} defaultValue={utility.currency} required disabled={!writable} /></div></div>
+    <div className="filter-row"><div className="field"><label htmlFor="billing-generation-kind">Generation provider type</label><select id="billing-generation-kind" name="generationServiceKind" defaultValue={utility.generation_service_kind} disabled={!writable}><option value="sce_generation">SCE generation</option><option value="cca">Community Choice Aggregation</option><option value="direct_access">Direct Access</option><option value="unknown">Unknown</option></select></div><div className="field"><label htmlFor="billing-cca-provider">CCA or Direct Access provider</label><input id="billing-cca-provider" name="ccaProvider" defaultValue={utility.cca_provider ?? ''} maxLength={120} disabled={!writable} /></div><div className="field"><label htmlFor="billing-cost-scope">Billing cost scope</label><select id="billing-cost-scope" name="costScope" value={scope} onChange={(event) => setScopeOverride(event.target.value)} disabled={!writable}><option value="energy_only">Energy charges only</option><option value="allocated_account">Allocated account</option><option value="full_account">Full account</option></select></div></div>
+    <fieldset><legend>Home baseline</legend><div className="filter-row"><div className="field"><label htmlFor="billing-baseline-region">Climate / baseline region</label><input id="billing-baseline-region" name="baselineRegion" defaultValue={utility.baseline_region ?? ''} maxLength={80} disabled={!writable} /></div><div className="field"><label htmlFor="billing-summer-baseline">Summer baseline (kWh/day)</label><input id="billing-summer-baseline" name="summerBaseline" type="number" min={0} step="0.001" defaultValue={utility.summer_baseline_kwh_per_day === null ? '' : String(utility.summer_baseline_kwh_per_day)} disabled={!writable} /></div><div className="field"><label htmlFor="billing-winter-baseline">Winter baseline (kWh/day)</label><input id="billing-winter-baseline" name="winterBaseline" type="number" min={0} step="0.001" defaultValue={utility.winter_baseline_kwh_per_day === null ? '' : String(utility.winter_baseline_kwh_per_day)} disabled={!writable} /></div></div><div className="field"><label htmlFor="billing-baseline-allocation">Verified baseline allocation (kWh)</label><input id="billing-baseline-allocation" name="baselineAllocation" type="number" min={0} step="0.001" defaultValue={utility.baseline_allocation_kwh === null ? '' : String(utility.baseline_allocation_kwh)} disabled={!writable} /></div><div className="permission-grid"><label><input type="checkbox" name="allElectric" defaultChecked={utility.all_electric} disabled={!writable} /><span><strong>All-electric home</strong></span></label><label><input type="checkbox" name="medicalBaseline" defaultChecked={utility.medical_baseline} disabled={!writable} /><span><strong>Medical Baseline</strong></span></label><label><input type="checkbox" name="heatPumpAllocation" defaultChecked={utility.heat_pump_allocation} disabled={!writable} /><span><strong>Heat-pump allocation</strong></span></label></div></fieldset>
+    <fieldset><legend>Billing estimate policy</legend><div className="filter-row"><div className="field"><label htmlFor="billing-high-coverage">High-confidence coverage</label><input id="billing-high-coverage" name="estimateHighCoverage" type="number" min={0} max={1} step="0.001" defaultValue={String(utility.estimate_high_coverage)} disabled={!writable} /></div><div className="field"><label htmlFor="billing-min-coverage">Minimum estimate coverage</label><input id="billing-min-coverage" name="estimateMinCoverage" type="number" min={0} max={1} step="0.001" defaultValue={String(utility.estimate_min_coverage)} disabled={!writable} /></div><div className="field"><label htmlFor="billing-max-gap">Maximum estimatable gap (seconds)</label><input id="billing-max-gap" name="maxEstimatableGap" type="number" min={60} max={86400} defaultValue={utility.max_estimatable_gap_seconds} disabled={!writable} /></div></div><div className="filter-row"><div className="field"><label htmlFor="billing-history-interval">History interval used for billing</label><select id="billing-history-interval" name="billingHistoryInterval" defaultValue={utility.billing_history_interval_seconds} disabled={!writable}>{[15, 30, 60, 300, 900].map((value) => <option key={value} value={value}>{value < 60 ? `${value} seconds` : `${value / 60} minutes`}</option>)}</select></div><div className="field"><label htmlFor="billing-projection-hours">Projection minimum data (hours)</label><input id="billing-projection-hours" name="projectionMinimumHours" type="number" min={1} max={720} defaultValue={utility.projection_minimum_hours} disabled={!writable} /></div><div className="field"><span>Billing calculation evidence</span><strong>Retained indefinitely</strong><small>Immutable calculation evidence is read-only and cannot be shortened.</small></div></div></fieldset>
+    {scope === 'full_account' && <div className="field"><label htmlFor="billing-full-confirmation">Type I UNDERSTAND FULL ACCOUNT SCOPE</label><input id="billing-full-confirmation" name="fullAccountConfirmation" required pattern="I UNDERSTAND FULL ACCOUNT SCOPE" autoComplete="off" disabled={!writable} /></div>}
+    {scope === 'allocated_account' && <div className="field"><label htmlFor="billing-allocated-confirmation">Type I VERIFIED THIS ALLOCATION SCOPE</label><input id="billing-allocated-confirmation" name="allocatedAccountConfirmation" required pattern="I VERIFIED THIS ALLOCATION SCOPE" autoComplete="off" disabled={!writable} /></div>}
+    <Notice>Usage remains derived only from authenticated sensor readings. Estimates never modify accepted History.</Notice>{update.isError && <Notice kind="warning">{update.error instanceof Error ? update.error.message : 'Billing configuration could not be saved.'}</Notice>}{update.isSuccess && <Notice kind="success">Billing configuration was saved.</Notice>}{writable && <button type="submit" className="button button-primary" disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save billing configuration'}</button>}
+  </form></Card>;
+}
+
+function RateSettings({ homeId }: { homeId: string }) {
+  return <><BillingConfigurationSettings homeId={homeId} /><BillingPage mode="settings" /></>;
 }
 
 function otaStageLabel(state: string) {
@@ -489,12 +514,39 @@ function AppearanceSettings() {
 }
 
 function DataPrivacySettings() {
-  return <><Card title="Data retention & sources" eyebrow="Clear privacy boundaries"><dl><div><dt>Electrical History</dt><dd>Accepted PZEM readings and connection gaps only; a bill never supplies History.</dd></div><div><dt>Bill uploads</dt><dd>Processed in temporary memory for approved rate fields. Original PDF bytes are never retained; extracted working drafts can be deleted.</dd></div><div><dt>Official SCE rate records</dt><dd>Unpublished or rejected review items can be deleted. Published rate versions and their source records remain protected.</dd></div><div><dt>Firmware releases</dt><dd>Eligible old releases can be archived or permanently deleted after every protected deployment and rollback use has ended.</dd></div><div><dt>Account security</dt><dd>Passwords are one-way hashed. Password changes, resets, disablement and deletion revoke active sessions.</dd></div></dl><Notice>Sensor readings are sent directly to the server. History retention is controlled in Sensors settings.</Notice></Card><Card title="Exports & audit records"><div className="dialog-actions"><PermissionGate permission="history.export"><a className="button button-secondary" href="/history">Open History export</a></PermissionGate><PermissionGate permission="logs.view"><a className="button button-secondary" href="/settings?section=logs">Open audit diagnostics</a></PermissionGate><PermissionGate permission="rates.bill_import"><a className="button button-secondary" href="/billing">Open rate-only bill import</a></PermissionGate></div></Card></>;
+  return <><Card title="Data retention & sources" eyebrow="Clear privacy boundaries"><dl><div><dt>Electrical History</dt><dd>Accepted PZEM readings and connection gaps only; a bill never supplies History.</dd></div><div><dt>Bill uploads</dt><dd>Processed in temporary memory for approved rate fields. Original PDF bytes are never retained; extracted working drafts can be deleted.</dd></div><div><dt>Official SCE rate records</dt><dd>Unpublished or rejected review items can be deleted. Published rate versions and their source records remain protected.</dd></div><div><dt>Firmware releases</dt><dd>Eligible old releases can be archived or permanently deleted after every protected deployment and rollback use has ended.</dd></div><div><dt>Account security</dt><dd>Passwords are one-way hashed. Password changes, resets, disablement and deletion revoke active sessions.</dd></div></dl><Notice>Sensor readings are sent directly to the server. History retention is controlled in Sensors settings.</Notice></Card><Card title="Exports & audit records"><div className="dialog-actions"><PermissionGate permission="history.export"><a className="button button-secondary" href="/history">Open History export</a></PermissionGate><PermissionGate permission="logs.view"><a className="button button-secondary" href="/settings?section=logs">Open audit diagnostics</a></PermissionGate><PermissionGate permission="rates.bill_import"><a className="button button-secondary" href="/settings?section=rates">Open rate-only bill import</a></PermissionGate></div></Card></>;
 }
 
 function abbreviated(value: string | null | undefined): string {
   if (!value) return 'Not reported';
   return value.length > 20 ? `${value.slice(0, 16)}…` : value;
+}
+
+function compactIdentifier(value: string | number | null | undefined, length = 8): string {
+  if (value === null || value === undefined || String(value).length === 0) return 'not reported';
+  const text = String(value);
+  return text.length > length ? text.slice(0, length) : text;
+}
+
+function deliveryStatusLabel(status: string | null | undefined): string {
+  const normalized = status?.toLowerCase().replaceAll(' ', '_');
+  if (normalized && ['rejected', 'invalid', 'authentication_failed', 'bad_signature'].includes(normalized)) return 'Rejected';
+  if (normalized && ['delayed', 'stale', 'backlogged'].includes(normalized)) return 'Delayed';
+  if (normalized && ['no_recent_samples', 'offline', 'missing'].includes(normalized)) return 'No recent samples';
+  if (normalized && ['received', 'receiving', 'accepted', 'healthy', 'ok'].includes(normalized)) return 'Receiving normally';
+  return 'Unknown';
+}
+
+function sensorTimeTrust(value: boolean | null | undefined): string {
+  if (value === true) return 'Trusted';
+  if (value === false) return 'Using server time';
+  return 'Not enough information';
+}
+
+function acceptedSampleWindow(count: number | undefined, seconds: number | undefined): string {
+  if (count === undefined || seconds === undefined) return 'Not reported by this server version';
+  const duration = seconds % 3600 === 0 ? `${seconds / 3600} hour${seconds === 3600 ? '' : 's'}` : seconds % 60 === 0 ? `${seconds / 60} minutes` : `${seconds} seconds`;
+  return `${count} accepted sample${count === 1 ? '' : 's'} in the last ${duration}`;
 }
 
 function HealthSettings({ homeId, health, devices, loading, error }: { homeId: string; health: Awaited<ReturnType<typeof api.health>> | undefined; devices: DeviceDetail[]; loading: boolean; error: unknown }) {
@@ -506,6 +558,10 @@ function HealthSettings({ homeId, health, devices, loading, error }: { homeId: s
   async function copyHomeId() {
     if (!navigator.clipboard || !homeId) { setCopyState('failed'); return; }
     try { await navigator.clipboard.writeText(homeId); setCopyState('copied'); } catch { setCopyState('failed'); }
+  }
+  async function copyValue(value: string) {
+    if (!navigator.clipboard) { setCopyState('failed'); return; }
+    try { await navigator.clipboard.writeText(value); setCopyState('copied'); } catch { setCopyState('failed'); }
   }
   const protocolCompatible = health.compatibility?.compatible ?? health.protocol === 'pm-protocol/1.0.0';
   return <>
@@ -521,9 +577,14 @@ function HealthSettings({ homeId, health, devices, loading, error }: { homeId: s
     <Card title="Sensor delivery" eyebrow="Direct server connection">
       <div className="service-grid">{health.sensors.map((sensor) => {
         const detail = devices.find((device) => device.id === sensor.device_id);
-        const delivery = sensor.server_delivery_status ?? detail?.server_delivery_status;
-        const receivedAt = sensor.last_server_received_at ?? detail?.last_server_received_at;
-        return <article key={sensor.device_id}><div><strong>{sensor.device_name ?? detail?.friendly_name ?? `Sensor ${sensor.device_id.slice(0, 8)}`}</strong><StatusPill state={sensor.state} /></div><p>{delivery ? delivery.replaceAll('_', ' ') : receivedAt ? 'The server is receiving readings' : 'Delivery status not reported'}</p><dl><div><dt>Last received</dt><dd>{timeAgo(receivedAt)}</dd></div><div><dt>Firmware</dt><dd>{sensor.firmware_version ?? detail?.firmware_version ?? 'Not reported'} · build {sensor.firmware_build_id ?? detail?.firmware_build_id ?? 'not reported'}</dd></div></dl><details className="technical-details"><summary>Technical details</summary><dl><div><dt>Sensor ID</dt><dd>{sensor.device_id}</dd></div><div><dt>Firmware digest</dt><dd>{abbreviated(sensor.firmware_digest ?? detail?.firmware_digest)}</dd></div><div><dt>Protocol</dt><dd>{sensor.telemetry_protocol ?? detail?.telemetry_protocol ?? sensor.protocol ?? detail?.protocol ?? 'Not reported'}</dd></div><div><dt>Boot partition</dt><dd>{sensor.boot_partition ?? detail?.boot_partition ?? 'Not reported'}</dd></div><div><dt>Last successful OTA</dt><dd>{sensor.last_successful_ota ?? detail?.last_successful_ota ?? 'Not reported'}</dd></div><div><dt>Last measured</dt><dd>{timeAgo(sensor.last_sensor_sampled_at ?? detail?.last_sensor_sampled_at)}</dd></div><div><dt>Sensor time trusted</dt><dd>{sensor.sensor_time_trusted ?? detail?.sensor_time_trusted ? 'Yes' : 'Not confirmed'}</dd></div></dl></details></article>;
+        const delivery = sensor.server_delivery_status ?? sensor.synchronization?.server_delivery_status ?? detail?.server_delivery_status ?? detail?.synchronization?.server_delivery_status;
+        const receivedAt = sensor.last_server_received_at ?? sensor.synchronization?.last_server_received_at ?? detail?.last_server_received_at ?? detail?.synchronization?.last_server_received_at;
+        const measuredAt = sensor.last_sensor_sampled_at ?? sensor.synchronization?.last_sensor_sampled_at ?? detail?.last_sensor_sampled_at ?? detail?.synchronization?.last_sensor_sampled_at;
+        const trusted = sensor.sensor_time_trusted ?? sensor.synchronization?.sensor_time_trusted ?? detail?.sensor_time_trusted ?? detail?.synchronization?.sensor_time_trusted;
+        const buildId = sensor.firmware_build_id ?? detail?.firmware_build_id;
+        const digest = sensor.firmware_digest ?? detail?.firmware_digest;
+        const version = sensor.firmware_version ?? detail?.firmware_version ?? 'Not reported';
+        return <article key={sensor.device_id}><div><strong>{sensor.device_name ?? detail?.friendly_name ?? `Sensor ${sensor.device_id.slice(0, 8)}`}</strong><StatusPill state={sensor.state} /></div><p>{deliveryStatusLabel(delivery)}</p><dl><div><dt>Last received</dt><dd>{receivedAt ? timeAgo(receivedAt) : 'No authenticated telemetry received'}</dd></div><div><dt>Last measured</dt><dd>{measuredAt ? <>{timeAgo(measuredAt)} <small>(sensor timestamp)</small></> : receivedAt ? <>{timeAgo(receivedAt)} <small>(server received time)</small></> : 'Not enough information'}</dd></div><div><dt>Sensor time</dt><dd>{sensorTimeTrust(trusted)}</dd></div><div><dt>Latest stored History interval</dt><dd>{sensor.latest_stored_history_interval_at ? timeAgo(sensor.latest_stored_history_interval_at) : 'Not reported by this server version'}</dd></div><div><dt>Recent accepted samples</dt><dd>{acceptedSampleWindow(sensor.recent_accepted_sample_count, sensor.recent_acceptance_window_seconds)}</dd></div><div><dt>Firmware</dt><dd><span className="compact-identifier" title={`${version} · build ${buildId ?? 'not reported'}`}>{version} · build {compactIdentifier(buildId)}</span></dd></div></dl><details className="technical-details"><summary>Technical details</summary><dl><div><dt>Sensor ID</dt><dd><code>{sensor.device_id}</code> <button type="button" className="text-button" onClick={() => void copyValue(sensor.device_id)}>Copy</button></dd></div><div><dt>Firmware build ID</dt><dd>{buildId === null || buildId === undefined ? 'Not reported by the installed firmware' : <><code>{String(buildId)}</code> <button type="button" className="text-button" onClick={() => void copyValue(String(buildId))}>Copy</button></>}</dd></div><div><dt>Firmware digest</dt><dd>{digest ? <><code>{digest}</code> <button type="button" className="text-button" onClick={() => void copyValue(digest)}>Copy</button></> : 'Not reported by the installed firmware'}</dd></div><div><dt>Protocol</dt><dd>{sensor.telemetry_protocol ?? detail?.telemetry_protocol ?? sensor.protocol ?? detail?.protocol ?? 'Not reported by the installed firmware'}</dd></div><div><dt>Boot partition</dt><dd>{sensor.boot_partition ?? detail?.boot_partition ?? 'Not reported by the installed firmware'}</dd></div><div><dt>Last successful OTA</dt><dd>{sensor.last_successful_ota ?? detail?.last_successful_ota ?? 'Not reported by the installed firmware'}</dd></div></dl></details></article>;
       })}</div>
     </Card>
   </>;

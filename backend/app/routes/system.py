@@ -6,7 +6,7 @@ import json
 import math
 import re
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,7 @@ from ..models import (
     DeviceTelemetryState,
     FirmwareDeployment,
     FirmwareRelease,
+    NormalizedInterval,
     RateSyncRun,
     RawReading,
     StatelessTelemetrySample,
@@ -266,6 +267,35 @@ async def system_health(
             .order_by(RawReading.received_at.desc(), RawReading.sequence.desc())
             .limit(1)
         )
+        latest_stored_history_interval_at = await session.scalar(
+            select(func.max(NormalizedInterval.end_utc)).where(
+                NormalizedInterval.device_id == device.id,
+                NormalizedInterval.source_authenticated.is_(True),
+            )
+        )
+        recent_window_start = now - timedelta(hours=1)
+        if telemetry_state is not None:
+            recent_accepted_sample_count = int(
+                await session.scalar(
+                    select(func.count(StatelessTelemetrySample.id)).where(
+                        StatelessTelemetrySample.device_id == device.id,
+                        StatelessTelemetrySample.received_at >= recent_window_start,
+                        StatelessTelemetrySample.received_at <= now,
+                    )
+                )
+                or 0
+            )
+        else:
+            recent_accepted_sample_count = int(
+                await session.scalar(
+                    select(func.count(RawReading.id)).where(
+                        RawReading.device_id == device.id,
+                        RawReading.received_at >= recent_window_start,
+                        RawReading.received_at <= now,
+                    )
+                )
+                or 0
+            )
         last_loss = await session.scalar(
             select(UnavailableSequenceRange)
             .where(UnavailableSequenceRange.device_id == device.id)
@@ -298,6 +328,13 @@ async def system_health(
             else []
         )
         last_error = synchronization_errors[0] if synchronization_errors else None
+        server_delivery_status = (
+            "accepted"
+            if telemetry_state is not None and age is not None and age <= 30
+            else "delayed"
+            if telemetry_state is not None and age is not None
+            else "legacy_backlog_protocol"
+        )
         sensor_health.append(
             {
                 "device_id": device.id,
@@ -341,6 +378,19 @@ async def system_health(
                 "last_successful_ota": last_successful_ota.completed_at
                 if last_successful_ota
                 else None,
+                "server_delivery_status": server_delivery_status,
+                "last_server_received_at": latest_server_received_at,
+                "last_sensor_sampled_at": (
+                    telemetry_state.latest_sensor_sampled_at
+                    if telemetry_state is not None
+                    else None
+                ),
+                "sensor_time_trusted": (
+                    telemetry_state.sensor_time_trusted if telemetry_state is not None else None
+                ),
+                "latest_stored_history_interval_at": latest_stored_history_interval_at,
+                "recent_accepted_sample_count": recent_accepted_sample_count,
+                "recent_acceptance_window_seconds": 3600,
                 "acknowledgement": None if telemetry_state is not None else device.contiguous_ack,
                 "oldest_sequence": (
                     None
@@ -360,13 +410,7 @@ async def system_health(
                     "mode": (
                         "stateless_delivery" if telemetry_state is not None else "legacy_backlog"
                     ),
-                    "server_delivery_status": (
-                        "accepted"
-                        if telemetry_state is not None and age is not None and age <= 30
-                        else "delayed"
-                        if telemetry_state is not None and age is not None
-                        else "legacy_backlog_protocol"
-                    ),
+                    "server_delivery_status": server_delivery_status,
                     "last_server_received_at": latest_server_received_at,
                     "last_sensor_sampled_at": (
                         telemetry_state.latest_sensor_sampled_at

@@ -108,7 +108,7 @@ YAML. None of that evidence is moved or relabeled.
 Coordinated firmware rc.24 must name server `v0.1.0-rc.24`, retain
 `pm-protocol/1.0.0`, declare `pm-telemetry/2.0.0`, and bind generated OpenAPI
 SHA-256
-`849b51d0c706708a5581f6d8f4e2790cfd6fe229f83cdfabcaf2458c2fd82e10`. Public RC20 build number is 23, RC22 build number 25, and
+`fa2bc9b78b7ca3d6ddb630807edf2592a8eda133b80dc8ac7763e1b5b9c54098`. Public RC20 build number is 23, RC22 build number 25, and
 RC23 build number 26 remain immutable; RC24 uses deterministic build number 27. It
 retains the stateless runtime, anchors successful telemetry to fixed cadence
 deadlines so HTTPS latency does not create artificial missing samples, keeps

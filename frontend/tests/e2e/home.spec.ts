@@ -17,7 +17,7 @@ test('Home shows live readings, a compact billing-cycle summary, and sensor evid
   await expect(summary.getByText('Cost to Date')).toBeVisible();
   await expect(summary.getByText('Current Tier')).toBeVisible();
   await expect(summary.getByText('Estimated Monthly Bill')).toBeVisible();
-  await expect(summary.getByText('Estimate may be incomplete because some readings were not received.')).toBeVisible();
+  await expect(summary.getByText('Some energy is estimated because reading coverage is 0.4%.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Sensor health' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Voltage' })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Current' })).toHaveCount(0);
@@ -25,9 +25,10 @@ test('Home shows live readings, a compact billing-cycle summary, and sensor evid
   await expect(page.getByRole('heading', { name: 'Power Factor' })).toHaveCount(0);
   await expect(page.getByText('Today Completeness')).toHaveCount(0);
   await expect(page.getByTestId('usage-chart')).toBeVisible();
-  await expect(page.getByTestId('daily-chart')).toHaveAttribute('data-day-source', 'calendar-summaries');
+  await expect(page.getByTestId('daily-chart')).toHaveAttribute('data-day-source', 'bounded-intervals');
   await expect(page.getByTestId('daily-chart')).toHaveAttribute('data-day-count', '2');
-  await expect(page.getByText('38.44 kWh')).toBeVisible();
+  await expect(page.getByTestId('daily-chart')).toHaveAttribute('data-unallocated-gap-count', '0');
+  await expect(page.getByText('18.42 kWh')).toBeVisible();
   const usagePath = await page.locator('[data-testid="usage-chart"] .recharts-area-area').getAttribute('d');
   expect(usagePath?.match(/M/g)?.length).toBeGreaterThanOrEqual(2);
   await expect(page.getByRole('button', { name: /Main Panel Sensor/ })).toBeVisible();
@@ -43,6 +44,12 @@ test('Power History slider updates a readable non-overlapping selected range', a
   const brushSlide = chart.locator('.recharts-brush-slide');
   await leftHandle.dragTo(brushSlide, { targetPosition: { x: 150, y: 10 }, force: true });
   await expect.poll(() => rangeLabel.innerText()).not.toBe(original);
+  const selected = await rangeLabel.innerText();
+  await page.waitForTimeout(1_100);
+  await expect(rangeLabel).toHaveText(selected);
+  await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
+  await expect(page.getByRole('button', { name: 'Reset zoom' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Resume live' })).toBeVisible();
   const overlaps = await page.locator('.dashboard-power-history .chart-footer').evaluate((footer) => {
     const selectedRange = footer.querySelector('.chart-footer-range')?.getBoundingClientRect();
     const coverage = footer.querySelector('.chart-footer-coverage')?.getBoundingClientRect();
@@ -53,6 +60,47 @@ test('Power History slider updates a readable non-overlapping selected range', a
       && selectedRange.bottom > coverage.top;
   });
   expect(overlaps).toBe(false);
+  await page.getByRole('button', { name: 'Reset zoom' }).click();
+  await expect(chart).toHaveAttribute('data-user-selected-range', 'false');
+  await expect(page.getByRole('button', { name: 'Reset zoom' })).toHaveCount(0);
+});
+
+test('Power History five-second range interaction stays local and avoids disruptive long tasks', async ({ page }, testInfo) => {
+  let historyRequests = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.endsWith('/history')) historyRequests += 1;
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  const chart = page.getByTestId('usage-chart');
+  await expect(chart).toBeVisible();
+  const leftHandle = chart.locator('.recharts-brush-traveller').first();
+  const brushSlide = chart.locator('.recharts-brush-slide');
+  const requestsBeforeDrag = historyRequests;
+  const longTaskCountBefore = await page.evaluate(() => performance.getEntriesByType('longtask').length);
+  const layoutShiftBefore = await page.evaluate(() => performance.getEntriesByType('layout-shift')
+    .filter((entry) => !(entry as PerformanceEntry & { hadRecentInput?: boolean }).hadRecentInput)
+    .reduce((total, entry) => total + Number((entry as PerformanceEntry & { value?: number }).value ?? 0), 0));
+  await leftHandle.dragTo(brushSlide, { targetPosition: { x: 150, y: 10 }, force: true });
+  await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
+  const dragStarted = performance.now();
+  for (let step = 1; step <= 50; step += 1) {
+    await leftHandle.press(step % 2 === 0 ? 'ArrowRight' : 'ArrowLeft');
+    await page.waitForTimeout(100);
+  }
+  const dragDurationMs = performance.now() - dragStarted;
+  const longTasks = await page.evaluate((offset) => performance.getEntriesByType('longtask').slice(offset).map((entry) => entry.duration), longTaskCountBefore);
+  const layoutShiftAfter = await page.evaluate(() => performance.getEntriesByType('layout-shift')
+    .filter((entry) => !(entry as PerformanceEntry & { hadRecentInput?: boolean }).hadRecentInput)
+    .reduce((total, entry) => total + Number((entry as PerformanceEntry & { value?: number }).value ?? 0), 0));
+  const evidence = { dragDurationMs, historyRequestsDuringDrag: historyRequests - requestsBeforeDrag, longTasks, layoutShiftDelta: layoutShiftAfter - layoutShiftBefore };
+  await testInfo.attach('slider-performance.json', { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' });
+  expect(dragDurationMs).toBeGreaterThanOrEqual(4_900);
+  expect(historyRequests).toBe(requestsBeforeDrag);
+  expect(longTasks.every((duration) => duration < 250)).toBe(true);
+  expect(layoutShiftAfter - layoutShiftBefore).toBeLessThan(0.01);
+  await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
+  await expect(page.getByRole('button', { name: 'Reset zoom' })).toBeVisible();
 });
 
 test('Home preserves measured zero while showing missing voltage as unavailable', async ({ page }) => {

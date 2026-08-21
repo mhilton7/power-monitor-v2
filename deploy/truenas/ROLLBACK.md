@@ -24,7 +24,8 @@ read a database touched by the new release.
 
 A direct application-only rollback from v0.1.0-rc.24 to an earlier public
 release is unauthorized without a separate recovery test. Rc.24 uses Alembic
-head `20260820_0018`; revision 0018 refuses to remove lifecycle or catalog
+head `20260821_0019`; revision 0019 refuses to discard customized billing
+configuration, revision 0018 refuses to remove lifecycle or catalog
 evidence that cannot be represented safely, and revision 0017 deliberately refuses to remove accepted
 stateless telemetry, History, or cutover evidence. A forward-migration gate
 cannot prove that older binaries correctly handle state touched by rc.24;

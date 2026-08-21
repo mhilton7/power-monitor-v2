@@ -302,6 +302,8 @@ async def home_utility(
     account = await session.scalar(select(UtilityAccount).where(UtilityAccount.home_id == home.id))
     if account is None:
         raise NotFound("utility account does not exist")
+    telemetry_settings = await telemetry_settings_for_home(session, home.id)
+    await session.commit()
     return {
         "home": {"id": home.id, "name": home.name, "timezone": home.timezone},
         "utility": {
@@ -312,7 +314,23 @@ async def home_utility(
             "cost_scope": account.cost_scope,
             "baseline_allocation_kwh": account.baseline_allocation_kwh,
             "cca_provider": account.cca_provider,
+            "currency": account.currency,
+            "generation_service_kind": account.generation_service_kind,
+            "baseline_region": account.baseline_region,
+            "summer_baseline_kwh_per_day": account.summer_baseline_kwh_per_day,
+            "winter_baseline_kwh_per_day": account.winter_baseline_kwh_per_day,
+            "all_electric": account.all_electric,
+            "medical_baseline": account.medical_baseline,
+            "heat_pump_allocation": account.heat_pump_allocation,
+            "estimate_high_coverage": account.estimate_high_coverage,
+            "estimate_min_coverage": account.estimate_min_coverage,
+            "max_estimatable_gap_seconds": account.max_estimatable_gap_seconds,
+            "billing_history_interval_seconds": telemetry_settings.history_interval_seconds,
+            "projection_minimum_hours": account.projection_minimum_hours,
         },
+        "billing_evidence_retention_policy": "indefinite_immutable_evidence",
+        "billing_configuration_owner": "settings_rates_and_data_sources",
+        "billing_configuration_writable": "system.manage" in user.permissions,
         "usage_source": "authenticated PZEM-004T sensor intervals only",
     }
 
@@ -334,6 +352,7 @@ async def update_home_utility(
     )
     if account is None:
         raise NotFound("utility account does not exist")
+    telemetry_settings = await telemetry_settings_for_home(session, home.id)
     prior_home_name = home.name
     if payload.timezone is not None:
         try:
@@ -355,6 +374,47 @@ async def update_home_utility(
         account.baseline_allocation_kwh = payload.baseline_allocation_kwh
     if "cca_provider" in payload.model_fields_set:
         account.cca_provider = payload.cca_provider
+    if payload.currency is not None:
+        account.currency = payload.currency
+    if payload.generation_service_kind is not None:
+        account.generation_service_kind = payload.generation_service_kind
+    if "baseline_region" in payload.model_fields_set:
+        account.baseline_region = payload.baseline_region
+    if "summer_baseline_kwh_per_day" in payload.model_fields_set:
+        account.summer_baseline_kwh_per_day = payload.summer_baseline_kwh_per_day
+    if "winter_baseline_kwh_per_day" in payload.model_fields_set:
+        account.winter_baseline_kwh_per_day = payload.winter_baseline_kwh_per_day
+    if payload.all_electric is not None:
+        account.all_electric = payload.all_electric
+    if payload.medical_baseline is not None:
+        account.medical_baseline = payload.medical_baseline
+    if payload.heat_pump_allocation is not None:
+        account.heat_pump_allocation = payload.heat_pump_allocation
+    requested_low = (
+        payload.estimate_min_coverage
+        if payload.estimate_min_coverage is not None
+        else account.estimate_min_coverage
+    )
+    requested_high = (
+        payload.estimate_high_coverage
+        if payload.estimate_high_coverage is not None
+        else account.estimate_high_coverage
+    )
+    if requested_low > requested_high:
+        raise IntegrityConflict("minimum estimate coverage cannot exceed high-confidence coverage")
+    if payload.estimate_high_coverage is not None:
+        account.estimate_high_coverage = payload.estimate_high_coverage
+    if payload.estimate_min_coverage is not None:
+        account.estimate_min_coverage = payload.estimate_min_coverage
+    if payload.max_estimatable_gap_seconds is not None:
+        account.max_estimatable_gap_seconds = payload.max_estimatable_gap_seconds
+    if payload.billing_history_interval_seconds is not None:
+        telemetry_settings.history_interval_seconds = payload.billing_history_interval_seconds
+        telemetry_settings.config_version += 1
+        telemetry_settings.updated_at = datetime.now(UTC)
+        telemetry_settings.updated_by_user_id = user.id
+    if payload.projection_minimum_hours is not None:
+        account.projection_minimum_hours = payload.projection_minimum_hours
     session.add(
         AuditEvent(
             actor_user_id=user.id,
@@ -367,6 +427,16 @@ async def update_home_utility(
                 "billing_day": payload.billing_day,
                 "timezone": payload.timezone,
                 "home_name_changed": home.name != prior_home_name,
+                "billing_configuration_fields": sorted(
+                    field
+                    for field in payload.model_fields_set
+                    if field
+                    not in {
+                        "home_name",
+                        "full_account_confirmation",
+                        "allocated_account_confirmation",
+                    }
+                ),
             },
         )
     )

@@ -34,6 +34,28 @@ failed when a published bill-derived day-sensitive rate had no authoritative
 holiday calendar. Assembly was skipped, so RC22 has no server GitHub Release
 or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
 
+## Remaining web application repair
+
+- Official SCE discovery is rooted at the residential TOU page and accepts
+  only Schedule D, TOU-D 4–9 PM, TOU-D 5–8 PM, and TOU-D-PRIME from the
+  primary page content. Navigation, footer, marketing, solar, comparison,
+  FAQ, and cross-family enrichment links cannot become rate candidates.
+- Billing keeps authenticated measured, cumulative-meter recovered, bounded
+  estimated, and unknown energy separate. Tiered totals may remain exact when
+  the PZEM cumulative counter safely closes a chart gap; TOU cost remains
+  partial when recovered or estimated energy cannot be placed in an exact
+  period.
+- Mutable utility, baseline, billing-source, estimate, projection, and History
+  interval controls are centralized under Settings → Rates & data sources.
+  Billing is a read-focused explanation of server calculations and evidence.
+- Daily Energy groups accepted intervals by the configured local calendar day
+  and labels accepted, recovered, estimated, and unallocated gap energy
+  without rewriting History. Chart range selection remains stable across
+  refreshes and exposes explicit reset/resume controls.
+- Diagnostics now distinguishes server receipt time from trusted sensor sample
+  time and reports only server-owned stored-History and accepted-sample
+  evidence. Additive OTA lifecycle response evidence remains schema-compatible.
+
 ## RC22 smoke remediation
 
 - Bill-rate publication now rejects a day-sensitive schedule whose holiday
@@ -93,6 +115,11 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
   preserves prior History, rates, artifacts, OTA results, and audit evidence;
   destructive lifecycle actions require authorization, exact confirmation,
   transactional revalidation, and an audit tombstone.
+- Additive revision `20260821_0019` makes utility, baseline, estimation, and
+  projection controls authoritative under Settings → Rates & data sources.
+  Its downgrade refuses to discard customized configuration; accepted
+  telemetry, immutable History, published rates, and bill-source boundaries
+  remain unchanged.
 
 ## Main service and Billing
 
@@ -145,9 +172,9 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
 - Compatible firmware tag: `v0.1.0-rc.24`, build number `27`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
-- Alembic head: `20260820_0018`.
+- Alembic head: `20260821_0019`.
 - Generated contract-document SHA-256:
-  `849b51d0c706708a5581f6d8f4e2790cfd6fe229f83cdfabcaf2458c2fd82e10`.
+  `fa2bc9b78b7ca3d6ddb630807edf2592a8eda133b80dc8ac7763e1b5b9c54098`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned

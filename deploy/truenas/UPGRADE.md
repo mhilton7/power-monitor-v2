@@ -23,8 +23,10 @@ Never edit one image tag/digest, accept a generic image-update suggestion, use
    `Apps/PowerMeterV2` named with the old version and UTC time. A snapshot
    supplements rather than replaces the verified logical backup.
 
-The coordinated rc.24 release retains the migration chain at Alembic head
-`20260820_0018`. Revision 0018 adds official-rate catalog evidence and explicit
+The coordinated rc.24 release extends the migration chain to Alembic head
+`20260821_0019`. Revision 0019 adds Settings-owned utility and billing-estimate
+configuration without changing accepted telemetry, immutable History, or rate
+provenance. Revision 0018 adds official-rate catalog evidence and explicit
 firmware/deployment lifecycle state while preserving all prior telemetry,
 History, rate, artifact, and OTA evidence. Revision 0017 adds independently accepted stateless telemetry,
 server-owned current History buckets, server-managed cadence and retention,

@@ -488,10 +488,25 @@ class HomeUtilityUpdateRequest(BaseModel):
     cost_scope: Literal["energy_only", "allocated_account", "full_account"] | None = None
     baseline_allocation_kwh: Decimal | None = Field(default=None, ge=0)
     cca_provider: str | None = Field(default=None, max_length=120)
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    generation_service_kind: Literal["sce_generation", "cca", "direct_access", "unknown"] | None = (
+        None
+    )
+    baseline_region: str | None = Field(default=None, max_length=80)
+    summer_baseline_kwh_per_day: Decimal | None = Field(default=None, ge=0)
+    winter_baseline_kwh_per_day: Decimal | None = Field(default=None, ge=0)
+    all_electric: bool | None = None
+    medical_baseline: bool | None = None
+    heat_pump_allocation: bool | None = None
+    estimate_high_coverage: Decimal | None = Field(default=None, ge=0, le=1)
+    estimate_min_coverage: Decimal | None = Field(default=None, ge=0, le=1)
+    max_estimatable_gap_seconds: int | None = Field(default=None, ge=60, le=86400)
+    billing_history_interval_seconds: Literal[15, 30, 60, 300, 900] | None = None
+    projection_minimum_hours: int | None = Field(default=None, ge=1, le=720)
     full_account_confirmation: Literal["I UNDERSTAND FULL ACCOUNT SCOPE"] | None = None
     allocated_account_confirmation: Literal["I VERIFIED THIS ALLOCATION SCOPE"] | None = None
 
-    @field_validator("home_name", "cca_provider")
+    @field_validator("home_name", "cca_provider", "baseline_region")
     @classmethod
     def clean_optional_labels(cls, value: str | None, info: object) -> str | None:
         field_name = getattr(info, "field_name", "name")
@@ -509,6 +524,10 @@ class HomeUtilityUpdateRequest(BaseModel):
             and self.allocated_account_confirmation != "I VERIFIED THIS ALLOCATION SCOPE"
         ):
             raise ValueError("allocated-account scope requires the exact typed confirmation")
+        low = self.estimate_min_coverage
+        high = self.estimate_high_coverage
+        if low is not None and high is not None and low > high:
+            raise ValueError("minimum estimate coverage cannot exceed high-confidence coverage")
         return self
 
     @field_validator("timezone")

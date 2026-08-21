@@ -1068,10 +1068,10 @@ def test_candidate_notes_describe_workflow_output_without_claiming_source_public
     notes = (ROOT / "release/RELEASE_NOTES.md").read_text(encoding="utf-8")
     normalized = " ".join(notes.split())
     assert "power-monitor-v2-v0.1.0-rc.24.yaml" in normalized
-    assert "Alembic head: `20260820_0018`" in normalized
+    assert "Alembic head: `20260821_0019`" in normalized
     assert "firmware tag: `v0.1.0-rc.24`, build number `27`" in normalized
     assert "pm-telemetry/2.0.0" in normalized
-    assert "849b51d0c706708a5581f6d8f4e2790cfd6fe229f83cdfabcaf2458c2fd82e10" in normalized
+    assert "fa2bc9b78b7ca3d6ddb630807edf2592a8eda133b80dc8ac7763e1b5b9c54098" in normalized
     assert "original bytes/full OCR text are never persisted" in normalized
     assert "Automated tests do not install firmware on physical sensors" in normalized
     assert "actual marked-unit" in normalized

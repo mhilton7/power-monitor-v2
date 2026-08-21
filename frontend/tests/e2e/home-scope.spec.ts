@@ -36,6 +36,8 @@ test('requires a UUID-disambiguated home and binds every home-specific page requ
   await page.locator('.sidebar').getByRole('link', { name: 'Billing' }).click();
   await expect(page.getByRole('heading', { name: 'Billing', exact: true })).toBeVisible();
   await expect(page).toHaveTitle('Billing · PowerMeter V2');
+  await page.getByRole('link', { name: 'Manage billing settings' }).click();
+  await expect(page).toHaveTitle('Settings · PowerMeter V2');
   await page.getByRole('button', { name: 'Import rates from SCE bill PDF' }).click();
   await page.getByLabel('Choose an SCE PDF rate source').setInputFiles({ name: 'rates.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7') });
   const uploadRequest = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/bill-rate-imports');
@@ -43,7 +45,7 @@ test('requires a UUID-disambiguated home and binds every home-specific page requ
   const uploaded = await uploadRequest;
   expect(uploaded.postDataBuffer()?.toString('utf8')).toContain(firstHomeId);
   await page.getByRole('button', { name: 'Close Import rates from SCE bill PDF' }).click();
-  await page.locator('.sidebar').getByRole('link', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
   await expect(page.getByLabel('Home name')).toBeVisible();
   await expect(page).toHaveTitle('Settings · PowerMeter V2');
 

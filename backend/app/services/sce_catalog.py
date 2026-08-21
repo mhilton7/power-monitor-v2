@@ -11,9 +11,19 @@ from .sce_rate_parser import ParsedRateCandidate
 DiscoveryState = Literal["parsed", "requires_parser", "excluded"]
 CatalogLinkKind = Literal["plan", "traversal", "excluded"]
 
-CATALOG_CRAWLER_VERSION = "sce-residential-catalog-crawl-v1"
+CATALOG_CRAWLER_VERSION = "sce-residential-catalog-crawl-v2"
 OFFICIAL_SCE_CATALOG_HOSTS = frozenset({"sce.com", "www.sce.com"})
 OFFICIAL_SCE_PUBLIC_PATH_PREFIXES = ("/regulatory/", "/save-money/")
+SCE_CATALOG_DISCOVERY_URL = (
+    "https://www.sce.com/save-money/rates-financing/residential-rate-plans/time-of-use-plans"
+)
+
+SUPPORTED_PLAN_NAMES: dict[str, str] = {
+    "DOMESTIC": "Tiered Rate Plan \u2014 Schedule D",
+    "TOU-D-4-9PM": "TOU-D 4 PM to 9 PM",
+    "TOU-D-5-8PM": "TOU-D 5 PM to 8 PM",
+    "TOU-D-PRIME": "TOU-D-PRIME",
+}
 
 
 @dataclass(frozen=True)
@@ -54,35 +64,129 @@ class SceCatalogLinkInspection:
 
 
 class _OfficialLinks(HTMLParser):
+    """Extract links only from authorized primary plan regions in ``main``.
+
+    SCE pages contain plan-like phrases in global navigation, FAQs, related
+    content, and marketing cards.  Keeping a current primary-plan heading and
+    resetting it at every unrelated heading prevents those phrases from
+    inheriting the preceding plan's identity.
+    """
+
+    _VOID_TAGS = frozenset(
+        {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "source",
+            "track",
+            "wbr",
+        }
+    )
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.links: list[tuple[str, str]] = []
+        self.links: list[tuple[str, str, str | None]] = []
+        self._depth = 0
+        self._main_depth: int | None = None
+        self._blocked_depths: list[int] = []
         self._href: str | None = None
         self._text: list[str] = []
+        self._anchor_family: str | None = None
+        self._heading_tag: str | None = None
+        self._heading_text: list[str] = []
+        self._current_family: str | None = None
         self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         lower = tag.lower()
+        is_void = lower in self._VOID_TAGS
+        if not is_void:
+            self._depth += 1
+        attributes = {key.lower(): value or "" for key, value in attrs}
         if lower in {"script", "style", "noscript", "template"}:
             self._skip_depth += 1
-        if lower == "a" and not self._skip_depth:
+        if self._main_depth is None and (
+            lower == "main" or attributes.get("role", "").lower() == "main"
+        ):
+            self._main_depth = self._depth
+        marker = " ".join(
+            (
+                attributes.get("id", ""),
+                attributes.get("class", ""),
+                attributes.get("aria-label", ""),
+            )
+        ).lower()
+        if self._in_main() and (
+            lower in {"nav", "header", "footer", "aside"}
+            or any(
+                value in marker
+                for value in (
+                    "faq",
+                    "frequently-asked",
+                    "glossary",
+                    "related-link",
+                    "site-navigation",
+                    "marketing",
+                )
+            )
+        ):
+            self._blocked_depths.append(self._depth)
+        if self._active() and re.fullmatch(r"h[1-6]", lower):
+            self._heading_tag = lower
+            self._heading_text = []
+        if lower == "a" and self._active():
             self._href = next((value for key, value in attrs if key.lower() == "href"), None)
             self._text = []
+            self._anchor_family = self._current_family
 
     def handle_endtag(self, tag: str) -> None:
         lower = tag.lower()
-        if lower == "a" and self._href is not None and not self._skip_depth:
+        if lower in self._VOID_TAGS:
+            return
+        if lower == "a" and self._href is not None and self._active():
             label = " ".join(" ".join(self._text).split())
+            family = self._anchor_family
+            if label.casefold() == "tiered rate plan":
+                family = "DOMESTIC"
+            elif family is None and self._heading_tag is not None:
+                family = _supported_canonical(label)
             if label:
-                self.links.append((self._href, label))
+                self.links.append((self._href, label, family))
             self._href = None
             self._text = []
+            self._anchor_family = None
+        if self._heading_tag == lower:
+            heading = " ".join(" ".join(self._heading_text).split())
+            self._current_family = _supported_canonical(heading)
+            self._heading_tag = None
+            self._heading_text = []
         if lower in {"script", "style", "noscript", "template"} and self._skip_depth:
             self._skip_depth -= 1
+        if self._blocked_depths and self._blocked_depths[-1] == self._depth:
+            self._blocked_depths.pop()
+        if self._main_depth == self._depth:
+            self._main_depth = None
+            self._current_family = None
+        self._depth = max(0, self._depth - 1)
 
     def handle_data(self, data: str) -> None:
-        if self._href is not None and not self._skip_depth:
+        if self._heading_tag is not None and self._active():
+            self._heading_text.append(data)
+        if self._href is not None and self._active():
             self._text.append(data)
+
+    def _in_main(self) -> bool:
+        return self._main_depth is not None and self._depth >= self._main_depth
+
+    def _active(self) -> bool:
+        return self._in_main() and not self._blocked_depths and not self._skip_depth
 
 
 _KNOWN_NAMES: tuple[tuple[re.Pattern[str], str, str], ...] = (
@@ -115,6 +219,22 @@ def _canonical(label: str) -> tuple[str, str | None]:
         return code, code
     canonical = re.sub(r"[^A-Z0-9]+", "-", label.upper()).strip("-")
     return canonical[:160], None
+
+
+def _supported_canonical(value: str) -> str | None:
+    for pattern, canonical, _schedule in _KNOWN_NAMES[:3]:
+        if pattern.search(value):
+            return canonical
+    if re.search(r"\b(?:TIERED\s+RATE\s+PLAN|SCHEDULE\s+D|DOMESTIC)\b", value, re.I):
+        return "DOMESTIC"
+    return None
+
+
+def _link_matches_family(label: str, href: str, family: str) -> bool:
+    matched = _supported_canonical(f"{label} {urlparse(href).path}")
+    if matched == family:
+        return True
+    return family == "DOMESTIC" and label.casefold() == "tiered rate plan"
 
 
 def _plan_type(label: str) -> str:
@@ -166,73 +286,6 @@ def _eligibility(label: str) -> tuple[str, ...]:
         "battery": ("BATTERY",),
     }
     return tuple(key for key, needles in terms.items() if any(item in upper for item in needles))
-
-
-def _is_plan_link(label: str, href: str) -> bool:
-    value = f"{label} {href}".upper()
-    if (
-        any(
-            phrase in value
-            for phrase in (
-                "RATE PLAN",
-                "RESIDENTIAL-RATE",
-                "TOU-D",
-                "TIME-OF-USE",
-                "SCHEDULE D",
-                "DOMESTIC",
-                "CRITICAL PEAK",
-                "CARE",
-                "FERA",
-                "MEDICAL BASELINE",
-                "ELECTRIC VEHICLE",
-                "ELECTRIFICATION",
-                "MOBILE HOME",
-                "MOBILE-HOME",
-                "RECREATIONAL VEHICLE",
-                "MULTIFAMILY",
-                "MULTI-FAMILY",
-                "SOLAR",
-                "NEM",
-                "HEAT PUMP",
-            )
-        )
-        or re.search(r"\bEV(?:-|\s|$)", value) is not None
-    ):
-        return not any(
-            phrase in value for phrase in ("COMPARE RATE", "RATE FAQ", "BUSINESS", "AGRICULTURAL")
-        )
-    return False
-
-
-def _is_catalog_traversal_link(label: str, href: str) -> bool:
-    """Return true only for known residential catalog/listing navigation."""
-
-    label_value = label.upper()
-    final_path_segment = urlparse(href).path.rstrip("/").rsplit("/", 1)[-1].upper()
-    if any(
-        marker in label_value
-        for marker in (
-            "RATE PLAN COMPARISON",
-            "RESIDENTIAL RATE PLANS",
-            "TIME OF USE PLANS",
-            "RESIDENTIAL RATES FAQ",
-            "RESIDENTIAL RATE FAQ",
-            "BASE SERVICES CHARGE",
-        )
-    ) or final_path_segment in {
-        "RATES-PRICING-CHOICES",
-        "RATE-PLAN-COMPARISON",
-        "RESIDENTIAL-RATE-PLANS",
-        "TIME-OF-USE-PLANS",
-        "TIME_OF_USE_PLANS",
-        "RESIDENTIAL-RATES-FAQ",
-        "RESIDENTIAL-RATE-FAQ",
-        "BSC",
-    }:
-        # A link naming a concrete schedule remains a plan even when its URL
-        # happens to live below a plural catalog path.
-        return not any(pattern.search(label) for pattern, _name, _schedule in _KNOWN_NAMES)
-    return False
 
 
 def _is_official_tariff_document(label: str, href: str) -> bool:
@@ -293,6 +346,7 @@ def inspect_sce_catalog_links(
     media_type: str,
     *,
     source_url: str,
+    enrichment_for: str | None = None,
 ) -> SceCatalogLinkInspection:
     """Extract only bounded-crawl-relevant links from captured official HTML.
 
@@ -316,15 +370,19 @@ def inspect_sce_catalog_links(
         return SceCatalogLinkInspection(links=(), error_code="CATALOG_INDEX_HTML_PARSE_FAILED")
 
     discovered: dict[str, DiscoveredSceCatalogLink] = {}
-    for href, raw_label in parser.links:
+    for href, raw_label, scoped_family in parser.links:
         label = " ".join(raw_label.split())[:160]
         target_url = _normalized_discovered_url(source_url, href)
         if target_url is None:
             continue
         host = (urlparse(target_url).hostname or "").lower().rstrip(".")
+        family = enrichment_for or scoped_family
+        if family not in SUPPORTED_PLAN_NAMES:
+            continue
         tariff_document = _is_official_tariff_document(label, target_url)
         if host == "edisonintl.sharepoint.com" and tariff_document:
-            canonical, schedule = _canonical(label)
+            canonical = family
+            schedule = "D" if family == "DOMESTIC" else family
             discovered.setdefault(
                 target_url,
                 DiscoveredSceCatalogLink(
@@ -343,22 +401,19 @@ def inspect_sce_catalog_links(
             continue
         if not urlparse(target_url).path.lower().startswith(OFFICIAL_SCE_PUBLIC_PATH_PREFIXES):
             continue
-        traversal = _is_catalog_traversal_link(label, target_url)
-        plan = _is_plan_link(label, target_url) or tariff_document
-        if not traversal and not plan:
+        if not _link_matches_family(label, target_url, family):
             continue
-        canonical, schedule = _canonical(label)
         candidate = DiscoveredSceCatalogLink(
             source_url=source_url,
             target_url=target_url,
             label=label,
-            canonical_name=canonical,
-            official_schedule_code=schedule,
+            canonical_name=family,
+            official_schedule_code="D" if family == "DOMESTIC" else family,
             source_level=1 if tariff_document else 2,
-            kind="traversal" if traversal else "plan",
+            kind="plan",
         )
         prior = discovered.get(target_url)
-        if prior is None or (prior.kind == "traversal" and candidate.kind == "plan"):
+        if prior is None:
             discovered[target_url] = candidate
     return SceCatalogLinkInspection(
         links=tuple(discovered[url] for url in sorted(discovered)),
@@ -376,7 +431,7 @@ def discovered_plan_from_link(
         raise ValueError("catalog traversal links are not rate plans")
     return DiscoveredScePlan(
         source_url=link.target_url,
-        public_plan_name=link.label,
+        public_plan_name=SUPPORTED_PLAN_NAMES[link.canonical_name],
         canonical_name=link.canonical_name,
         official_schedule_code=link.official_schedule_code,
         plan_type=_plan_type(link.label),
@@ -411,6 +466,43 @@ def _normalized_catalog_plan(
     parsed: ParsedRateCandidate,
 ) -> dict[str, Any]:
     return {**plan, "catalog_metadata": _catalog_metadata(parsed)}
+
+
+def _candidate_signature_complete(
+    plan: dict[str, Any],
+    parsed: ParsedRateCandidate,
+) -> bool:
+    periods = plan.get("periods")
+    if not isinstance(periods, list) or not periods:
+        return False
+    if any(
+        not isinstance(period, dict)
+        or not isinstance(period.get("price_per_kwh"), str)
+        or not period["price_per_kwh"]
+        for period in periods
+    ):
+        return False
+    if plan.get("daily_fixed_charge") is None and plan.get("monthly_fixed_charge") is None:
+        return False
+    canonical, _schedule = _canonical(str(plan.get("rate_plan_name", "")))
+    if canonical == "DOMESTIC":
+        names = {str(period.get("name")) for period in periods if isinstance(period, dict)}
+        if not {"tier_1", "tier_2"}.issubset(names) or not plan.get("tier_threshold_basis"):
+            return False
+    else:
+        if any(
+            period.get("season") is None
+            or period.get("day_type") is None
+            or period.get("start_minute") is None
+            or period.get("end_minute") is None
+            for period in periods
+            if isinstance(period, dict)
+        ):
+            return False
+    return bool(
+        parsed.normalized_rates.get("effective_start")
+        or parsed.normalized_rates.get("effective_date_confirmation_required") is True
+    )
 
 
 def _enrollment_status(label: str) -> str:
@@ -454,7 +546,10 @@ def discover_sce_catalog(
                 raw_name = plan.get("rate_plan_name")
                 if isinstance(raw_name, str) and raw_name:
                     canonical, _schedule = _canonical(raw_name)
-                    parsed_plans[canonical] = _normalized_catalog_plan(plan, parsed)
+                    if canonical in SUPPORTED_PLAN_NAMES and _candidate_signature_complete(
+                        plan, parsed
+                    ):
+                        parsed_plans[canonical] = _normalized_catalog_plan(plan, parsed)
 
     discovered: dict[str, DiscoveredScePlan] = {}
     for link in discover_sce_catalog_links(body, media_type, source_url=source_url):
@@ -474,7 +569,7 @@ def discover_sce_catalog(
         state: DiscoveryState = "parsed" if normalized else "requires_parser"
         discovered[link.canonical_name] = DiscoveredScePlan(
             source_url=link.target_url,
-            public_plan_name=link.label,
+            public_plan_name=SUPPORTED_PLAN_NAMES[link.canonical_name],
             canonical_name=link.canonical_name,
             official_schedule_code=link.official_schedule_code,
             plan_type=_stored_plan_type(normalized.get("pricing_model"), link.label),
@@ -494,11 +589,11 @@ def discover_sce_catalog(
         _canonical_name, schedule = _canonical(str(plan.get("rate_plan_name", canonical)))
         discovered[canonical] = DiscoveredScePlan(
             source_url=source_url,
-            public_plan_name=str(plan.get("rate_plan_name", canonical))[:160],
+            public_plan_name=SUPPORTED_PLAN_NAMES[canonical],
             canonical_name=canonical,
             official_schedule_code=schedule,
             plan_type=_stored_plan_type(plan.get("pricing_model"), str(plan.get("rate_plan_name"))),
-            enrollment_status="unknown",
+            enrollment_status="open_or_eligibility_required",
             eligibility=(),
             discovery_state="parsed",
             exclusion_reason=None,
@@ -511,6 +606,8 @@ def discover_sce_catalog(
 __all__ = [
     "CATALOG_CRAWLER_VERSION",
     "OFFICIAL_SCE_PUBLIC_PATH_PREFIXES",
+    "SCE_CATALOG_DISCOVERY_URL",
+    "SUPPORTED_PLAN_NAMES",
     "DiscoveredSceCatalogLink",
     "DiscoveredScePlan",
     "SceCatalogLinkInspection",

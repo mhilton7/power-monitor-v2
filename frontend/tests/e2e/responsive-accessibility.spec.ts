@@ -67,6 +67,10 @@ for (const viewport of viewports) {
       expect(box?.height).toBeGreaterThanOrEqual(24);
     }
     if (viewport.width <= 720) await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+    const homeSelector = page.getByLabel('Active home');
+    const selectorBox = await homeSelector.boundingBox();
+    expect(selectorBox?.height).toBeLessThanOrEqual(44);
+    if (viewport.width > 720) expect(selectorBox?.width).toBeLessThanOrEqual(420);
 
     await page.goto('/history');
     await expect(page.getByTestId('history-chart')).toBeVisible();
@@ -136,7 +140,7 @@ test('all major pages and a mobile modal pass automated WCAG checks', async ({ p
   }
 
   await page.setViewportSize({ width: 320, height: 568 });
-  await page.goto('/billing');
+  await page.goto('/settings?section=rates');
   await page.getByRole('button', { name: 'Import rates from SCE bill PDF' }).click();
   const modalResults = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
   expect(modalResults.violations).toEqual([]);
