@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import ast
 import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
 from backend.app.config import get_settings
-from backend.app.models import Base
+from backend.app.models import (
+    Base,
+    Home,
+    RatePlan,
+    User,
+    UtilityAccount,
+    UtilityAccountTierThreshold,
+)
+from sqlalchemy.orm import Session
 
 from alembic import command
 from alembic.config import Config
@@ -258,8 +268,29 @@ def test_later_orm_metadata_cannot_change_initial_revision_or_chain(
         sync_engine = sa.create_engine(sync_url)
         try:
             with sync_engine.connect() as connection:
-                tables = set(sa.inspect(connection).get_table_names())
+                inspector = sa.inspect(connection)
+                tables = set(inspector.get_table_names())
                 assert future_table.name not in tables
+                assert "rate_dated_prices" in tables
+                assert {
+                    column["name"] for column in inspector.get_columns("rate_dated_prices")
+                } == {
+                    "id",
+                    "rate_plan_version_id",
+                    "start_utc",
+                    "end_utc",
+                    "price_per_kwh",
+                    "delivery_per_kwh",
+                    "generation_per_kwh",
+                    "rate_components",
+                    "source_label",
+                }
+                assert "tier_threshold_rule" in {
+                    column["name"] for column in inspector.get_columns("rate_candidate_reviews")
+                }
+                assert "firmware_build_id" in {
+                    column["name"] for column in inspector.get_columns("firmware_releases")
+                }
         finally:
             sync_engine.dispose()
 
@@ -944,6 +975,330 @@ def test_stateless_revision_refuses_lossy_downgrade_after_acceptance(
                 )
         finally:
             engine.dispose()
+    finally:
+        get_settings.cache_clear()
+        database.unlink(missing_ok=True)
+
+
+def test_catalog_firmware_lifecycle_revision_backfills_without_deleting_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = ROOT / ".test-runtime" / f"catalog-lifecycle-{uuid.uuid4().hex}.sqlite3"
+    async_url = _sqlite_url(database, async_driver=True)
+    sync_url = _sqlite_url(database, async_driver=False)
+    monkeypatch.setenv("PM_ENV", "test")
+    monkeypatch.setenv("PM_DATABASE_URL", async_url)
+    get_settings.cache_clear()
+    config = _config()
+    available_id = str(uuid.uuid4())
+    rollback_id = str(uuid.uuid4())
+    removed_id = str(uuid.uuid4())
+    try:
+        command.upgrade(config, "20260818_0017")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                for release_id, version, image_path, digest, created_at in (
+                    (
+                        available_id,
+                        "0.1.0-rc.200",
+                        "/data/firmware/available.bin",
+                        "a" * 64,
+                        "2026-08-20 12:00:00",
+                    ),
+                    (
+                        rollback_id,
+                        "0.1.0-rc.199",
+                        "/data/firmware/rollback.bin",
+                        "c" * 64,
+                        "2026-08-19 12:00:00",
+                    ),
+                    (removed_id, "0.1.0-rc.198", "", "b" * 64, "2026-08-18 12:00:00"),
+                ):
+                    connection.execute(
+                        sa.text(
+                            "INSERT INTO firmware_releases "
+                            "(id, semantic_version, build_number, project_name, target_chip, "
+                            "board_profile, minimum_boot_version, minimum_protocol, "
+                            "minimum_config_version, image_size, sha256, image_path, "
+                            "release_notes, manifest_signature, candidate, created_at) VALUES "
+                            "(:id, :version, '200', 'power-monitor-sensor-headless', "
+                            "'esp32s3', 'reference', 1, 'pm-protocol/1.0.0', 1, 1024, "
+                            ":digest, :image_path, 'rate-free fixture', 'signature', true, "
+                            ":created_at)"
+                        ),
+                        {
+                            "id": release_id,
+                            "version": version,
+                            "digest": digest,
+                            "image_path": image_path,
+                            "created_at": created_at,
+                        },
+                    )
+        finally:
+            engine.dispose()
+
+        command.upgrade(config, "head")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.scalar(sa.text("SELECT COUNT(*) FROM firmware_releases")) == 3
+                rows = {
+                    row.id: row
+                    for row in connection.execute(
+                        sa.text(
+                            "SELECT id, lifecycle_state, rollback_pinned, "
+                            "artifact_deleted_at, deleted_at "
+                            "FROM firmware_releases"
+                        )
+                    )
+                }
+                assert rows[available_id].lifecycle_state == "current"
+                assert not bool(rows[available_id].rollback_pinned)
+                assert rows[available_id].artifact_deleted_at is None
+                assert rows[rollback_id].lifecycle_state == "available"
+                assert bool(rows[rollback_id].rollback_pinned)
+                assert rows[removed_id].lifecycle_state == "deleted"
+                assert rows[removed_id].artifact_deleted_at is not None
+                assert rows[removed_id].deleted_at is not None
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT deployment_retention_days FROM firmware_lifecycle_settings "
+                            "WHERE id = 'global'"
+                        )
+                    )
+                    == 365
+                )
+                assert "sce_catalog_entries" in sa.inspect(connection).get_table_names()
+                assert "utility_account_tier_thresholds" in sa.inspect(connection).get_table_names()
+                assert {
+                    "utility_account_id",
+                    "rate_plan_id",
+                    "season",
+                    "kwh_per_day",
+                    "source_allowance_kwh",
+                    "source_billing_days",
+                    "effective_start",
+                    "effective_end",
+                    "source_artifact_sha256",
+                } <= {
+                    column["name"]
+                    for column in sa.inspect(connection).get_columns(
+                        "utility_account_tier_thresholds"
+                    )
+                }
+                assert (
+                    connection.scalar(
+                        sa.text(
+                            "SELECT COUNT(*) FROM audit_events WHERE event_code IN "
+                            "('FIRMWARE_CURRENT_RELEASE_MIGRATED', "
+                            "'FIRMWARE_ROLLBACK_RELEASE_MIGRATED')"
+                        )
+                    )
+                    == 2
+                )
+                assert connection.scalar(sa.text("SELECT COUNT(*) FROM rate_plan_versions")) == 0
+                assert connection.scalar(sa.text("SELECT COUNT(*) FROM normalized_intervals")) == 0
+                with pytest.raises(sa.exc.IntegrityError):
+                    connection.execute(
+                        sa.text(
+                            "UPDATE firmware_releases SET lifecycle_state = 'current' "
+                            "WHERE id = :release_id"
+                        ),
+                        {"release_id": rollback_id},
+                    )
+        finally:
+            engine.dispose()
+
+        command.downgrade(config, "20260818_0017")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.scalar(sa.text("SELECT COUNT(*) FROM firmware_releases")) == 3
+                assert "lifecycle_state" not in {
+                    column["name"]
+                    for column in sa.inspect(connection).get_columns("firmware_releases")
+                }
+        finally:
+            engine.dispose()
+    finally:
+        get_settings.cache_clear()
+        database.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    ("mutation_sql", "parameters", "error_fragment"),
+    (
+        (
+            "UPDATE firmware_lifecycle_settings SET deployment_retention_days = 90 "
+            "WHERE id = 'global'",
+            {},
+            "firmware lifecycle settings",
+        ),
+        (
+            "INSERT INTO audit_events "
+            "(id, event_code, target_type, target_id, correlation_id, details, created_at) "
+            "VALUES (:id, 'FIRMWARE_DEPLOYMENT_RETENTION_UPDATED', "
+            "'firmware_lifecycle_settings', 'global', 'restored-default-fixture', '{}', "
+            "CURRENT_TIMESTAMP)",
+            {"id": "restored-default-audit"},
+            "post-migration lifecycle or rate audit",
+        ),
+        (
+            "INSERT INTO rate_plans "
+            "(id, name, utility_name, rate_class, official_schedule_code, created_at) "
+            "VALUES (:id, 'Published evidence', 'SCE', 'residential', 'D', "
+            "CURRENT_TIMESTAMP)",
+            {"id": "rate-plan-evidence"},
+            "official rate-plan metadata",
+        ),
+        (
+            "INSERT INTO firmware_releases "
+            "(id, semantic_version, build_number, project_name, target_chip, board_profile, "
+            "minimum_boot_version, minimum_protocol, minimum_config_version, image_size, "
+            "sha256, firmware_build_id, image_path, release_notes, manifest_signature, "
+            "candidate, created_at, updated_at) VALUES "
+            "(:id, '0.1.0-rc.222', '222', 'power-monitor-sensor-headless', 'esp32s3', "
+            "'reference', 1, 'pm-protocol/1.0.0', 1, 1024, :sha256, :build_id, "
+            "'/data/firmware/rc222.bin', 'fixture', 'signature', true, "
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            {
+                "id": "firmware-build-evidence",
+                "sha256": "b" * 64,
+                "build_id": "a" * 64,
+            },
+            "exact firmware build identity",
+        ),
+    ),
+)
+def test_catalog_lifecycle_revision_refuses_lossy_downgrade(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation_sql: str,
+    parameters: dict[str, object],
+    error_fragment: str,
+) -> None:
+    database = ROOT / ".test-runtime" / f"catalog-lossy-{uuid.uuid4().hex}.sqlite3"
+    async_url = _sqlite_url(database, async_driver=True)
+    sync_url = _sqlite_url(database, async_driver=False)
+    monkeypatch.setenv("PM_ENV", "test")
+    monkeypatch.setenv("PM_DATABASE_URL", async_url)
+    get_settings.cache_clear()
+    config = _config()
+    try:
+        command.upgrade(config, "head")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(sa.text(mutation_sql), parameters)
+        finally:
+            engine.dispose()
+
+        with pytest.raises(RuntimeError, match=error_fragment):
+            command.downgrade(config, "20260818_0017")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == (
+                    "20260820_0018"
+                )
+        finally:
+            engine.dispose()
+    finally:
+        get_settings.cache_clear()
+        database.unlink(missing_ok=True)
+
+
+def test_catalog_lifecycle_revision_rejects_nonhex_firmware_build_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = ROOT / ".test-runtime" / f"catalog-build-check-{uuid.uuid4().hex}.sqlite3"
+    async_url = _sqlite_url(database, async_driver=True)
+    sync_url = _sqlite_url(database, async_driver=False)
+    monkeypatch.setenv("PM_ENV", "test")
+    monkeypatch.setenv("PM_DATABASE_URL", async_url)
+    get_settings.cache_clear()
+    config = _config()
+    try:
+        command.upgrade(config, "head")
+        engine = sa.create_engine(sync_url)
+        try:
+            with engine.connect() as connection, pytest.raises(sa.exc.IntegrityError):
+                connection.execute(
+                    sa.text(
+                        "INSERT INTO firmware_releases "
+                        "(id, semantic_version, build_number, project_name, target_chip, "
+                        "board_profile, minimum_boot_version, minimum_protocol, "
+                        "minimum_config_version, image_size, sha256, firmware_build_id, "
+                        "image_path, release_notes, manifest_signature, candidate, "
+                        "created_at, updated_at) VALUES "
+                        "('invalid-build', '0.1.0-rc.223', '223', "
+                        "'power-monitor-sensor-headless', 'esp32s3', 'reference', 1, "
+                        "'pm-protocol/1.0.0', 1, 1024, :sha256, :build_id, "
+                        "'/data/firmware/rc223.bin', 'fixture', 'signature', true, "
+                        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                    ),
+                    {"sha256": "c" * 64, "build_id": "g" * 64},
+                )
+        finally:
+            engine.dispose()
+    finally:
+        get_settings.cache_clear()
+        database.unlink(missing_ok=True)
+
+
+def test_catalog_lifecycle_revision_refuses_account_tier_threshold_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = ROOT / ".test-runtime" / f"account-tier-lossy-{uuid.uuid4().hex}.sqlite3"
+    async_url = _sqlite_url(database, async_driver=True)
+    sync_url = _sqlite_url(database, async_driver=False)
+    monkeypatch.setenv("PM_ENV", "test")
+    monkeypatch.setenv("PM_DATABASE_URL", async_url)
+    get_settings.cache_clear()
+    config = _config()
+    try:
+        command.upgrade(config, "head")
+        engine = sa.create_engine(sync_url)
+        try:
+            with Session(engine) as session:
+                user = User(
+                    email="tier-migration@example.com",
+                    display_name="Tier migration fixture",
+                    password_hash="not-a-real-credential",
+                )
+                home = Home(name="Tier migration home")
+                session.add_all((user, home))
+                session.flush()
+                account = UtilityAccount(home_id=home.id)
+                plan = RatePlan(
+                    name="DOMESTIC migration fixture",
+                    utility_name="Southern California Edison",
+                    rate_class="residential_tiered",
+                )
+                session.add_all((account, plan))
+                session.flush()
+                session.add(
+                    UtilityAccountTierThreshold(
+                        utility_account_id=account.id,
+                        rate_plan_id=plan.id,
+                        season="summer",
+                        kwh_per_day=Decimal("19.3"),
+                        source_allowance_kwh=Decimal("579"),
+                        source_billing_days=30,
+                        tier1_boundary_inclusive=True,
+                        source_label="migration fixture evidence",
+                        source_kind="candidate_review",
+                        source_artifact_sha256="a" * 64,
+                        effective_start=datetime(2026, 6, 1, 7, tzinfo=UTC),
+                        created_by_user_id=user.id,
+                    )
+                )
+                session.commit()
+        finally:
+            engine.dispose()
+        with pytest.raises(RuntimeError, match="account tier-threshold evidence"):
+            command.downgrade(config, "20260818_0017")
     finally:
         get_settings.cache_clear()
         database.unlink(missing_ok=True)

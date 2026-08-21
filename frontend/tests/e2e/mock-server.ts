@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { alerts, apiResponse, backupStatus, billing, circuits, dailyHistory, device, firmwareReleases, history, home, homeScopes, homeUtility, rateCandidate, session, systemHealth } from '../fixtures.ts';
+import { alerts, apiResponse, backupStatus, billing, circuits, dailyHistory, device, firmwareLifecycleSettings, firmwareReleases, history, home, homeScopes, homeUtility, rateCandidate, sceRateCatalog, session, systemHealth } from '../fixtures.ts';
 
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://127.0.0.1:8000');
@@ -34,6 +34,7 @@ const server = createServer((request, response) => {
   if (path.endsWith('/history/export.csv')) { response.writeHead(200, { 'Content-Type': 'text/csv' }); response.end('timestamp,value\n2026-08-13T10:00:00Z,0\n'); return; }
   if (path.endsWith('/history')) return json(response, 200, url.searchParams.get('resolution_seconds') === '86400' ? dailyHistory : history);
   if (path.endsWith('/billing')) return json(response, 200, billing);
+  if (path.endsWith('/rate-sources/catalog')) return json(response, 200, sceRateCatalog);
   if (path.endsWith('/bill-rate-imports')) return json(response, 200, { extractions: [] });
   if (path.endsWith('/rate-sources/check-now')) return json(response, 202, { run_id: 'rate-run-1', state: 'review_required', event_code: 'RATE_SOURCE_CHANGED', revision_id: rateCandidate.source.revision_id, candidate_id: rateCandidate.id, error_code: null });
   if (path.endsWith('/users') && request.method === 'POST') return json(response, 201, { id: 'user-new', email: 'new@example.test', display_name: 'New User' });
@@ -42,6 +43,15 @@ const server = createServer((request, response) => {
   if (path.endsWith('/system/health')) return json(response, 200, systemHealth);
   if (path.endsWith('/backups/status')) return json(response, 200, backupStatus);
   if (path.endsWith('/firmware/releases') && request.method === 'POST') return json(response, 201, { release: firmwareReleases.releases[0], manifest_signature: 'fixture-signature', physical_certification: 'pending' });
+  if (path.includes('/firmware/releases/') && path.endsWith('/archive') && request.method === 'POST') return json(response, 200, { ...firmwareReleases.releases[0], release_state: 'archived', archive_eligible: false, restore_eligible: true, deploy_eligible: false });
+  if (path.includes('/firmware/releases/') && path.endsWith('/restore') && request.method === 'POST') return json(response, 200, { ...firmwareReleases.releases[0], release_state: 'available', archive_eligible: true, restore_eligible: false, deploy_eligible: true });
+  if (path.includes('/firmware/releases/') && path.endsWith('/make-current') && request.method === 'POST') return json(response, 200, { ...firmwareReleases.releases[0], release_state: 'current', rollback_pinned: false });
+  if (path.includes('/firmware/releases/') && path.endsWith('/rollback-pin') && request.method === 'PATCH') return json(response, 200, { ...firmwareReleases.releases[0], rollback_pinned: true });
+  if (path.includes('/firmware/releases/') && path.endsWith('/delete-permanently') && request.method === 'POST') { response.writeHead(204); response.end(); return; }
+  if (path.endsWith('/firmware/lifecycle-settings')) return json(response, 200, firmwareLifecycleSettings);
+  if (path.includes('/firmware/deployment-batches/') && path.endsWith('/archive') && request.method === 'POST') return json(response, 200, { ...firmwareReleases.releases[0]!.deployment_batches[0], state: 'archived', deployment_state: 'archived', archived_at: '2026-08-13T18:00:00Z', archive_eligible: false, restore_eligible: true, delete_eligibility: { eligible: true, protection_reasons: [] } });
+  if (path.includes('/firmware/deployment-batches/') && path.endsWith('/restore') && request.method === 'POST') return json(response, 200, firmwareReleases.releases[0]!.deployment_batches[0]);
+  if (path.includes('/firmware/deployment-batches/') && path.endsWith('/delete-permanently') && request.method === 'POST') { response.writeHead(204); response.end(); return; }
   if (path.includes('/firmware/releases/') && request.method === 'DELETE') { response.writeHead(204); response.end(); return; }
   if (path.endsWith('/firmware/releases')) return json(response, 200, firmwareReleases);
   if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) return json(response, 202, { batch_id: 'deployment-batch-1', batch_state: 'in_progress', deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] });

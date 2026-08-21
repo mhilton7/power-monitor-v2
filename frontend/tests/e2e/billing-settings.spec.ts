@@ -68,8 +68,9 @@ test('sensor enrollment, configuration and signed firmware surfaces use concrete
 
   await page.getByRole('button', { name: 'Firmware' }).click();
   await expect(page.getByText(/1\.2\.4 · build 851/)).toBeVisible();
-  await expect(page.getByText(/physical certification pending/)).toBeVisible();
-  await page.getByRole('button', { name: 'Deploy' }).click();
+  await page.locator('.firmware-release-technical').getByText('Technical details').click();
+  await expect(page.locator('.firmware-release-technical').getByText('pending', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Deploy', exact: true }).click();
   const deployRequest = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/deploy'));
   await page.getByRole('button', { name: 'Queue deployment' }).click();
   await deployRequest;

@@ -28,5 +28,6 @@ unresolved until reviewed.
 History interval and retention are server settings. Shortening retention
 requires exact confirmation and deletes only expired derived History for the
 selected home. Immutable samples, cost-linked evidence, rates, audit records,
-and identities remain. A downgrade from revision `20260818_0017` fails closed
-when accepted stateless samples or cutover evidence would be lost.
+and identities remain. A downgrade from revision `20260820_0018` fails closed
+when catalog/lifecycle evidence cannot be represented; revision 0017 likewise
+refuses to remove accepted stateless samples or cutover evidence.

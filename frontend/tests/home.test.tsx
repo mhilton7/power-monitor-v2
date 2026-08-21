@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HomePage } from '../src/pages/HomePage';
-import { billing, device, home } from './fixtures';
+import { apiResponse, billing, device, history, home } from './fixtures';
 import { installFetchMock, renderWithProviders } from './render';
 
 describe('Home', () => {
@@ -234,6 +234,16 @@ describe('Home', () => {
     await userEvent.click(screen.getByRole('button', { name: /^Reboot/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Reboot sensor' }));
     await waitFor(() => expect(commands).toEqual(['reboot']));
+  });
+
+  it('keeps Dashboard missing ranges as unshaded breaks rather than invented curves', async () => {
+    installFetchMock((path, method) => path.includes('/history')
+      ? { status: 200, body: history }
+      : apiResponse(path, method));
+    renderWithProviders(<HomePage />);
+    const chart = await screen.findByTestId('usage-chart');
+    expect(chart).toHaveAttribute('data-missing-gap-style', 'unshaded');
+    expect(chart).toHaveAttribute('data-missing-range-count', '1');
   });
 
   it('shows stateless delivery details and only the supported sensor commands', async () => {

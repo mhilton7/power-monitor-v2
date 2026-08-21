@@ -99,10 +99,12 @@ jobs:
           set -Eeuo pipefail
           version="${FIRMWARE_TAG#v}"
           image_sha256="$(sha256sum firmware-assets/firmware.bin | cut -d' ' -f1)"
-          build_id="$(jq -er '.build_number' firmware-assets/manifest.json)"
+          build_number="$(jq -er '.build_number | select(type == "number" and . >= 1 and . <= 4294967295 and floor == .)' firmware-assets/manifest.json)"
+          firmware_build_id="$(jq -er '.firmware_build_id | select(type == "string" and test("^[0-9a-f]{64}$"))' firmware-assets/manifest.json)"
           jq -e --arg version "$version" --arg revision "$FIRMWARE_REVISION" \
-            --arg image_sha256 "$image_sha256" \
-            '.schema == "pm-firmware-release/1.0.0" and .version == $version and .git_commit == $revision and .image_sha256 == $image_sha256 and .project_name == "power-monitor-sensor-headless" and .target_chip == "esp32s3" and .board_profile == "esp32-s3-devkitc-n16r8-reference/1" and .minimum_protocol == "pm-protocol/1.0.0" and .minimum_config_version == 1 and .ota_authentication.mode == "per-device-hmac-sha256" and .hardware_certification == "pending"' \
+            --arg image_sha256 "$image_sha256" --argjson build_number "$build_number" \
+            --arg firmware_build_id "$firmware_build_id" \
+            '.schema == "pm-firmware-release/1.1.0" and .version == $version and .git_commit == $revision and .image_sha256 == $image_sha256 and .build_number == $build_number and .firmware_build_id == $firmware_build_id and .project_name == "power-monitor-sensor-headless" and .target_chip == "esp32s3" and .board_profile == "esp32-s3-devkitc-n16r8-reference/1" and .minimum_protocol == "pm-protocol/1.0.0" and .minimum_config_version == 1 and .ota_authentication.mode == "per-device-hmac-sha256" and .hardware_certification == "pending"' \
             firmware-assets/manifest.json >/dev/null
           jq -e --arg tag "$FIRMWARE_TAG" --arg revision "$FIRMWARE_REVISION" \
             --arg image_sha256 "$image_sha256" --arg server_tag "$GITHUB_REF_NAME" \
@@ -117,8 +119,9 @@ jobs:
             --arg firmware_revision "$FIRMWARE_REVISION" \
             --arg firmware_release_url "${{ steps.firmware.outputs.url }}" \
             --arg firmware_image_sha256 "$image_sha256" \
-            --argjson firmware_build_id "$build_id" \
-            '{schema:"pm-cross-repository-contract/1.0.0",protocol:"pm-protocol/1.0.0",firmware_tag:$firmware_tag,firmware_revision:$firmware_revision,firmware_release_url:$firmware_release_url,firmware_image_sha256:$firmware_image_sha256,firmware_build_id:$firmware_build_id,host_and_contract_status:"passed",physical_certification_status:"pending"}' \
+            --argjson firmware_build_number "$build_number" \
+            --arg firmware_build_id "$firmware_build_id" \
+            '{schema:"pm-cross-repository-contract/1.1.0",protocol:"pm-protocol/1.0.0",firmware_tag:$firmware_tag,firmware_revision:$firmware_revision,firmware_release_url:$firmware_release_url,firmware_image_sha256:$firmware_image_sha256,firmware_build_number:$firmware_build_number,firmware_build_id:$firmware_build_id,host_and_contract_status:"passed",physical_certification_status:"pending"}' \
             > firmware-compatibility-report.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -316,11 +319,12 @@ jobs:
           --build-time "$(git show -s --format=%cI "$GITHUB_SHA")"
           --frontend-version "${GITHUB_REF_NAME#v}"
           --frontend-asset-id "${GITHUB_REF_NAME#v}-${GITHUB_SHA:0:16}"
-          --database-revision 20260818_0017
+          --database-revision 20260820_0018
           --firmware-release-url "$(jq -er '.firmware_release_url' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
           --firmware-tag "$(jq -er '.firmware_tag' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
           --firmware-revision "$(jq -er '.firmware_revision' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
           --firmware-image-sha256 "$(jq -er '.firmware_image_sha256' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
+          --firmware-build-number "$(jq -er '.firmware_build_number' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
           --firmware-build-id "$(jq -er '.firmware_build_id' release/smoke/firmware-compatibility/firmware-compatibility-report.json)"
       - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
@@ -447,11 +451,12 @@ jobs:
           --build-time "$(git show -s --format=%cI "$GITHUB_SHA")"
           --frontend-version "${GITHUB_REF_NAME#v}"
           --frontend-asset-id "${GITHUB_REF_NAME#v}-${GITHUB_SHA:0:16}"
-          --database-revision 20260818_0017
+          --database-revision 20260820_0018
           --firmware-release-url "$(jq -er '.firmware_release_url' release/assets/firmware-compatibility-report.json)"
           --firmware-tag "$(jq -er '.firmware_tag' release/assets/firmware-compatibility-report.json)"
           --firmware-revision "$(jq -er '.firmware_revision' release/assets/firmware-compatibility-report.json)"
           --firmware-image-sha256 "$(jq -er '.firmware_image_sha256' release/assets/firmware-compatibility-report.json)"
+          --firmware-build-number "$(jq -er '.firmware_build_number' release/assets/firmware-compatibility-report.json)"
           --firmware-build-id "$(jq -er '.firmware_build_id' release/assets/firmware-compatibility-report.json)"
       - run: docker compose -f release/assets/power-monitor-v2-${{ github.ref_name }}.yaml config --quiet
       - run: python scripts/verify_release_artifacts.py --manifest release/assets/release-manifest.json
@@ -524,7 +529,7 @@ jobs:
           jq -e '.status == "passed"' release/assets/deployment-test-report.json >/dev/null
           jq -e '.status == "passed"' \
             release/assets/deployment-test-report-authenticated.json >/dev/null
-          jq -e '.host_and_contract_status == "passed" and .physical_certification_status == "pending"' \
+          jq -e '.schema == "pm-cross-repository-contract/1.1.0" and .host_and_contract_status == "passed" and .physical_certification_status == "pending" and (.firmware_build_number | type == "number" and . >= 1 and . <= 4294967295 and floor == .) and (.firmware_build_id | type == "string" and test("^[0-9a-f]{64}$"))' \
             release/assets/firmware-compatibility-report.json >/dev/null
           jq -e '.status == "pending"' release/assets/hardware-certification-status.json >/dev/null
       - uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1

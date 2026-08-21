@@ -50,6 +50,7 @@ class HeartbeatRequest(BaseModel):
     protocol_id: Literal["pm-protocol/1.0.0"]
     boot_id: str = Field(min_length=36, max_length=36)
     firmware_version: str = Field(min_length=1, max_length=80)
+    firmware_build_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     measurement: ElectricalMeasurement
     storage_status: Literal["ok", "missing", "read_only", "full", "corrupt", "degraded"]
     storage_bytes_total: int | None = Field(default=None, gt=0)
@@ -219,7 +220,7 @@ class StatelessTelemetryRequest(BaseModel):
         "ok", "timeout", "bad_crc", "short_frame", "wrong_address", "invalid", "absent"
     ]
     firmware_version: str = Field(min_length=1, max_length=80)
-    firmware_build_id: str = Field(min_length=1, max_length=128)
+    firmware_build_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     time_status: Literal["trusted", "untrusted", "stepped", "disputed"]
     wifi_rssi: int | None = Field(default=None, ge=-127, le=0)
     command_results: list[CommandResult] = Field(default_factory=list, max_length=16)

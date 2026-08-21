@@ -60,15 +60,25 @@ export const firmwareReleases = {
     schema: 'pm-ota-manifest/1.0.0', release_id: '00000000-0000-0000-0000-000000000030', semantic_version: '1.2.4', build_number: 851,
     project_name: 'power-monitor-sensor-headless', target_chip: 'esp32s3', board_profile: 'esp32-s3-devkitc-n16r8-reference/1', minimum_boot_version: 1, minimum_protocol: 'pm-protocol/1.0.0', minimum_config_version: 1,
     image_size: 1_048_576, sha256: 'b'.repeat(64), candidate: true, artifact_available: true, upload_status: 'uploaded', validation_status: 'ready', release_notes: 'Candidate release for staged validation.', physical_certification: 'pending',
+    release_state: 'available', archived_at: null, deleted_at: null, artifact_deleted_at: null, rollback_pinned: false, deployment_count: 2, active_deployment_count: 0, sensor_reported_count: 0, deploy_eligible: true, archive_eligible: true, restore_eligible: false, delete_eligibility: { eligible: true, protection_reasons: [] },
     deployment_batches: [{
       id: '00000000-0000-0000-0000-000000000031', release_id: '00000000-0000-0000-0000-000000000030', target_version: '1.2.4', rollout: 'staged', state: 'partial', targeted: 2, succeeded: 1, failed: 1, pending: 0,
-      created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:10:00Z', completed_at: '2026-08-13T17:10:00Z',
+      result_state: 'partial', deployment_state: 'partial', archived_at: null, deleted_at: null, troubleshooting_hold: false, archive_eligible: true, restore_eligible: false, delete_eligibility: { eligible: false, protection_reasons: ['archive_required_before_deletion'] }, created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:10:00Z', completed_at: '2026-08-13T17:10:00Z',
       jobs: [
-        { id: '00000000-0000-0000-0000-000000000032', device_id: 'device-main', device_name: 'Indoor-AC', previous_version: '1.2.3', current_version: '1.2.4', target_version: '1.2.4', target_build: 851, state: 'succeeded', progress_percent: 100, attempt: 1, error_code: null, error_message: null, created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:08:00Z', completed_at: '2026-08-13T17:08:00Z', confirmation_heartbeat_at: '2026-08-13T17:08:00Z', reported_firmware_after_reboot: '1.2.4', retry_eligible: false, cancel_eligible: false },
-        { id: '00000000-0000-0000-0000-000000000033', device_id: 'device-outdoor', device_name: 'Outdoor-AC', previous_version: '1.2.3', current_version: '1.2.3', target_version: '1.2.4', target_build: 851, state: 'failed', progress_percent: 0, attempt: 1, error_code: 'OTA_VERSION_NOT_CONFIRMED', error_message: 'Outdoor-AC reconnected on 1.2.3 instead of 1.2.4', created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:10:00Z', completed_at: '2026-08-13T17:10:00Z', confirmation_heartbeat_at: null, reported_firmware_after_reboot: '1.2.3', retry_eligible: true, cancel_eligible: false },
+        { id: '00000000-0000-0000-0000-000000000032', device_id: 'device-main', device_name: 'Indoor-AC', previous_version: '1.2.3', current_version: '1.2.4', target_version: '1.2.4', target_build: 851, state: 'succeeded', attempt_state: 'updated', progress_percent: 100, attempt: 1, error_code: null, error_message: null, created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:08:00Z', completed_at: '2026-08-13T17:08:00Z', confirmation_heartbeat_at: '2026-08-13T17:08:00Z', reported_firmware_after_reboot: '1.2.4', retry_eligible: false, cancel_eligible: false },
+        { id: '00000000-0000-0000-0000-000000000033', device_id: 'device-outdoor', device_name: 'Outdoor-AC', previous_version: '1.2.3', current_version: '1.2.3', target_version: '1.2.4', target_build: 851, state: 'failed', attempt_state: 'failed', progress_percent: 0, attempt: 1, error_code: 'OTA_VERSION_NOT_CONFIRMED', error_message: 'Outdoor-AC reconnected on 1.2.3 instead of 1.2.4', created_at: '2026-08-13T17:00:00Z', updated_at: '2026-08-13T17:10:00Z', completed_at: '2026-08-13T17:10:00Z', confirmation_heartbeat_at: null, reported_firmware_after_reboot: '1.2.3', retry_eligible: true, cancel_eligible: false },
       ],
     }],
   }],
+};
+
+export const firmwareLifecycleSettings = {
+  deployment_retention_days: 365,
+  retention_policy: '365_days',
+  automatic_cleanup_scope: 'archived_terminal_deployment_tombstones_only',
+  firmware_artifacts_affected: false,
+  active_deployments_affected: false,
+  updated_at: '2026-08-13T16:00:00Z',
 };
 
 const historyTimestamps = ['2026-08-13T10:00:00Z', '2026-08-13T12:00:00Z', '2026-08-13T14:00:00Z', '2026-08-13T16:00:00Z', '2026-08-13T18:00:00Z', '2026-08-13T20:00:00Z', '2026-08-13T22:00:00Z'];
@@ -152,8 +162,76 @@ export const rateSourceStatus = {
   last_known_good: { state: 'available', candidate_id: rateCandidate.id, source_revision_id: rateCandidate.source.revision_id, source_artifact_sha256: rateCandidate.source.artifact_sha256, retrieved_at: rateCandidate.source.retrieved_at, source_name: rateCandidate.source.name, source_type: 'official_https', source_url: rateCandidate.source.url, active_source_match: false },
 };
 
+export const sceRateCatalog = {
+  home_id: homeScopes[0]!.id,
+  summary: {
+    plans_discovered: 1,
+    plans_parsed: 1,
+    plans_requiring_parser_updates: 0,
+    plans_explicitly_excluded: 0,
+    plans_silently_omitted: null,
+    last_successful_official_check: '2026-08-13T16:00:00Z',
+    current_catalog_effective_date: null,
+    open_plans: 1,
+    eligibility_required_plans: 0,
+    existing_customer_only_plans: 0,
+  },
+  plans: [{
+    id: '00000000-0000-0000-0000-000000000080',
+    canonical_name: 'DOMESTIC',
+    public_plan_name: 'SCE Domestic',
+    official_schedule_code: 'D',
+    plan_type: 'seasonal_tiered',
+    enrollment_status: 'open_or_eligibility_required',
+    eligibility: [],
+    eligibility_requirements: [],
+    description: 'Standard residential tiered service.',
+    effective_start: null,
+    effective_end: null,
+    timezone: 'America/Los_Angeles',
+    currency: 'USD',
+    energy_unit: 'kWh',
+    source_version: 'f'.repeat(64),
+    holiday_treatment: 'not_applicable',
+    season_definitions: {},
+    seasons: ['summer'],
+    day_types: ['all_days'],
+    period_count: 2,
+    periods: [
+      { season: 'summer', day_type: 'all_days', period_name: 'tier_1', start_minute: null, end_minute: null, local_start_time: null, local_end_time: null, price_per_kwh: '0.30863', currency: 'USD', energy_unit: 'kWh', rate_components: [{ component: 'delivery', amount_per_kwh: '0.17862' }, { component: 'generation', amount_per_kwh: '0.11761' }, { component: 'wildfire_fund', amount_per_kwh: '0.00591' }, { component: 'fixed_recovery', amount_per_kwh: '0.00619' }, { component: 'state_tax', amount_per_kwh: '0.00030' }], tier: { lower_bound_kwh: null, upper_bound_kwh: '579.0', boundary_inclusive: true, threshold_basis: 'daily_baseline_allowance', threshold_value: '19.3' }, source_label: 'Summer Tier 1' },
+      { season: 'summer', day_type: 'all_days', period_name: 'tier_2', start_minute: null, end_minute: null, local_start_time: null, local_end_time: null, price_per_kwh: '0.40962', currency: 'USD', energy_unit: 'kWh', rate_components: [{ component: 'delivery', amount_per_kwh: '0.27961' }, { component: 'generation', amount_per_kwh: '0.11761' }, { component: 'wildfire_fund', amount_per_kwh: '0.00591' }, { component: 'fixed_recovery', amount_per_kwh: '0.00619' }, { component: 'state_tax', amount_per_kwh: '0.00030' }], tier: { lower_bound_kwh: '579.0', upper_bound_kwh: null, boundary_inclusive: false, threshold_basis: 'daily_baseline_allowance', threshold_value: '19.3' }, source_label: 'Summer Tier 2' },
+    ],
+    schedule: [],
+    daily_fixed_charge: '0.76900',
+    monthly_fixed_charge: '0',
+    baseline_credit_per_kwh: '0',
+    tier_threshold_basis: 'daily_baseline_allowance',
+    verification_state: 'parsed',
+    latest_discovery_state: 'parsed',
+    latest_discovery_revision_id: '00000000-0000-0000-0000-000000000081',
+    last_known_good_retained: false,
+    exclusion_reason: null,
+    currently_used: true,
+    source: {
+      level: 3,
+      name: 'Southern California Edison residential tariffs',
+      url: 'https://www.sce.com/rates',
+      revision_id: '00000000-0000-0000-0000-000000000081',
+      artifact_sha256: 'f'.repeat(64),
+      retrieved_at: '2026-08-13T16:00:00Z',
+      parser_version: 'sce-public-catalog-v1',
+    },
+  }],
+  source_policy: 'official_public_sce_only',
+  inventory_scope: 'bounded_official_multi_document_crawl',
+  catalog_completeness: 'crawl_incomplete',
+  catalog_ready: false,
+  completeness_reason: 'crawl_not_yet_complete',
+  live_source_access_performed: false,
+};
+
 export const systemHealth = {
-  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.21', protocol: 'pm-protocol/1.0.0', database: 'reachable',
+  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.22', protocol: 'pm-protocol/1.0.0', database: 'reachable',
   sensors: [{ device_id: 'device-main', state: 'online', heartbeat_age_seconds: 5, pzem_status: 'ok', telemetry_protocol: 'direct_https', server_delivery_status: 'received', last_server_received_at: '2026-08-13T17:32:11Z', last_sensor_sampled_at: '2026-08-13T17:32:10Z', sensor_time_trusted: true }],
   open_alert_count: 1, last_rate_sync: { id: 'rate-run-old', state: 'review_required', event_code: 'RATE_SOURCE_SNAPSHOT_CAPTURED', completed_at: '2026-08-13T16:00:00Z' },
   backup: {}, restore_test: {}, physical_hardware_certification: 'pending',
@@ -204,6 +282,7 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (path.endsWith('/acknowledge')) return { status: 200, body: { id: 'alert-delivery', state: 'acknowledged' } };
   if (path.endsWith('/silence')) return { status: 200, body: { id: 'alert-delivery', silenced_until: '2026-08-14T17:32:00Z' } };
   if (pathname.endsWith('/billing')) return { status: 200, body: billing };
+  if (pathname.endsWith('/rate-sources/catalog')) return { status: 200, body: sceRateCatalog };
   if (pathname.endsWith('/bill-rate-imports')) return { status: 200, body: { extractions: [] } };
   if (pathname.endsWith('/rate-sources/status')) return { status: 200, body: rateSourceStatus };
   if (pathname.endsWith('/rate-sources/candidates') && method === 'GET') return { status: 200, body: rateCandidates };
@@ -228,8 +307,18 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (path.includes('/users/') && path.endsWith('/restore')) return { status: 200, body: { id: session.user.id, enabled: true } };
   if (path.includes('/users/') && method === 'DELETE') return { status: 204 };
   if (path.endsWith('/firmware/releases') && method === 'POST') return { status: 201, body: { release: firmwareReleases.releases[0], manifest_signature: 'fixture-signature', physical_certification: 'pending' } };
+  if (pathname.includes('/firmware/releases/') && pathname.endsWith('/archive') && method === 'POST') return { status: 200, body: { ...firmwareReleases.releases[0], release_state: 'archived', archive_eligible: false, restore_eligible: true, deploy_eligible: false } };
+  if (pathname.includes('/firmware/releases/') && pathname.endsWith('/restore') && method === 'POST') return { status: 200, body: { ...firmwareReleases.releases[0], release_state: 'available', archive_eligible: true, restore_eligible: false, deploy_eligible: true } };
+  if (pathname.includes('/firmware/releases/') && pathname.endsWith('/make-current') && method === 'POST') return { status: 200, body: { ...firmwareReleases.releases[0], release_state: 'current', rollback_pinned: false } };
+  if (pathname.includes('/firmware/releases/') && pathname.endsWith('/rollback-pin') && method === 'PATCH') return { status: 200, body: { ...firmwareReleases.releases[0], rollback_pinned: true } };
+  if (pathname.includes('/firmware/releases/') && pathname.endsWith('/delete-permanently') && method === 'POST') return { status: 204 };
+  if (pathname.endsWith('/firmware/lifecycle-settings') && method === 'PATCH') return { status: 200, body: firmwareLifecycleSettings };
+  if (pathname.endsWith('/firmware/lifecycle-settings')) return { status: 200, body: firmwareLifecycleSettings };
+  if (pathname.includes('/firmware/deployment-batches/') && pathname.endsWith('/archive') && method === 'POST') return { status: 200, body: { ...firmwareReleases.releases[0]!.deployment_batches[0], state: 'archived', deployment_state: 'archived', archived_at: '2026-08-13T18:00:00Z', archive_eligible: false, restore_eligible: true, delete_eligibility: { eligible: true, protection_reasons: [] } } };
+  if (pathname.includes('/firmware/deployment-batches/') && pathname.endsWith('/restore') && method === 'POST') return { status: 200, body: firmwareReleases.releases[0]!.deployment_batches[0] };
+  if (pathname.includes('/firmware/deployment-batches/') && pathname.endsWith('/delete-permanently') && method === 'POST') return { status: 204 };
   if (path.includes('/firmware/releases/') && method === 'DELETE') return { status: 204 };
-  if (path.endsWith('/firmware/releases')) return { status: 200, body: firmwareReleases };
+  if (pathname.endsWith('/firmware/releases')) return { status: 200, body: firmwareReleases };
   if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) return { status: 202, body: { batch_id: 'deployment-batch-1', batch_state: 'in_progress', deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] } };
   if (path.includes('/firmware/deployment-batches/') && path.endsWith('/retry')) return { status: 202, body: { batch_id: 'deployment-batch-retry', batch_state: 'in_progress', deployments: [{ id: 'deployment-retry', device_id: 'device-outdoor', state: 'queued' }] } };
   if (path.includes('/firmware/deployment-batches/') && path.endsWith('/cancel')) return { status: 200, body: { batch_id: 'deployment-batch-1', state: 'cancelled' } };

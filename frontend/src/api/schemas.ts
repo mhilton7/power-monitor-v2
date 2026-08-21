@@ -39,6 +39,7 @@ export const userPreferencesSchema = z.object({
   decimal_precision: z.number().int().min(0).max(4),
   density: z.enum(['comfortable', 'compact']),
   dashboard_cards: z.array(z.enum(['live_power', 'energy', 'cost', 'completeness', 'alerts'])).min(1),
+  display_timezone: z.string().min(1).optional(),
 }).strict();
 
 export const telemetrySettingsSchema = z.object({
@@ -545,6 +546,94 @@ export const rateSourceRunSchema = z.object({
 
 export const rateSourceRunsSchema = z.object({ home_id: z.string(), runs: z.array(rateSourceRunSchema) }).strict();
 
+export const sceRateCatalogSchema = z.object({
+  home_id: z.string(),
+  summary: z.object({
+    plans_discovered: z.number().int().nonnegative(),
+    plans_parsed: z.number().int().nonnegative(),
+    plans_requiring_parser_updates: z.number().int().nonnegative(),
+    plans_explicitly_excluded: z.number().int().nonnegative(),
+    plans_silently_omitted: z.number().int().nonnegative().nullable(),
+    last_successful_official_check: isoDate.nullable(),
+    current_catalog_effective_date: rateEffectiveDate.nullable(),
+    open_plans: z.number().int().nonnegative(),
+    eligibility_required_plans: z.number().int().nonnegative(),
+    existing_customer_only_plans: z.number().int().nonnegative(),
+  }).strict(),
+  plans: z.array(z.object({
+    id: z.string(),
+    canonical_name: z.string(),
+    public_plan_name: z.string(),
+    official_schedule_code: z.string().nullable(),
+    plan_type: z.enum(['flat', 'tiered', 'seasonal_tiered', 'time_of_use', 'seasonal_time_of_use', 'time_of_use_with_baseline_credit', 'critical_peak_pricing', 'dynamic_hourly', 'unknown']),
+    enrollment_status: z.string(),
+    eligibility: z.array(z.union([z.string(), z.record(z.string(), z.unknown())])).default([]),
+    eligibility_requirements: z.array(z.object({ requirement: z.union([z.string(), z.record(z.string(), z.unknown())]), verification: z.string() }).strict()).default([]),
+    description: z.string().nullable().optional(),
+    effective_start: rateEffectiveDate.nullable(),
+    effective_end: rateEffectiveDate.nullable(),
+    timezone: z.string().optional(),
+    currency: z.string().optional(),
+    energy_unit: z.string().optional(),
+    source_version: z.string().optional(),
+    holiday_treatment: z.string().optional(),
+    season_definitions: z.union([z.record(z.string(), z.unknown()), z.array(z.unknown())]).optional(),
+    seasons: z.array(z.string()).default([]),
+    day_types: z.array(z.string()).default([]),
+    period_count: z.number().int().nonnegative(),
+    periods: z.array(z.object({
+      season: z.string().nullable(),
+      day_type: z.string().nullable(),
+      period_name: z.string().nullable(),
+      start_minute: z.number().int().min(0).max(1440).nullable(),
+      end_minute: z.number().int().min(0).max(1440).nullable(),
+      local_start_time: z.string().nullable(),
+      local_end_time: z.string().nullable(),
+      price_per_kwh: nullableDecimal,
+      currency: z.string(),
+      energy_unit: z.string(),
+      rate_components: z.array(z.union([z.string(), z.record(z.string(), z.unknown())])).default([]),
+      tier: z.object({
+        lower_bound_kwh: nullableDecimal.optional(),
+        upper_bound_kwh: nullableDecimal.optional(),
+        boundary_inclusive: z.boolean(),
+        threshold_basis: z.string().nullable().optional(),
+        threshold_value: nullableDecimal.optional(),
+      }).passthrough(),
+      source_label: z.string().nullable(),
+    }).passthrough()).default([]),
+    schedule: z.array(z.unknown()).optional(),
+    daily_fixed_charge: nullableDecimal.optional(),
+    monthly_fixed_charge: nullableDecimal.optional(),
+    minimum_charge: nullableDecimal.optional(),
+    meter_charge: nullableDecimal.optional(),
+    other_fixed_charge: nullableDecimal.optional(),
+    baseline_credit_per_kwh: nullableDecimal.optional(),
+    tier_threshold_basis: z.string().nullable().optional(),
+    verification_state: z.enum(['parsed', 'requires_parser', 'excluded']),
+    latest_discovery_state: z.enum(['parsed', 'requires_parser', 'excluded']),
+    latest_discovery_revision_id: z.string(),
+    last_known_good_retained: z.boolean(),
+    exclusion_reason: z.string().nullable(),
+    currently_used: z.boolean(),
+    source: z.object({
+      level: z.number().int().min(1).max(4),
+      name: z.string(),
+      url: z.string().url(),
+      revision_id: z.string(),
+      artifact_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      retrieved_at: isoDate,
+      parser_version: z.string(),
+    }).strict(),
+  }).strict()),
+  source_policy: z.literal('official_public_sce_only'),
+  inventory_scope: z.literal('bounded_official_multi_document_crawl'),
+  catalog_completeness: z.enum(['closure_proved', 'crawl_incomplete']),
+  catalog_ready: z.boolean(),
+  completeness_reason: z.string().min(1).max(256),
+  live_source_access_performed: z.boolean(),
+}).strict();
+
 export const rateCheckResultSchema = z.object({
   run_id: z.string(),
   state: z.enum(['review_required', 'unchanged', 'failed']),
@@ -721,6 +810,7 @@ export const firmwareDeploymentJobSchema = z.object({
   target_version: z.string(),
   target_build: z.number().int().positive(),
   state: z.enum(['staged', 'queued', 'downloading', 'rebooting', 'validating', 'succeeded', 'failed', 'rolled_back', 'timed_out', 'cancelled']),
+  attempt_state: z.enum(['waiting', 'downloading', 'installing', 'restarting', 'confirming', 'updated', 'failed', 'timed_out', 'canceled']).optional(),
   progress_percent: z.number().int().min(0).max(100),
   attempt: z.number().int().positive(),
   error_code: z.string().nullable(),
@@ -739,7 +829,9 @@ export const firmwareDeploymentBatchSchema = z.object({
   release_id: z.string(),
   target_version: z.string(),
   rollout: z.enum(['immediate', 'staged', 'retry', 'legacy']),
-  state: z.enum(['queued', 'in_progress', 'partial', 'succeeded', 'failed', 'cancelled', 'expired']),
+  state: z.enum(['queued', 'in_progress', 'partial', 'succeeded', 'failed', 'cancelled', 'canceled', 'expired', 'timed_out', 'archived', 'deleted']),
+  result_state: z.enum(['queued', 'in_progress', 'partial', 'succeeded', 'failed', 'cancelled', 'canceled', 'expired', 'timed_out']).optional(),
+  deployment_state: z.enum(['queued', 'in_progress', 'partial', 'succeeded', 'failed', 'timed_out', 'canceled', 'archived', 'deleted']).optional(),
   targeted: z.number().int().positive(),
   succeeded: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
@@ -747,8 +839,14 @@ export const firmwareDeploymentBatchSchema = z.object({
   created_at: isoDate,
   updated_at: isoDate,
   completed_at: isoDate.nullable(),
+  archived_at: isoDate.nullable().optional(),
+  deleted_at: isoDate.nullable().optional(),
+  troubleshooting_hold: z.boolean().optional(),
+  archive_eligible: z.boolean().optional(),
+  restore_eligible: z.boolean().optional(),
+  delete_eligibility: z.object({ eligible: z.boolean(), protection_reasons: z.array(z.string()) }).strict().optional(),
   jobs: z.array(firmwareDeploymentJobSchema),
-}).strict();
+}).passthrough();
 
 export const firmwareReleaseSchema = z.object({
   schema: z.literal('pm-ota-manifest/1.0.0'),
@@ -763,14 +861,51 @@ export const firmwareReleaseSchema = z.object({
   minimum_config_version: z.number().int().positive(),
   image_size: z.number().int().positive(),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  firmware_build_id: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   candidate: z.boolean(),
   artifact_available: z.boolean(),
   release_notes: z.string().optional(),
   physical_certification: z.string().optional(),
-  upload_status: z.enum(['uploaded', 'archived']).optional(),
-  validation_status: z.enum(['ready', 'archived']).optional(),
+  upload_status: z.enum(['uploaded', 'archived', 'artifact_removed']).optional(),
+  validation_status: z.enum(['ready', 'archived', 'not_deployable']).optional(),
+  release_state: z.enum(['draft', 'validating', 'available', 'current', 'archived', 'rejected', 'deleted']).optional(),
+  archived_at: isoDate.nullable().optional(),
+  deleted_at: isoDate.nullable().optional(),
+  artifact_deleted_at: isoDate.nullable().optional(),
+  rollback_pinned: z.boolean().optional(),
+  deployment_count: z.number().int().nonnegative().optional(),
+  active_deployment_count: z.number().int().nonnegative().optional(),
+  sensor_reported_count: z.number().int().nonnegative().optional(),
+  deploy_eligible: z.boolean().optional(),
+  archive_eligible: z.boolean().optional(),
+  restore_eligible: z.boolean().optional(),
+  delete_eligibility: z.object({ eligible: z.boolean(), protection_reasons: z.array(z.string()) }).strict().optional(),
+  consistency: z.object({ status: z.enum(['consistent', 'attention_required']), issues: z.array(z.string()) }).strict().optional(),
   deployment_batches: z.array(firmwareDeploymentBatchSchema).optional().default([]),
 }).passthrough();
+
+export const firmwareReleaseListSchema = z.object({
+  releases: z.array(firmwareReleaseSchema),
+  filters: z.object({
+    show_archived: z.boolean(),
+    show_deleted: z.boolean(),
+    show_deployment_history: z.boolean(),
+  }).strict().optional(),
+  reconciliation: z.object({
+    strategy: z.string(),
+    inconsistent_release_ids: z.array(z.string()),
+    silent_deletion_performed: z.boolean(),
+  }).strict().optional(),
+}).strict();
+
+export const firmwareLifecycleSettingsSchema = z.object({
+  deployment_retention_days: z.union([z.literal(90), z.literal(180), z.literal(365)]).nullable(),
+  retention_policy: z.string(),
+  automatic_cleanup_scope: z.literal('archived_terminal_deployment_tombstones_only'),
+  firmware_artifacts_affected: z.literal(false),
+  active_deployments_affected: z.literal(false),
+  updated_at: isoDate.optional(),
+}).strict();
 
 export const circuitSchema = z.object({
   id: z.string(),
@@ -841,6 +976,8 @@ export type RateCandidate = z.infer<typeof rateCandidateSchema>;
 export type RateCandidates = z.infer<typeof rateCandidatesSchema>;
 export type RateCandidateWorkflow = z.infer<typeof rateCandidateWorkflowSchema>;
 export type RateSourceStatus = z.infer<typeof rateSourceStatusSchema>;
+export type SceRateCatalog = z.infer<typeof sceRateCatalogSchema>;
+export type SceRateCatalogPlan = SceRateCatalog['plans'][number];
 export type RateCheckResult = z.infer<typeof rateCheckResultSchema>;
 export type Alert = z.infer<typeof alertSchema>;
 export type DeviceDetail = z.infer<typeof deviceDetailSchema>;
@@ -850,6 +987,8 @@ export type SystemHealth = z.infer<typeof systemHealthSchema>;
 export type BackupStatus = z.infer<typeof backupStatusSchema>;
 export type HomeUtility = z.infer<typeof homeUtilitySchema>;
 export type FirmwareRelease = z.infer<typeof firmwareReleaseSchema>;
+export type FirmwareReleaseList = z.infer<typeof firmwareReleaseListSchema>;
 export type FirmwareDeploymentBatch = z.infer<typeof firmwareDeploymentBatchSchema>;
 export type FirmwareDeploymentJob = z.infer<typeof firmwareDeploymentJobSchema>;
+export type FirmwareLifecycleSettings = z.infer<typeof firmwareLifecycleSettingsSchema>;
 export type Circuit = z.infer<typeof circuitSchema>;

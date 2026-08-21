@@ -186,6 +186,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FIRMWARE_TAG: ${{ inputs.firmware_tag }}
+          FIRMWARE_REVISION: ${{ steps.firmware.outputs.revision }}
         run: |
           set -Eeuo pipefail
           mkdir -p release/promotion/firmware
@@ -194,6 +195,12 @@ jobs:
           (cd release/promotion/firmware && sha256sum --check --strict SHA256SUMS)
           gh attestation verify release/promotion/firmware/firmware.bin \
             --repo "$FIRMWARE_REPOSITORY"
+          firmware_version="${FIRMWARE_TAG#v}"
+          firmware_image_sha256="$(sha256sum release/promotion/firmware/firmware.bin | cut -d' ' -f1)"
+          jq -e --arg version "$firmware_version" --arg revision "$FIRMWARE_REVISION" \
+            --arg image_sha256 "$firmware_image_sha256" \
+            '.schema == "pm-firmware-release/1.1.0" and .version == $version and .git_commit == $revision and .image_sha256 == $image_sha256 and (.build_number | type == "number" and . >= 1 and . <= 4294967295 and floor == .) and (.firmware_build_id | type == "string" and test("^[0-9a-f]{64}$"))' \
+            release/promotion/firmware/manifest.json >/dev/null
       - name: Verify stable firmware/server wire contracts
         shell: bash
         run: |
@@ -266,13 +273,17 @@ jobs:
             release/promotion/stable/hardware-certification.schema.json
           cp release/STABLE_RELEASE_NOTES.md release/promotion/stable/RELEASE_NOTES.md
           firmware_image_sha256="$(sha256sum release/promotion/firmware/firmware.bin | cut -d' ' -f1)"
+          firmware_build_number="$(jq -er '.build_number' release/promotion/firmware/manifest.json)"
+          firmware_build_id="$(jq -er '.firmware_build_id' release/promotion/firmware/manifest.json)"
           jq -cn --arg protocol 'pm-protocol/1.0.0' \
             --arg candidate "$CANDIDATE_TAG" --arg firmware_tag "$FIRMWARE_TAG" \
             --arg firmware_revision "$FIRMWARE_REVISION" \
             --arg firmware_release_url "$FIRMWARE_RELEASE_URL" \
             --arg firmware_image_sha256 "$firmware_image_sha256" \
+            --argjson firmware_build_number "$firmware_build_number" \
+            --arg firmware_build_id "$firmware_build_id" \
             --arg hardware_certification_sha256 "$CERTIFICATION_SHA256" \
-            '{schema:"pm-firmware-compatibility/1.0.0",protocol:$protocol,server_candidate:$candidate,firmware_tag:$firmware_tag,firmware_revision:$firmware_revision,firmware_release_url:$firmware_release_url,firmware_image_sha256:$firmware_image_sha256,hardware_certification_sha256:$hardware_certification_sha256,physical_certification:"passed"}' \
+            '{schema:"pm-firmware-compatibility/1.1.0",protocol:$protocol,server_candidate:$candidate,firmware_tag:$firmware_tag,firmware_revision:$firmware_revision,firmware_release_url:$firmware_release_url,firmware_image_sha256:$firmware_image_sha256,firmware_build_number:$firmware_build_number,firmware_build_id:$firmware_build_id,hardware_certification_sha256:$hardware_certification_sha256,physical_certification:"passed"}' \
             > release/promotion/stable/firmware-compatibility.json
           python scripts/render_truenas_release.py \
             --template deploy/truenas/power-monitor-v2.yaml \
@@ -293,7 +304,8 @@ jobs:
             --firmware-tag "$FIRMWARE_TAG" \
             --firmware-revision "$FIRMWARE_REVISION" \
             --firmware-image-sha256 "$firmware_image_sha256" \
-            --firmware-build-id "$(jq -er '.firmware.build_id' release/promotion/server-candidate/release-manifest.json)" \
+            --firmware-build-number "$firmware_build_number" \
+            --firmware-build-id "$firmware_build_id" \
             --hardware-certification-sha256 "$CERTIFICATION_SHA256"
           docker compose -f "release/promotion/stable/power-monitor-v2-${STABLE_TAG}.yaml" config --quiet
           python scripts/verify_release_artifacts.py \

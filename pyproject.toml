@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "power-meter-v2"
-version = "0.1.0rc21"
+version = "0.1.0rc22"
 description = "Authenticated PZEM-only electrical monitoring server"
 requires-python = ">=3.13,<3.14"
 dependencies = [
@@ -59,6 +59,7 @@ markers = [
   "integration: requires PostgreSQL or containers",
   "deployment: requires Docker",
   "hardware: requires physical ESP32-S3/PZEM hardware",
+  "live_sce: opt-in smoke test against public official SCE sources",
 ]
 
 [tool.ruff]

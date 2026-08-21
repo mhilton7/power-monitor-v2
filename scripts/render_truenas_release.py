@@ -54,7 +54,7 @@ EXPECTED_INITIALIZER_MOUNTS = {
     )
 }
 EXPECTED_HOST_SOURCES = set(EXPECTED_INITIALIZER_MOUNTS)
-DEFAULT_DATABASE_REVISION = "20260818_0017"
+DEFAULT_DATABASE_REVISION = "20260820_0018"
 DEFAULT_BUILD_TIME = "1970-01-01T00:00:00Z"
 
 
@@ -303,6 +303,7 @@ def main() -> int:
     parser.add_argument("--firmware-tag", required=True)
     parser.add_argument("--firmware-revision", required=True)
     parser.add_argument("--firmware-image-sha256", required=True)
+    parser.add_argument("--firmware-build-number", required=True)
     parser.add_argument("--firmware-build-id", required=True)
     parser.add_argument("--hardware-certification-sha256")
     args = parser.parse_args()
@@ -345,8 +346,13 @@ def main() -> int:
         raise ReleaseError("release requires a full firmware revision")
     if not re.fullmatch(r"[0-9a-f]{64}", args.firmware_image_sha256):
         raise ReleaseError("release requires the firmware image SHA-256")
-    if not re.fullmatch(r"[1-9][0-9]{0,9}", args.firmware_build_id):
-        raise ReleaseError("release requires a positive firmware build identifier")
+    if (
+        not re.fullmatch(r"[1-9][0-9]{0,9}", args.firmware_build_number)
+        or int(args.firmware_build_number) > 4_294_967_295
+    ):
+        raise ReleaseError("release requires a positive uint32 firmware build number")
+    if not re.fullmatch(r"[0-9a-f]{64}", args.firmware_build_id):
+        raise ReleaseError("release requires the exact lowercase firmware build ID")
     if args.release_status == "stable_physical_certification_passed":
         if not args.hardware_certification_sha256 or not re.fullmatch(
             r"[0-9a-f]{64}", args.hardware_certification_sha256
@@ -376,7 +382,7 @@ def main() -> int:
     args.output.write_text(output, encoding="utf-8", newline="\n")
     output_sha256 = hashlib.sha256(output.encode()).hexdigest()
     manifest = {
-        "schema": "pm-server-release/1.0.0",
+        "schema": "pm-server-release/1.1.0",
         "product": "PowerMeter V2",
         "protocol": "pm-protocol/1.0.0",
         "telemetry_protocol": "pm-telemetry/2.0.0",
@@ -410,7 +416,8 @@ def main() -> int:
             "repository": "https://github.com/mhilton7/power-monitor-sensor-headless",
             "tag": args.firmware_tag,
             "revision": args.firmware_revision,
-            "build_id": int(args.firmware_build_id),
+            "build_number": int(args.firmware_build_number),
+            "firmware_build_id": args.firmware_build_id,
             "image_sha256": args.firmware_image_sha256,
             "protocol": "pm-protocol/1.0.0",
             "telemetry_protocol": "pm-telemetry/2.0.0",

@@ -108,7 +108,7 @@ def _payload(
         "pzem_energy_wh": energy_wh if good else None,
         "pzem_status": status,
         "firmware_version": firmware_version,
-        "firmware_build_id": f"elf-sha-{sequence}",
+        "firmware_build_id": f"{sequence:064x}",
         "time_status": "trusted" if sampled_at is not None else "untrusted",
         "wifi_rssi": -55,
         "command_results": [],
@@ -120,6 +120,25 @@ async def _post(
 ) -> Response:
     body = orjson.dumps(payload)
     return await client.post(PATH, content=body, headers=_headers(device_id, secret, body))
+
+
+@pytest.mark.parametrize(
+    "firmware_build_id",
+    (
+        "A" * 64,
+        "g" * 64,
+        "a" * 63,
+        "a" * 65,
+    ),
+)
+def test_stateless_build_identity_is_exact_lowercase_elf_sha256(
+    firmware_build_id: str,
+) -> None:
+    payload = _payload("123e4567-e89b-12d3-a456-426614174000", 1)
+    assert StatelessTelemetryRequest.model_validate(payload).firmware_build_id == f"{1:064x}"
+    payload["firmware_build_id"] = firmware_build_id
+    with pytest.raises(ValueError, match="firmware_build_id"):
+        StatelessTelemetryRequest.model_validate(payload)
 
 
 @pytest.mark.asyncio

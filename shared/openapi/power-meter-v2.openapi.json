@@ -209,6 +209,18 @@
             "title": "Expected Sha256",
             "type": "string"
           },
+          "firmware_build_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Firmware Build Id"
+          },
           "image": {
             "contentMediaType": "application/octet-stream",
             "title": "Image",
@@ -720,6 +732,107 @@
         "title": "EnrollmentTokenRequest",
         "type": "object"
       },
+      "FirmwareArchiveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "const": "ARCHIVE FIRMWARE RECORD",
+            "title": "Confirmation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation"
+        ],
+        "title": "FirmwareArchiveRequest",
+        "type": "object"
+      },
+      "FirmwareCurrentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "const": "MAKE CURRENT FIRMWARE",
+            "title": "Confirmation",
+            "type": "string"
+          },
+          "semantic_version": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Semantic Version",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation",
+          "semantic_version",
+          "sha256"
+        ],
+        "title": "FirmwareCurrentRequest",
+        "type": "object"
+      },
+      "FirmwareDeploymentArchiveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "const": "ARCHIVE DEPLOYMENT RECORD",
+            "title": "Confirmation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation"
+        ],
+        "title": "FirmwareDeploymentArchiveRequest",
+        "type": "object"
+      },
+      "FirmwareDeploymentDeleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "const": "DELETE DEPLOYMENT RECORD",
+            "title": "Confirmation",
+            "type": "string"
+          },
+          "deployment_batch_id": {
+            "maxLength": 36,
+            "minLength": 36,
+            "title": "Deployment Batch Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation",
+          "deployment_batch_id"
+        ],
+        "title": "FirmwareDeploymentDeleteRequest",
+        "type": "object"
+      },
+      "FirmwareDeploymentHoldRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "troubleshooting_hold": {
+            "title": "Troubleshooting Hold",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "troubleshooting_hold",
+          "reason"
+        ],
+        "title": "FirmwareDeploymentHoldRequest",
+        "type": "object"
+      },
       "FirmwareDeploymentRequest": {
         "additionalProperties": false,
         "properties": {
@@ -748,6 +861,21 @@
         "title": "FirmwareDeploymentRequest",
         "type": "object"
       },
+      "FirmwareDeploymentRestoreRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "const": "RESTORE DEPLOYMENT RECORD",
+            "title": "Confirmation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation"
+        ],
+        "title": "FirmwareDeploymentRestoreRequest",
+        "type": "object"
+      },
       "FirmwareDeploymentRetryRequest": {
         "additionalProperties": false,
         "properties": {
@@ -765,6 +893,114 @@
           "device_ids"
         ],
         "title": "FirmwareDeploymentRetryRequest",
+        "type": "object"
+      },
+      "FirmwareLifecycleSettingsUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "anyOf": [
+              {
+                "const": "DELETE EXPIRED DEPLOYMENT HISTORY",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmation"
+          },
+          "deployment_retention_days": {
+            "anyOf": [
+              {
+                "enum": [
+                  90,
+                  180,
+                  365
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Retention Days"
+          }
+        },
+        "required": [
+          "deployment_retention_days"
+        ],
+        "title": "FirmwareLifecycleSettingsUpdateRequest",
+        "type": "object"
+      },
+      "FirmwareReleaseDeleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "build_number": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Build Number",
+            "type": "string"
+          },
+          "confirmation": {
+            "const": "DELETE RELEASE PERMANENTLY",
+            "title": "Confirmation",
+            "type": "string"
+          },
+          "semantic_version": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Semantic Version",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation",
+          "semantic_version",
+          "build_number",
+          "sha256"
+        ],
+        "title": "FirmwareReleaseDeleteRequest",
+        "type": "object"
+      },
+      "FirmwareRestoreRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "const": "RESTORE FIRMWARE RECORD",
+            "title": "Confirmation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation"
+        ],
+        "title": "FirmwareRestoreRequest",
+        "type": "object"
+      },
+      "FirmwareRollbackPinRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "const": "UPDATE ROLLBACK PROTECTION",
+            "title": "Confirmation",
+            "type": "string"
+          },
+          "rollback_pinned": {
+            "title": "Rollback Pinned",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirmation",
+          "rollback_pinned"
+        ],
+        "title": "FirmwareRollbackPinRequest",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1248,6 +1484,16 @@
             "minLength": 1,
             "title": "Selected Plan Name",
             "type": "string"
+          },
+          "tier_threshold_rule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RateCandidateTierThresholdRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1257,6 +1503,78 @@
           "administrator_confirmed_provenance"
         ],
         "title": "RateCandidateReviewRequest",
+        "type": "object"
+      },
+      "RateCandidateTierThresholdRule": {
+        "additionalProperties": false,
+        "description": "Exact, reviewed home baseline evidence for a reusable daily tier rule.",
+        "properties": {
+          "kwh_per_day": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1000.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Kwh Per Day"
+          },
+          "rule_type": {
+            "const": "daily_allowance",
+            "default": "daily_allowance",
+            "title": "Rule Type",
+            "type": "string"
+          },
+          "season": {
+            "maxLength": 30,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Season",
+            "type": "string"
+          },
+          "source_allowance_kwh": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100000.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Source Allowance Kwh"
+          },
+          "source_billing_days": {
+            "maximum": 62.0,
+            "minimum": 1.0,
+            "title": "Source Billing Days",
+            "type": "integer"
+          },
+          "source_label": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Source Label",
+            "type": "string"
+          },
+          "tier1_boundary_inclusive": {
+            "const": true,
+            "default": true,
+            "title": "Tier1 Boundary Inclusive",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "season",
+          "kwh_per_day",
+          "source_allowance_kwh",
+          "source_billing_days",
+          "source_label"
+        ],
+        "title": "RateCandidateTierThresholdRule",
         "type": "object"
       },
       "RateCorrectionRequest": {
@@ -2069,7 +2387,7 @@
   },
   "info": {
     "title": "PowerMeter V2 API",
-    "version": "0.1.0-rc.21"
+    "version": "0.1.0-rc.22"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -4697,8 +5015,7 @@
                     "title": "Current A"
                   },
                   "firmware_build_id": {
-                    "maxLength": 128,
-                    "minLength": 1,
+                    "pattern": "^[0-9a-f]{64}$",
                     "title": "Firmware Build Id",
                     "type": "string"
                   },
@@ -5634,6 +5951,179 @@
         ]
       }
     },
+    "/api/v1/firmware/deployment-batches": {
+      "get": {
+        "operationId": "list_firmware_deployment_batches_api_v1_firmware_deployment_batches_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "show_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Show Archived",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "show_deleted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Show Deleted",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Firmware Deployment Batches Api V1 Firmware Deployment Batches Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Firmware Deployment Batches",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
+    "/api/v1/firmware/deployment-batches/{batch_id}/archive": {
+      "post": {
+        "operationId": "archive_firmware_deployment_batch_api_v1_firmware_deployment_batches__batch_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirmwareDeploymentArchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Archive Firmware Deployment Batch Api V1 Firmware Deployment Batches  Batch Id  Archive Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Firmware Deployment Batch",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
     "/api/v1/firmware/deployment-batches/{batch_id}/cancel": {
       "post": {
         "operationId": "cancel_firmware_deployment_batch_api_v1_firmware_deployment_batches__batch_id__cancel_post",
@@ -5705,6 +6195,169 @@
           }
         },
         "summary": "Cancel Firmware Deployment Batch",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
+    "/api/v1/firmware/deployment-batches/{batch_id}/delete-permanently": {
+      "post": {
+        "operationId": "permanently_delete_firmware_deployment_batch_api_v1_firmware_deployment_batches__batch_id__delete_permanently_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirmwareDeploymentDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Permanently Delete Firmware Deployment Batch",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
+    "/api/v1/firmware/deployment-batches/{batch_id}/restore": {
+      "post": {
+        "operationId": "restore_firmware_deployment_batch_api_v1_firmware_deployment_batches__batch_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirmwareDeploymentRestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Restore Firmware Deployment Batch Api V1 Firmware Deployment Batches  Batch Id  Restore Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Firmware Deployment Batch",
         "tags": [
           "firmware"
         ]
@@ -5796,10 +6449,268 @@
         ]
       }
     },
+    "/api/v1/firmware/deployment-batches/{batch_id}/troubleshooting-hold": {
+      "patch": {
+        "operationId": "set_firmware_deployment_troubleshooting_hold_api_v1_firmware_deployment_batches__batch_id__troubleshooting_hold_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "batch_id",
+            "required": true,
+            "schema": {
+              "title": "Batch Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirmwareDeploymentHoldRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Set Firmware Deployment Troubleshooting Hold Api V1 Firmware Deployment Batches  Batch Id  Troubleshooting Hold Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Firmware Deployment Troubleshooting Hold",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
+    "/api/v1/firmware/lifecycle-settings": {
+      "get": {
+        "operationId": "get_firmware_lifecycle_settings_api_v1_firmware_lifecycle_settings_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Firmware Lifecycle Settings Api V1 Firmware Lifecycle Settings Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Firmware Lifecycle Settings",
+        "tags": [
+          "firmware"
+        ]
+      },
+      "patch": {
+        "operationId": "update_firmware_lifecycle_settings_api_v1_firmware_lifecycle_settings_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirmwareLifecycleSettingsUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Firmware Lifecycle Settings Api V1 Firmware Lifecycle Settings Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Firmware Lifecycle Settings",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
     "/api/v1/firmware/releases": {
       "get": {
         "operationId": "list_firmware_releases_api_v1_firmware_releases_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "show_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Show Archived",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "show_deleted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Show Deleted",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "show_deployment_history",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Show Deployment History",
+              "type": "boolean"
+            }
+          },
           {
             "in": "header",
             "name": "X-CSRF-Token",
@@ -6005,6 +6916,169 @@
         ]
       }
     },
+    "/api/v1/firmware/releases/{release_id}/archive": {
+      "post": {
+        "operationId": "archive_firmware_release_api_v1_firmware_releases__release_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "title": "Release Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirmwareArchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Archive Firmware Release Api V1 Firmware Releases  Release Id  Archive Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Firmware Release",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
+    "/api/v1/firmware/releases/{release_id}/delete-permanently": {
+      "post": {
+        "operationId": "permanently_delete_firmware_release_api_v1_firmware_releases__release_id__delete_permanently_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "title": "Release Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirmwareReleaseDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Permanently Delete Firmware Release",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
     "/api/v1/firmware/releases/{release_id}/deploy": {
       "post": {
         "operationId": "deploy_firmware_release_api_v1_firmware_releases__release_id__deploy_post",
@@ -6086,6 +7160,264 @@
           }
         },
         "summary": "Deploy Firmware Release",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
+    "/api/v1/firmware/releases/{release_id}/make-current": {
+      "post": {
+        "operationId": "make_firmware_release_current_api_v1_firmware_releases__release_id__make_current_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "title": "Release Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirmwareCurrentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Make Firmware Release Current Api V1 Firmware Releases  Release Id  Make Current Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Make Firmware Release Current",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
+    "/api/v1/firmware/releases/{release_id}/restore": {
+      "post": {
+        "operationId": "restore_firmware_release_api_v1_firmware_releases__release_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "title": "Release Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirmwareRestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Restore Firmware Release Api V1 Firmware Releases  Release Id  Restore Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Firmware Release",
+        "tags": [
+          "firmware"
+        ]
+      }
+    },
+    "/api/v1/firmware/releases/{release_id}/rollback-pin": {
+      "patch": {
+        "operationId": "update_firmware_release_rollback_pin_api_v1_firmware_releases__release_id__rollback_pin_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "title": "Release Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FirmwareRollbackPinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Firmware Release Rollback Pin Api V1 Firmware Releases  Release Id  Rollback Pin Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Firmware Release Rollback Pin",
         "tags": [
           "firmware"
         ]
@@ -7089,6 +8421,90 @@
           }
         },
         "summary": "Review Official Rate Candidate",
+        "tags": [
+          "billing"
+        ]
+      }
+    },
+    "/api/v1/rate-sources/catalog": {
+      "get": {
+        "description": "Return the latest explicit result for every discovered official SCE plan.",
+        "operationId": "list_sce_rate_catalog_api_v1_rate_sources_catalog_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "home_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Home Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Sce Rate Catalog Api V1 Rate Sources Catalog Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Sce Rate Catalog",
         "tags": [
           "billing"
         ]

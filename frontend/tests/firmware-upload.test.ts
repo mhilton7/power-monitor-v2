@@ -11,7 +11,7 @@ async function releaseFiles(overrides: Record<string, unknown> = {}) {
   const imageBytes = new TextEncoder().encode('PowerMeter signed OTA fixture');
   const imageSha256 = await sha256Hex(imageBytes);
   const manifest = {
-    schema: 'pm-firmware-release/1.0.0',
+    schema: 'pm-firmware-release/1.1.0',
     version: '0.1.0-rc.9',
     build_number: 12,
     project_name: 'power-monitor-sensor-headless',
@@ -22,6 +22,7 @@ async function releaseFiles(overrides: Record<string, unknown> = {}) {
     minimum_protocol: 'pm-protocol/1.0.0',
     image_size: imageBytes.byteLength,
     image_sha256: imageSha256,
+    firmware_build_id: 'b'.repeat(64),
     download_url: 'https://github.com/mhilton7/power-monitor-sensor-headless/releases/download/v0.1.0-rc.9/firmware.bin',
     ota_authentication: {
       mode: 'per-device-hmac-sha256',
@@ -52,6 +53,7 @@ describe('firmware upload metadata', () => {
       minimum_boot_version: 1,
       minimum_config_version: 1,
       expected_sha256: files.imageSha256,
+      firmware_build_id: 'b'.repeat(64),
     });
     expect(prepared.fields.release_notes).toContain('source commit 0e6e268e');
   });
@@ -59,6 +61,12 @@ describe('firmware upload metadata', () => {
   it('rejects a binary that does not match its manifest', async () => {
     const files = await releaseFiles({ image_sha256: 'a'.repeat(64) });
     await expect(prepareFirmwareUpload(files.image, files.manifest)).rejects.toThrow(/SHA-256 does not match/);
+  });
+
+  it('keeps historical 1.0 manifests uploadable while the server derives their build identity', async () => {
+    const files = await releaseFiles({ schema: 'pm-firmware-release/1.0.0', firmware_build_id: undefined });
+    const prepared = await prepareFirmwareUpload(files.image, files.manifest);
+    expect(prepared.fields.firmware_build_id).toBeUndefined();
   });
 
   it('allows upgrades but rejects same-version and downgrade targets', () => {

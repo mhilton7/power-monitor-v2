@@ -7,6 +7,8 @@ import { PermissionGate } from '../auth/PermissionGate';
 import { Card, ConfirmDialog, Dialog, EmptyState, ErrorState, Loading, Notice, StatusPill } from '../components/ui';
 import { dateTime } from '../lib/format';
 import { formString } from '../lib/form';
+import { SceRateCatalog } from './SceRateCatalog';
+import { sceRateCatalogKey } from './queryKeys';
 
 const RATE_TIMEZONE = 'America/Los_Angeles';
 const DECIMAL_PATTERN = String.raw`\d{1,3}(?:\.\d{1,8})?`;
@@ -76,6 +78,7 @@ export function RateSourceStatusCard({ homeId }: { homeId: string }) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: rateStatusKey(homeId) });
       void queryClient.invalidateQueries({ queryKey: rateCandidatesKey(homeId) });
+      void queryClient.invalidateQueries({ queryKey: sceRateCatalogKey(homeId) });
     },
   });
 
@@ -119,6 +122,7 @@ export function RateSourceWorkflow({ homeId, accounts }: { homeId: string; accou
   }
 
   return <>
+    <SceRateCatalog homeId={homeId} />
     <Card title="SCE rate update" eyebrow="Review before applying" action={<PermissionGate permission="rates.manage"><button type="button" className="button button-secondary" onClick={() => { setManualMessage(''); setManualOpen(true); }}><Plus aria-hidden="true" /> Enter rates manually</button></PermissionGate>}>
       <Notice><strong>SCE’s public rate information has changed.</strong> Review the new values before replacing the current rate plan. Rate updates never contain customer identity, bill usage, balances, or payments.</Notice>
       <RateSourceStatusCard homeId={homeId} />
@@ -129,7 +133,7 @@ export function RateSourceWorkflow({ homeId, accounts }: { homeId: string; accou
         return <button type="button" key={candidate.id} onClick={() => setSelectedCandidateId(candidate.id)} aria-label={`Open ${manual ? 'manual' : 'official'} rate update ${candidate.id}`}><FileCheck2 aria-hidden="true" /><div><strong>{names}</strong><span>{manual ? 'Entered from an official source' : 'Official SCE source'} · retrieved {dateTime(candidate.source.retrieved_at)}</span></div><StatusPill state={candidate.workflow.state} {...(candidate.workflow.state === 'review_required' ? { label: 'Review before applying' } : {})} /><ArrowRight aria-hidden="true" /></button>;
       })}</div> : <EmptyState title="No SCE candidates for this home" detail="Run an official source check or create a manual candidate from verified official SCE rate facts." />}
     </Card>
-    <Dialog open={Boolean(selectedCandidateId)} title="Review SCE rate update" description="Confirm the rate and effective date before applying it to this home." onClose={() => setSelectedCandidateId('')} wide>
+    <Dialog open={Boolean(selectedCandidateId)} title="Review SCE rate update" description="SCE published new or changed rate information. Review the exact prices and schedule before applying it to this home." onClose={() => setSelectedCandidateId('')} wide>
       {selected ? <CandidateReview candidate={selected} homeId={homeId} accounts={accounts} onWorkflow={updateWorkflow} onClose={() => setSelectedCandidateId('')} /> : candidates.isLoading || candidates.isFetching ? <Loading label="Loading selected candidate" /> : <ErrorState error={new Error('The selected candidate is no longer available for this home.')} />}
     </Dialog>
     <ManualCandidateDialog open={manualOpen} homeId={homeId} onClose={() => setManualOpen(false)} onCreated={(candidateId, created) => {
@@ -205,10 +209,10 @@ function CandidateReview({ candidate, homeId, accounts, onWorkflow, onClose }: {
   function openReject() { reject.reset(); setRejectOpen(true); }
   function cancelReject() { setRejectOpen(false); reject.reset(); }
   return <div className="candidate-review">
-    <Notice kind="warning"><strong>Manual approval required.</strong> Validate the selected plan, exact effective range and recorded provenance against an official SCE source. Review alone does not publish or activate anything.</Notice>
+    <Notice kind="warning"><strong>Manual approval required.</strong> Validate the selected plan, exact effective range, and recorded official source. Saving this review does not publish or activate anything.</Notice>
     {!completeCoverage && <Notice><strong>Additional baseline evidence required.</strong> The source proves reusable prices but not the exact account baseline threshold. This candidate remains visible for review and comparison but cannot advance until a complete official or manual schedule is supplied.</Notice>}
-    <div className="review-meta"><div><span>Source</span><strong>{candidate.source.name}</strong></div><div><span>Parser</span><strong>{candidate.source.parser_version}</strong></div><div><span>Retrieved</span><strong>{dateTime(candidate.source.retrieved_at)}</strong></div><div><span>Artifact SHA-256</span><code title={candidate.source.artifact_sha256}>{shortHash(candidate.source.artifact_sha256)}</code></div></div>
-    {candidate.source.url && <p className="source-provenance"><strong>Recorded source URL:</strong> <code>{candidate.source.url}</code></p>}
+    <div className="review-meta"><div><span>Official source</span><strong>{candidate.source.name}</strong></div><div><span>Checked</span><strong>{dateTime(candidate.source.retrieved_at)}</strong></div></div>
+    <details className="technical-details"><summary>Technical details</summary><dl><div><dt>Parser</dt><dd>{candidate.source.parser_version}</dd></div><div><dt>Artifact SHA-256</dt><dd><code title={candidate.source.artifact_sha256}>{candidate.source.artifact_sha256}</code></dd></div><div><dt>Source URL</dt><dd><code>{candidate.source.url ?? 'Not reported'}</code></dd></div><div><dt>Candidate ID</dt><dd><code>{candidate.id}</code></dd></div></dl></details>
     <div className="candidate-plan-summary">
       {candidate.normalized_rates.plans.map((plan) => <article key={plan.rate_plan_name}><strong>{plan.rate_plan_name}</strong><span>{plan.rate_class} · {plan.periods.length} validated periods</span><small>Daily fixed {plan.daily_fixed_charge} USD · monthly fixed {plan.monthly_fixed_charge} USD · baseline credit {plan.baseline_credit_per_kwh} USD/kWh</small></article>)}
     </div>
@@ -218,12 +222,12 @@ function CandidateReview({ candidate, homeId, accounts, onWorkflow, onClose }: {
       <div className="rate-date-grid"><div className="field"><label htmlFor={`candidate-effective-start-${candidate.id}`}>Effective start date</label><input id={`candidate-effective-start-${candidate.id}`} name="effectiveStart" type="date" defaultValue={localDate(candidate.workflow.effective_start ?? candidate.normalized_rates.effective_start)} required /></div><div className="field"><label htmlFor={`candidate-effective-end-${candidate.id}`}>Effective end date (optional)</label><input id={`candidate-effective-end-${candidate.id}`} name="effectiveEnd" type="date" defaultValue={localDate(candidate.workflow.effective_end ?? candidate.normalized_rates.effective_end)} /></div></div>
       <small>Dates are submitted as midnight in {RATE_TIMEZONE}; the server stores authoritative UTC instants.</small>
       <label className="workflow-confirm"><input name="confirmEffective" type="checkbox" required /> I confirmed this exact effective range against the official source.</label>
-      <label className="workflow-confirm"><input name="confirmProvenance" type="checkbox" required /> I confirmed the recorded source and artifact provenance.</label>
-      <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onClose}>Close</button><PermissionGate permission="rates.manage"><button type="button" className="button button-danger" onClick={() => setDeleteOpen(true)}><Trash2 aria-hidden="true" /> Delete candidate</button><button type="button" className="button button-danger" onClick={openReject}>Reject candidate</button><button type="submit" className="button button-primary" disabled={review.isPending || !completeCoverage} title={completeCoverage ? undefined : 'Complete reusable schedule evidence is required'}>{review.isPending ? 'Recording review…' : 'Confirm candidate review'}</button></PermissionGate></div>
+      <label className="workflow-confirm"><input name="confirmProvenance" type="checkbox" required /> I confirmed the recorded source is an official SCE source.</label>
+      <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onClose}>Close</button><PermissionGate permission="rates.manage"><button type="button" className="button button-danger" onClick={() => setDeleteOpen(true)}><Trash2 aria-hidden="true" /> Delete candidate</button><button type="button" className="button button-danger" onClick={openReject}>Reject candidate</button><button type="submit" className="button button-primary" disabled={review.isPending || !completeCoverage} title={completeCoverage ? undefined : 'Complete reusable schedule evidence is required'}>{review.isPending ? 'Applying review…' : 'Apply reviewed rate plan'}</button></PermissionGate></div>
     </form>}
     {candidate.workflow.state === 'reviewed' && <Notice kind="success"><strong>Review recorded.</strong> Effective {dateTime(candidate.workflow.effective_start)} to {dateTime(candidate.workflow.effective_end)}. This candidate is not published or active.</Notice>}
     {candidate.workflow.state === 'published' && <><Notice kind="success"><strong>Immutable version published.</strong> It does not affect costs until assigned to one exact utility account.</Notice><div className="field"><label htmlFor={`candidate-account-${candidate.id}`}>Activation utility account</label><select id={`candidate-account-${candidate.id}`} value={accountId} onChange={(event) => setAccountId(event.target.value)} required><option value="">Choose an exact account</option>{accounts.map((account) => <option key={account.utility_account_id} value={account.utility_account_id}>{account.plan_name ?? 'Unassigned account'} ({account.utility_account_id})</option>)}</select></div></>}
-    {candidate.workflow.state === 'activated' && <Notice kind="success"><strong>Active for account {candidate.workflow.utility_account_id}.</strong> Sensor-derived intervals may now use immutable rate version {candidate.workflow.rate_plan_version_id} within its effective range.</Notice>}
+    {candidate.workflow.state === 'activated' && <Notice kind="success"><strong>Active for the selected account.</strong> Saved sensor readings now use published rate version {candidate.workflow.rate_plan_version_id} within its effective dates.</Notice>}
     {candidate.workflow.state === 'rejected' && <Notice kind="warning">This candidate was rejected and cannot advance.</Notice>}
     {workflowError && <Notice kind="warning"><strong>Workflow action failed.</strong> {workflowError instanceof Error ? workflowError.message : 'The candidate was not advanced.'}</Notice>}
     {candidate.workflow.state !== 'review_required' && <div className="dialog-actions"><button type="button" className="button button-secondary" onClick={onClose}>Close</button>{candidate.workflow.state === 'rejected' && <PermissionGate permission="rates.manage"><button type="button" className="button button-danger" onClick={() => setDeleteOpen(true)}><Trash2 aria-hidden="true" /> Delete candidate</button></PermissionGate>}{canReject && <PermissionGate permission="rates.manage"><button type="button" className="button button-danger" onClick={openReject}>Reject candidate</button></PermissionGate>}{candidate.workflow.state === 'reviewed' && <PermissionGate permission="rates.manage"><button type="button" className="button button-primary" onClick={() => setPublishOpen(true)}>Publish reviewed version</button></PermissionGate>}{candidate.workflow.state === 'published' && <PermissionGate permission="rates.manage"><button type="button" className="button button-primary" onClick={() => setActivateOpen(true)} disabled={!accountId}>Activate for selected account</button></PermissionGate>}</div>}
@@ -286,7 +290,7 @@ function ManualCandidateDialog({ open, homeId, onClose, onCreated }: { open: boo
   }
 
   return <Dialog open={open} title="Create manual SCE rate candidate" description="Fallback for exact rate facts verified from an official SCE source; no network fetch is performed." onClose={close} wide>
-    <Notice kind="warning"><strong>This is not a guess-and-activate shortcut.</strong> Enter a complete schedule and official provenance. The result still requires review, publication and exact-account activation.</Notice>
+    <Notice kind="warning"><strong>This is not a guess-and-activate shortcut.</strong> Enter a complete schedule from a recorded official source. The result still requires review, publication, and account activation.</Notice>
     <form className="manual-rate-form" onSubmit={submit}>
       <div className="rate-date-grid"><div className="field"><label htmlFor="manual-source-title">Official source title</label><input id="manual-source-title" name="sourceTitle" required minLength={3} maxLength={160} /></div><div className="field"><label htmlFor="manual-tariff-id">Tariff identifier</label><input id="manual-tariff-id" name="tariffIdentifier" required minLength={2} maxLength={120} /></div></div>
       <div className="field"><label htmlFor="manual-source-url">Official SCE HTTPS URL (optional)</label><input id="manual-source-url" name="sourceUrl" type="url" placeholder="https://www.sce.com/..." /></div>

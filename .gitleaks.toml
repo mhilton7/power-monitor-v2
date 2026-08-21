@@ -25,7 +25,7 @@ paths = [
   '''^release/RELEASE_NOTES\.md$''',
 ]
 regexes = [
-  '''^6d276b738467c867d062ab78b6cdc76d246f15d5aca7e2c505cddabf9b6f2c24$''',
+  '''^f15e5429ca0333dbf5f1defeef01197d8a21d2bc9e684c78463f44e279b03123$''',
 ]
 
 [[rules]]

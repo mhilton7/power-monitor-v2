@@ -148,6 +148,29 @@ class RatePublishRequest(BaseModel):
         return self
 
 
+class RateCandidateTierThresholdRule(BaseModel):
+    """Exact, reviewed home baseline evidence for a reusable daily tier rule."""
+
+    model_config = ConfigDict(extra="forbid")
+    rule_type: Literal["daily_allowance"] = "daily_allowance"
+    season: str = Field(min_length=1, max_length=30, pattern=r"^[A-Za-z0-9_-]+$")
+    kwh_per_day: Decimal = Field(
+        gt=Decimal("0"), le=Decimal("1000"), max_digits=18, decimal_places=8
+    )
+    source_allowance_kwh: Decimal = Field(
+        gt=Decimal("0"), le=Decimal("100000"), max_digits=18, decimal_places=8
+    )
+    source_billing_days: int = Field(ge=1, le=62)
+    tier1_boundary_inclusive: Literal[True] = True
+    source_label: str = Field(min_length=1, max_length=160)
+
+    @model_validator(mode="after")
+    def source_values_reconcile(self) -> RateCandidateTierThresholdRule:
+        if self.kwh_per_day * self.source_billing_days != self.source_allowance_kwh:
+            raise ValueError("daily tier allowance does not reconcile with its source period")
+        return self
+
+
 class RateCandidateReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     selected_plan_name: str = Field(min_length=1, max_length=120)
@@ -155,6 +178,7 @@ class RateCandidateReviewRequest(BaseModel):
     effective_end: datetime | None = None
     administrator_confirmed_effective_date: Literal[True]
     administrator_confirmed_provenance: Literal[True]
+    tier_threshold_rule: RateCandidateTierThresholdRule | None = None
 
     @model_validator(mode="after")
     def confirmed_dates(self) -> RateCandidateReviewRequest:
@@ -768,6 +792,71 @@ class FirmwareDeploymentRetryRequest(BaseModel):
     def unique_devices(self) -> FirmwareDeploymentRetryRequest:
         if len(self.device_ids) != len(set(self.device_ids)):
             raise ValueError("firmware retry device IDs must be unique")
+        return self
+
+
+class FirmwareArchiveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: Literal["ARCHIVE FIRMWARE RECORD"]
+
+
+class FirmwareRestoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: Literal["RESTORE FIRMWARE RECORD"]
+
+
+class FirmwareReleaseDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: Literal["DELETE RELEASE PERMANENTLY"]
+    semantic_version: str = Field(min_length=1, max_length=40)
+    build_number: str = Field(min_length=1, max_length=80)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class FirmwareCurrentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: Literal["MAKE CURRENT FIRMWARE"]
+    semantic_version: str = Field(min_length=1, max_length=40)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class FirmwareRollbackPinRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: Literal["UPDATE ROLLBACK PROTECTION"]
+    rollback_pinned: bool
+
+
+class FirmwareDeploymentDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: Literal["DELETE DEPLOYMENT RECORD"]
+    deployment_batch_id: str = Field(min_length=36, max_length=36)
+
+
+class FirmwareDeploymentArchiveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: Literal["ARCHIVE DEPLOYMENT RECORD"]
+
+
+class FirmwareDeploymentRestoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: Literal["RESTORE DEPLOYMENT RECORD"]
+
+
+class FirmwareDeploymentHoldRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    troubleshooting_hold: bool
+    reason: str = Field(min_length=1, max_length=300)
+
+
+class FirmwareLifecycleSettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    deployment_retention_days: Literal[90, 180, 365] | None
+    confirmation: Literal["DELETE EXPIRED DEPLOYMENT HISTORY"] | None = None
+
+    @model_validator(mode="after")
+    def retention_confirmation(self) -> FirmwareLifecycleSettingsUpdateRequest:
+        if self.deployment_retention_days is not None and self.confirmation is None:
+            raise ValueError("bounded deployment retention requires exact confirmation")
         return self
 
 

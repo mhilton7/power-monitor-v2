@@ -85,10 +85,36 @@
           ],
           "title": "Amount"
         },
+        "applies": {
+          "anyOf": [
+            {
+              "enum": [
+                "per_account_per_day",
+                "per_account_per_month",
+                "per_account_per_cycle",
+                "per_meter_per_day",
+                "per_meter_per_month",
+                "per_meter_per_cycle"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Applies"
+        },
         "kind": {
           "enum": [
             "daily_fixed",
             "monthly_fixed",
+            "meter_fixed",
+            "other_fixed",
+            "daily_fixed_charge",
+            "monthly_fixed_charge",
+            "meter_charge",
+            "other_fixed_charge",
             "per_kwh",
             "percentage",
             "credit"

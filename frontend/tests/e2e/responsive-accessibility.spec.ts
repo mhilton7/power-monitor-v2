@@ -9,7 +9,9 @@ const viewports = [
   { width: 768, height: 1024 },
   { width: 1024, height: 768 },
   { width: 1280, height: 720 },
+  { width: 1366, height: 768 },
   { width: 1440, height: 900 },
+  { width: 1536, height: 864 },
   { width: 1920, height: 1080 },
 ] as const;
 
@@ -33,6 +35,18 @@ async function expectTicksDoNotOverlap(ticks: Locator) {
   for (let index = 1; index < boxes.length; index += 1) expect(boxes[index]!.left).toBeGreaterThanOrEqual(boxes[index - 1]!.right - 1);
 }
 
+async function expectYAxisContained(chart: Locator) {
+  const chartBox = await chart.boundingBox();
+  expect(chartBox).not.toBeNull();
+  const tickBoxes = await chart.locator('.recharts-yAxis-tick-labels text').evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect()).filter((box) => box.width > 0));
+  expect(tickBoxes.length).toBeGreaterThan(0);
+  const gridBox = await chart.locator('.recharts-cartesian-grid-horizontal').boundingBox();
+  for (const box of tickBoxes) {
+    expect(box.left).toBeGreaterThanOrEqual((chartBox?.x ?? 0) - 1);
+    expect(box.right).toBeLessThanOrEqual((gridBox?.x ?? Number.POSITIVE_INFINITY) + 2);
+  }
+}
+
 for (const viewport of viewports) {
   test(`${viewport.width}x${viewport.height} keeps every major page contained and charts legible`, async ({ page }) => {
     await page.setViewportSize(viewport);
@@ -43,6 +57,8 @@ for (const viewport of viewports) {
     await expectUniqueIds(page);
     await expectTicksDoNotOverlap(page.locator('[data-testid="usage-chart"] .recharts-xAxis-tick-labels text'));
     await expectTicksDoNotOverlap(page.locator('[data-testid="daily-chart"] .recharts-xAxis-tick-labels text'));
+    await expectYAxisContained(page.getByTestId('usage-chart'));
+    await expectYAxisContained(page.getByTestId('daily-chart'));
     const brushHandles = page.locator('[data-testid="usage-chart"] .recharts-brush-traveller');
     await expect(brushHandles).toHaveCount(2);
     for (const handle of await brushHandles.all()) {
@@ -57,6 +73,7 @@ for (const viewport of viewports) {
     await expectNoHorizontalOverflow(page);
     await expectUniqueIds(page);
     await expectTicksDoNotOverlap(page.locator('[data-testid="history-chart"] .recharts-xAxis-tick-labels text'));
+    await expectYAxisContained(page.getByTestId('history-chart'));
 
     await page.goto('/billing');
     await expect(page.getByRole('heading', { name: 'Billing', exact: true })).toBeVisible();

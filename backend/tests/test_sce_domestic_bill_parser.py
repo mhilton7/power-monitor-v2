@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -10,12 +10,21 @@ from backend.app.errors import BillRateImportError
 from backend.app.main import session_factory
 from backend.app.models import (
     RateCandidate,
+    RatePeriod,
     RatePlanVersion,
     RateSourceRevision,
     RawReading,
+    UtilityAccount,
+    UtilityAccountTierThreshold,
+    UtilityBillRateExtraction,
     UtilityBillRateUpload,
 )
 from backend.app.schemas.billing import RatePlanDraft
+from backend.app.services.cost_engine import (
+    RateVersion,
+    fixed_charge_microdollars,
+    fixed_charges_from_storage,
+)
 from httpx import AsyncClient
 from pydantic import ValidationError
 from pypdf import PdfReader, PdfWriter
@@ -159,22 +168,123 @@ async def test_bill_dates_are_metadata_and_complete_summer_threshold_is_publisha
         "tier1_boundary_inclusive": True,
     }
 
+    async with session_factory() as session:
+        account_id = await session.scalar(select(UtilityAccount.id))
+    assert account_id is not None
     published = await owner_client.post(
         f"/api/v1/bill-rate-imports/{extraction['id']}/publish",
         json={
             "effective_start": "2026-06-22T07:00:00Z",
             "effective_end": None,
             "administrator_confirmed_effective_date": True,
-            "assign_to_utility_account_id": None,
+            "assign_to_utility_account_id": account_id,
         },
     )
     assert published.status_code == 201, published.text
     async with session_factory() as session:
         version = await session.get(RatePlanVersion, published.json()["rate_plan_version"]["id"])
         assert version is not None
-        assert version.tier_threshold_kwh_per_day == Decimal("19.30000000")
-        assert version.tier_threshold_source_kwh == Decimal("579.00000000")
-        assert version.tier_threshold_source_days == 30
+        assert version.tier_threshold_kwh_per_day is None
+        assert version.tier_threshold_source_kwh is None
+        assert version.tier_threshold_source_days is None
+        threshold = await session.scalar(
+            select(UtilityAccountTierThreshold).where(
+                UtilityAccountTierThreshold.utility_account_id == account_id,
+                UtilityAccountTierThreshold.rate_plan_id == version.rate_plan_id,
+            )
+        )
+        assert threshold is not None
+        assert threshold.kwh_per_day == Decimal("19.30000000")
+        assert threshold.source_allowance_kwh == Decimal("579.00000000")
+        periods = (
+            await session.scalars(
+                select(RatePeriod)
+                .where(RatePeriod.rate_plan_version_id == version.id)
+                .order_by(RatePeriod.tier_start_kwh)
+            )
+        ).all()
+        assert [(period.tier_start_kwh, period.tier_end_kwh) for period in periods] == [
+            (Decimal("0"), Decimal("1")),
+            (Decimal("1"), None),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_bill_publish_normalizes_and_executes_meter_and_other_fixed_charges(
+    owner_client: AsyncClient,
+) -> None:
+    uploaded = await owner_client.post(
+        "/api/v1/bill-rate-imports",
+        files={"document": ("fixed-rates.pdf", _pdf([RATE_ONLY_CHARGES_PAGE]), "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    extraction_id = uploaded.json()["extraction"]["id"]
+    async with session_factory() as session:
+        extraction = await session.get(UtilityBillRateExtraction, extraction_id)
+        account_id = await session.scalar(select(UtilityAccount.id))
+        assert extraction is not None and account_id is not None
+        extraction.reusable_price_components = [
+            *extraction.reusable_price_components,
+            {
+                "name": "Utility meter charge",
+                "kind": "meter_fixed",
+                "amount": "2.00",
+                "unit": "USD/month",
+            },
+            {
+                "name": "Account fixed adjustment",
+                "kind": "other_fixed",
+                "amount": "1.25",
+                "unit": "USD/month",
+                "applies": "per_account_per_cycle",
+            },
+        ]
+        await session.commit()
+    published = await owner_client.post(
+        f"/api/v1/bill-rate-imports/{extraction_id}/publish",
+        json={
+            "effective_start": "2026-06-22T07:00:00Z",
+            "effective_end": None,
+            "administrator_confirmed_effective_date": True,
+            "assign_to_utility_account_id": account_id,
+        },
+    )
+    assert published.status_code == 201, published.text
+    async with session_factory() as session:
+        stored = await session.get(
+            RatePlanVersion,
+            published.json()["rate_plan_version"]["id"],
+        )
+        assert stored is not None
+        assert stored.meter_charge == Decimal("2")
+        assert stored.other_fixed_charge == Decimal("1.25")
+        assert {item["charge"] for item in stored.fixed_charges} >= {
+            "daily_fixed_charge",
+            "meter_charge",
+            "other_fixed_charge",
+        }
+        assert not {item.get("kind") for item in stored.fixed_charges} & {
+            "meter_fixed",
+            "other_fixed",
+        }
+        domain = RateVersion(
+            id=stored.id,
+            timezone=stored.timezone,
+            effective_start=datetime(2026, 6, 22, 7, tzinfo=UTC),
+            effective_end=None,
+            periods=(),
+            fixed_charges=fixed_charges_from_storage(stored.fixed_charges),
+        )
+        assert (
+            fixed_charge_microdollars(
+                domain,
+                date(2026, 7, 1),
+                date(2026, 8, 1),
+                scope="full_account",
+                meter_count=1,
+            )
+            == 27_089_000
+        )
 
 
 @pytest.mark.parametrize(

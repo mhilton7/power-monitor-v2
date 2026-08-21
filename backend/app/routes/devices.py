@@ -479,11 +479,12 @@ async def heartbeat(
     payload = generic_payload
     assert isinstance(payload, HeartbeatRequest)
     now = datetime.now(UTC)
-    await apply_command_results(
+    ingestion_graph = await apply_command_results(
         session,
         device.id,
         payload.command_results,
         authenticated_credential_id=credential.id,
+        reported_firmware_version=payload.firmware_version,
     )
     measurement = payload.measurement
     if measurement.measured_at is not None and measurement.measured_at.astimezone(
@@ -523,7 +524,9 @@ async def heartbeat(
         session,
         device_id=device.id,
         firmware_version=payload.firmware_version,
+        firmware_build_id=payload.firmware_build_id,
         now=now,
+        locked_graph=ingestion_graph,
     )
     device.maximum_sequence = max(device.maximum_sequence, payload.newest_sequence or 0)
     if payload.acknowledged_sequence > device.contiguous_ack:
@@ -604,11 +607,12 @@ async def stateless_telemetry(
     )
     payload = generic_payload
     assert isinstance(payload, StatelessTelemetryRequest)
-    await apply_command_results(
+    ingestion_graph = await apply_command_results(
         session,
         device.id,
         payload.command_results,
         authenticated_credential_id=credential.id,
+        reported_firmware_version=payload.firmware_version,
     )
     result = await ingest_stateless_sample(session, device.id, payload)
     if result.advances_live_state:
@@ -616,7 +620,9 @@ async def stateless_telemetry(
             session,
             device_id=device.id,
             firmware_version=payload.firmware_version,
+            firmware_build_id=payload.firmware_build_id,
             now=result.received_at,
+            locked_graph=ingestion_graph,
         )
     identity = StatelessTelemetrySampleIdentity(
         sensor_id=device.id,

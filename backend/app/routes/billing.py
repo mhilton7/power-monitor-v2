@@ -41,11 +41,13 @@ from ..models import (
     RateSourceRevision,
     RateSyncRun,
     RawReading,
+    SceCatalogEntry,
     TelemetryEnergyEvent,
     UtilityAccount,
     UtilityBillRateCorrection,
     UtilityBillRateExtraction,
     UtilityBillRateUpload,
+    aware_utc,
     user_home_scopes,
 )
 from ..schemas.api import (
@@ -58,7 +60,9 @@ from ..schemas.api import (
 )
 from ..schemas.billing import RatePlanDraft, TierThresholdRuleDraft
 from ..security.auth import CurrentUser, require_permission
+from ..services.cost_engine import season_from_storage
 from ..services.rate_sync import (
+    SCE_CATALOG_SOURCE_NAME,
     ensure_default_sce_source,
     sync_official_rate_source,
 )
@@ -70,6 +74,9 @@ from ..services.rate_workflow import (
     publish_rate_candidate,
     reject_rate_candidate,
     replace_rate_assignment,
+    replace_utility_account_tier_threshold,
+    resolve_assigned_utility_account_cycle_tier_threshold,
+    resolve_utility_account_tier_threshold,
     review_rate_candidate,
     safe_review,
 )
@@ -172,6 +179,54 @@ def _safe_extraction(
         "resulting_rate_version_id": row.resulting_rate_version_id,
         "review_required": row.state == "review_required",
     }
+
+
+def _catalog_manifest_proves_discovery_closure(
+    manifest: dict[str, object] | None,
+) -> bool:
+    """Fail closed unless a captured catalog manifest proves link closure."""
+
+    if manifest is None or manifest.get("schema_version") != "sce-catalog-crawl/1.0.0":
+        return False
+    if manifest.get("source_policy") != "official_public_sce_only":
+        return False
+    closure = manifest.get("closure")
+    counts = manifest.get("counts")
+    documents = manifest.get("documents")
+    links = manifest.get("links")
+    plans = manifest.get("plans")
+    if not isinstance(closure, dict) or not isinstance(counts, dict):
+        return False
+    if not isinstance(documents, list) or not documents:
+        return False
+    if not isinstance(links, list) or not isinstance(plans, list) or not plans:
+        return False
+
+    link_resolutions_closed = all(
+        isinstance(link, dict)
+        and link.get("resolution") in {"parsed", "explicitly_excluded"}
+        and link.get("discovery_status") == "accounted_for"
+        for link in links
+    )
+    plan_states_closed = all(
+        isinstance(plan, dict) and plan.get("discovery_state") in {"parsed", "excluded"}
+        for plan in plans
+    )
+    return (
+        closure.get("proved") is True
+        and closure.get("all_discovered_links_accounted_for") is True
+        and closure.get("plans_silently_omitted") == 0
+        and closure.get("failure_reasons") == []
+        and closure.get("unresolved_links") == []
+        and closure.get("plans_requiring_parser_updates") == []
+        and counts.get("links_discovered") == len(links)
+        and counts.get("links_resolved") == len(links)
+        and counts.get("plans_discovered") == len(plans)
+        and counts.get("plans_requiring_parser_updates") == 0
+        and counts.get("documents_captured") == len(documents)
+        and link_resolutions_closed
+        and plan_states_closed
+    )
 
 
 def _semantic_rate_values_from_draft(draft: RatePlanDraft) -> dict[str, object]:
@@ -615,13 +670,93 @@ async def publish_bill_rate_import(
         utility_name=extraction.utility_name,
         rate_class=extraction.rate_class,
     )
+    plan.utility_code = plan.utility_code or "SCE"
+    plan.public_plan_name = plan.public_plan_name or extraction.rate_plan_name
+    plan.canonical_name = plan.canonical_name or extraction.rate_plan_name
+    plan.official_schedule_code = plan.official_schedule_code or (
+        "D" if extraction.rate_plan_name.upper() == "DOMESTIC" else None
+    )
+    if plan.plan_type == "unknown":
+        plan.plan_type = extraction.plan_classification
+    plan.currency = "USD"
+    plan.energy_unit = "kWh"
     daily = Decimal("0")
     monthly = Decimal("0")
+    meter = Decimal("0")
+    other_fixed = Decimal("0")
+    fixed_charges: list[dict[str, object]] = []
     for component in extraction.reusable_price_components:
-        if component.get("kind") == "daily_fixed":
-            daily += Decimal(str(component["amount"]))
-        elif component.get("kind") == "monthly_fixed":
-            monthly += Decimal(str(component["amount"]))
+        kind = component.get("kind")
+        if kind not in {
+            "daily_fixed",
+            "monthly_fixed",
+            "meter_fixed",
+            "other_fixed",
+            "daily_fixed_charge",
+            "monthly_fixed_charge",
+            "meter_charge",
+            "other_fixed_charge",
+        }:
+            continue
+        amount = Decimal(str(component["amount"]))
+        unit = component.get("unit")
+        unit_text = unit if isinstance(unit, str) else None
+        canonical_kind = {
+            "daily_fixed": "daily_fixed_charge",
+            "monthly_fixed": "monthly_fixed_charge",
+            "meter_fixed": "meter_charge",
+            "other_fixed": "other_fixed_charge",
+        }.get(str(kind), str(kind))
+        default_applies = {
+            "daily_fixed_charge": "per_account_per_day",
+            "monthly_fixed_charge": "per_account_per_month",
+            "meter_charge": "per_meter_per_day"
+            if unit_text == "USD/day"
+            else "per_meter_per_month"
+            if unit_text == "USD/month"
+            else None,
+            "other_fixed_charge": "per_account_per_day"
+            if unit_text == "USD/day"
+            else "per_account_per_month"
+            if unit_text == "USD/month"
+            else None,
+        }[canonical_kind]
+        applies = component.get("applies") or default_applies
+        allowed_applies = {
+            "daily_fixed_charge": {"per_account_per_day"},
+            "monthly_fixed_charge": {"per_account_per_month"},
+            "meter_charge": {
+                "per_meter_per_day",
+                "per_meter_per_month",
+                "per_meter_per_cycle",
+            },
+            "other_fixed_charge": {
+                "per_account_per_day",
+                "per_account_per_month",
+                "per_account_per_cycle",
+            },
+        }[canonical_kind]
+        if applies not in allowed_applies:
+            raise BillRateImportError(
+                "This fixed charge does not include exact account/meter recurrence semantics.",
+                code="RATE_FIXED_CHARGE_EVALUATOR_REQUIRED",
+            )
+        fixed_charges.append(
+            {
+                "charge": canonical_kind,
+                "amount": format(amount, "f"),
+                "currency": "USD",
+                "applies": applies,
+            }
+        )
+        if canonical_kind == "daily_fixed_charge":
+            daily += amount
+        elif canonical_kind == "monthly_fixed_charge":
+            monthly += amount
+        elif canonical_kind == "meter_charge":
+            meter += amount
+        else:
+            other_fixed += amount
     version = RatePlanVersion(
         rate_plan_id=plan.id,
         version=version_number,
@@ -629,19 +764,33 @@ async def publish_bill_rate_import(
         effective_end=payload.effective_end.astimezone(UTC) if payload.effective_end else None,
         timezone="America/Los_Angeles",
         pricing_model=extraction.plan_classification,
+        source_version=upload.artifact_sha256,
+        holiday_treatment=extraction.holiday_treatment,
+        eligibility_evidence=(
+            [
+                {
+                    "evidence_type": "account_tier_threshold_requirement",
+                    "rule_type": "daily_allowance",
+                    "season": threshold_rule.season,
+                    "tier1_boundary_inclusive": True,
+                    "source_label": "reviewed SCE bill baseline allowance",
+                    "account_scoped": True,
+                }
+            ]
+            if threshold_rule is not None
+            else []
+        ),
+        fixed_charges=fixed_charges,
+        price_components=[dict(component) for component in extraction.reusable_price_components],
         daily_fixed_charge=daily,
         monthly_fixed_charge=monthly,
+        meter_charge=meter,
+        other_fixed_charge=other_fixed,
         baseline_credit_per_kwh=extraction.baseline_credit_rate or Decimal("0"),
-        tier_threshold_kwh_per_day=(
-            threshold_rule.kwh_per_day if threshold_rule is not None else None
-        ),
-        tier_threshold_season=(threshold_rule.season if threshold_rule is not None else None),
-        tier_threshold_source_kwh=(
-            threshold_rule.source_allowance_kwh if threshold_rule is not None else None
-        ),
-        tier_threshold_source_days=(
-            threshold_rule.source_billing_days if threshold_rule is not None else None
-        ),
+        tier_threshold_kwh_per_day=None,
+        tier_threshold_season=None,
+        tier_threshold_source_kwh=None,
+        tier_threshold_source_days=None,
         tier1_boundary_inclusive=(
             threshold_rule.tier1_boundary_inclusive if threshold_rule is not None else True
         ),
@@ -665,10 +814,40 @@ async def publish_bill_rate_import(
                 price_per_kwh=Decimal(str(period["price_per_kwh"])),
                 delivery_per_kwh=Decimal(str(period.get("delivery_per_kwh", 0))),
                 generation_per_kwh=Decimal(str(period.get("generation_per_kwh", 0))),
-                tier_start_kwh=Decimal(str(period.get("tier_start_kwh", 0))),
-                tier_end_kwh=Decimal(str(period["tier_end_kwh"]))
-                if period.get("tier_end_kwh") is not None
-                else None,
+                rate_components=[
+                    {
+                        "component": "delivery_rate",
+                        "amount_per_kwh": str(period.get("delivery_per_kwh", 0)),
+                    },
+                    {
+                        "component": "generation_rate",
+                        "amount_per_kwh": str(period.get("generation_per_kwh", 0)),
+                    },
+                ],
+                baseline_credit_per_kwh=extraction.baseline_credit_rate or Decimal("0"),
+                tier_start_kwh=(
+                    Decimal("1")
+                    if threshold_rule is not None
+                    and Decimal(str(period.get("tier_start_kwh", 0))) > 0
+                    else Decimal(str(period.get("tier_start_kwh", 0)))
+                ),
+                tier_end_kwh=(
+                    Decimal("1")
+                    if threshold_rule is not None and period.get("tier_end_kwh") is not None
+                    else Decimal(str(period["tier_end_kwh"]))
+                    if period.get("tier_end_kwh") is not None
+                    else None
+                ),
+                boundary_inclusive=(
+                    threshold_rule.tier1_boundary_inclusive if threshold_rule is not None else True
+                ),
+                threshold_basis=(
+                    "account_daily_baseline"
+                    if threshold_rule is not None
+                    else extraction.tier_threshold_basis
+                ),
+                threshold_value=None,
+                source_label=str(period["name"]),
             )
         )
     # Child rows are flushed while the version is still a draft.  The ORM and
@@ -676,6 +855,7 @@ async def publish_bill_rate_import(
     # any of its schedule/holiday rows.
     await session.flush()
     version.state = "published"
+    account_threshold_id: str | None = None
     if payload.assign_to_utility_account_id:
         account = await session.scalar(
             select(UtilityAccount)
@@ -693,6 +873,26 @@ async def publish_bill_rate_import(
             version=version,
             actor_user_id=user.id,
         )
+        if threshold_rule is not None:
+            assert threshold_rule.kwh_per_day is not None
+            assert threshold_rule.source_billing_days is not None
+            account_threshold, _threshold_created = await replace_utility_account_tier_threshold(
+                session,
+                account=account,
+                rate_plan_id=plan.id,
+                season=threshold_rule.season,
+                kwh_per_day=threshold_rule.kwh_per_day,
+                source_allowance_kwh=threshold_rule.source_allowance_kwh,
+                source_billing_days=threshold_rule.source_billing_days,
+                tier1_boundary_inclusive=threshold_rule.tier1_boundary_inclusive,
+                source_label="reviewed SCE bill baseline allowance",
+                source_kind="bill_rate_import",
+                source_artifact_sha256=upload.artifact_sha256,
+                effective_start=assignment.effective_start,
+                effective_end=assignment.effective_end,
+                actor_user_id=user.id,
+            )
+            account_threshold_id = account_threshold.id
         # Selected-cost rows are mutable pointers into immutable cost evidence.
         # Invalidate only pointers in the new assignment's home/effective range;
         # the worker will create a new CostRun/IntervalCost and atomically select
@@ -724,7 +924,10 @@ async def publish_bill_rate_import(
             target_type="rate_plan_version",
             target_id=version.id,
             correlation_id=request.state.correlation_id,
-            details={"source_artifact_sha256": upload.artifact_sha256},
+            details={
+                "source_artifact_sha256": upload.artifact_sha256,
+                "utility_account_tier_threshold_id": account_threshold_id,
+            },
         )
     )
     await session.commit()
@@ -868,7 +1071,7 @@ async def billing_overview(
     now = datetime.now(UTC)
     plans: list[dict[str, object]] = []
     for account in accounts:
-        selected_rate = (
+        selected_rates = (
             await session.execute(
                 select(RateAssignment, RatePlanVersion, RatePlan)
                 .join(
@@ -888,9 +1091,11 @@ async def billing_overview(
                     ),
                 )
                 .order_by(RateAssignment.effective_start.desc())
-                .limit(1)
+                .limit(2)
             )
-        ).first()
+        ).all()
+        selected_rate = selected_rates[0] if len(selected_rates) == 1 else None
+        assignment = selected_rate[0] if selected_rate else None
         version = selected_rate[1] if selected_rate else None
         plan = selected_rate[2] if selected_rate else None
         estimates = (
@@ -905,6 +1110,16 @@ async def billing_overview(
             )
         ).all()
         cycle_start, cycle_end = _current_billing_cycle_bounds(account, now)
+        one_version_for_cycle = bool(
+            assignment is not None
+            and version is not None
+            and aware_utc(assignment.effective_start) <= cycle_start
+            and (
+                assignment.effective_end is None or aware_utc(assignment.effective_end) >= cycle_end
+            )
+            and aware_utc(version.effective_start) <= cycle_start
+            and (version.effective_end is None or aware_utc(version.effective_end) >= cycle_end)
+        )
         scope_end = now.replace(second=0, microsecond=0)
         home_total_branch = await session.scalar(
             select(Circuit).where(
@@ -1051,7 +1266,13 @@ async def billing_overview(
             else []
         )
         local_now = now.astimezone(ZoneInfo(account.timezone))
-        season = "summer" if local_now.month in (6, 7, 8, 9) else "winter"
+        season = (
+            season_from_storage(version.season_definitions, local_now)
+            if version is not None
+            else "summer"
+            if local_now.month in (6, 7, 8, 9)
+            else "winter"
+        )
         seasonal_periods = [period for period in periods if period.season in (season, "all")]
         tier_1_period = next(
             (
@@ -1073,9 +1294,34 @@ async def billing_overview(
             cycle_end.astimezone(ZoneInfo(account.timezone)).date()
             - cycle_start.astimezone(ZoneInfo(account.timezone)).date()
         ).days
-        tier_1_allowance = (
-            version.tier_threshold_kwh_per_day * cycle_days
+        account_daily_threshold = (
+            await resolve_utility_account_tier_threshold(
+                session,
+                utility_account_id=account.id,
+                rate_plan_id=version.rate_plan_id,
+                season=season,
+                instant=now,
+            )
             if version is not None
+            else None
+        )
+        account_cycle_threshold = (
+            await resolve_assigned_utility_account_cycle_tier_threshold(
+                session,
+                utility_account_id=account.id,
+                timezone=account.timezone,
+                cycle_start=cycle_start,
+                cycle_end=cycle_end,
+            )
+            if version is not None
+            else None
+        )
+        tier_1_allowance = (
+            account_cycle_threshold.total_kwh
+            if account_cycle_threshold is not None
+            else version.tier_threshold_kwh_per_day * cycle_days
+            if version is not None
+            and one_version_for_cycle
             and version.tier_threshold_kwh_per_day is not None
             and version.tier_threshold_season in (season, "all")
             else None
@@ -1109,11 +1355,27 @@ async def billing_overview(
             "projected_service_charge": None,
             "projected_total": None,
         }
+        has_non_daily_fixed_charge = bool(
+            version
+            and (
+                version.monthly_fixed_charge
+                or version.minimum_charge
+                or version.meter_charge
+                or version.other_fixed_charge
+                or any(
+                    isinstance(item, dict)
+                    and item.get("charge") != "daily_fixed_charge"
+                    and Decimal(str(item.get("amount", "0"))) != 0
+                    for item in version.fixed_charges
+                )
+            )
+        )
         if (
             tier_1_allowance is not None
             and tier_1_period is not None
             and tier_2_period is not None
             and version is not None
+            and one_version_for_cycle
         ):
             known = tiered_cost(
                 usage_kwh=saved_usage_kwh,
@@ -1139,21 +1401,28 @@ async def billing_overview(
                     "rate_per_kwh": tier_2_period.price_per_kwh,
                     "cost": known.tier_2_cost,
                 },
-                "service_charge_to_date": known.service_charge,
-                "total_to_date": known.total,
+                "service_charge_to_date": (
+                    None if has_non_daily_fixed_charge else known.service_charge
+                ),
+                "total_to_date": None if has_non_daily_fixed_charge else known.total,
             }
-            projection = billing_projection(
-                reliable_usage_kwh=saved_usage_kwh,
-                reliable_elapsed_hours=reliable_elapsed_hours,
-                total_cycle_days=cycle_days,
-                threshold_kwh=tier_1_allowance,
-                tier_1_rate=tier_1_period.price_per_kwh,
-                tier_2_rate=tier_2_period.price_per_kwh,
-                daily_service_charge=version.daily_fixed_charge,
-                reading_coverage=reading_coverage,
-                unresolved_counter_resets=unresolved_counter_reset_count,
-                unresolved_connection_gaps=unresolved_connection_gap_count,
-            )
+            if has_non_daily_fixed_charge:
+                projection["confidence_reasons"] = [
+                    "exact_non_daily_fixed_charge_projection_unavailable"
+                ]
+            else:
+                projection = billing_projection(
+                    reliable_usage_kwh=saved_usage_kwh,
+                    reliable_elapsed_hours=reliable_elapsed_hours,
+                    total_cycle_days=cycle_days,
+                    threshold_kwh=tier_1_allowance,
+                    tier_1_rate=tier_1_period.price_per_kwh,
+                    tier_2_rate=tier_2_period.price_per_kwh,
+                    daily_service_charge=version.daily_fixed_charge,
+                    reading_coverage=reading_coverage,
+                    unresolved_counter_resets=unresolved_counter_reset_count,
+                    unresolved_connection_gaps=unresolved_connection_gap_count,
+                )
         home_estimate = next(
             (
                 estimate
@@ -1169,7 +1438,16 @@ async def billing_overview(
             and version is not None
             and home_estimate.rate_plan_version_id == version.id
             and tier_state != "not_confirmed"
+            and recovered_gap_mwh == 0
+            and billing_adjustment_mwh == 0
         )
+        if tier_breakdown is not None and estimate_is_current and home_estimate is not None:
+            tier_breakdown["service_charge_to_date"] = Decimal(
+                home_estimate.fixed_charge_microdollars
+            ) / Decimal(1_000_000)
+            tier_breakdown["total_to_date"] = Decimal(home_estimate.total_microdollars) / Decimal(
+                1_000_000
+            )
         current_rate_plan = {
             "rate_plan_id": plan.id if plan else None,
             "rate_plan_version_id": version.id if version else None,
@@ -1185,7 +1463,13 @@ async def billing_overview(
             if tier_2_period is not None
             else None,
             "daily_service_charge": version.daily_fixed_charge if version else None,
-            "daily_baseline_allowance_kwh": version.tier_threshold_kwh_per_day if version else None,
+            "daily_baseline_allowance_kwh": (
+                account_daily_threshold.kwh_per_day
+                if account_daily_threshold is not None
+                else version.tier_threshold_kwh_per_day
+                if version is not None
+                else None
+            ),
             "generation_service": account.cca_provider or "SCE",
         }
         current_billing_cycle = {
@@ -1348,6 +1632,385 @@ async def list_rate_source_candidates(
             }
             for candidate, revision, source in rows
         ],
+    }
+
+
+@router.get("/rate-sources/catalog")
+async def list_sce_rate_catalog(
+    home_id: str | None = None,
+    user: CurrentUser = Depends(require_permission("rates.view")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    """Return the latest explicit result for every discovered official SCE plan."""
+
+    scoped_home_id = await _resolve_user_home(session, user.id, home_id)
+    rows = (
+        await session.execute(
+            select(SceCatalogEntry, RateSourceRevision, RateSource)
+            .join(
+                RateSourceRevision,
+                RateSourceRevision.id == SceCatalogEntry.source_revision_id,
+            )
+            .join(RateSource, RateSource.id == RateSourceRevision.source_id)
+            .where(
+                select(RateSyncRun.id)
+                .where(
+                    RateSyncRun.home_id == scoped_home_id,
+                    RateSyncRun.revision_id == RateSourceRevision.id,
+                )
+                .exists()
+            )
+            .order_by(
+                RateSourceRevision.retrieved_at.desc(),
+                SceCatalogEntry.updated_at.desc(),
+                SceCatalogEntry.id.desc(),
+            )
+        )
+    ).all()
+    available_revision_ids = {revision.id for _entry, revision, _source in rows}
+
+    now = datetime.now(UTC)
+    active_names = set(
+        (
+            await session.scalars(
+                select(RatePlan.name)
+                .join(RatePlanVersion, RatePlanVersion.rate_plan_id == RatePlan.id)
+                .join(
+                    RateAssignment,
+                    RateAssignment.rate_plan_version_id == RatePlanVersion.id,
+                )
+                .join(
+                    UtilityAccount,
+                    UtilityAccount.id == RateAssignment.utility_account_id,
+                )
+                .where(
+                    UtilityAccount.home_id == scoped_home_id,
+                    RateAssignment.effective_start <= now,
+                    (RateAssignment.effective_end.is_(None) | (RateAssignment.effective_end > now)),
+                    RatePlanVersion.state == "published",
+                )
+            )
+        ).all()
+    )
+    latest_catalog_run = await session.scalar(
+        select(RateSyncRun)
+        .join(RateSource, RateSource.id == RateSyncRun.source_id)
+        .where(
+            RateSyncRun.home_id == scoped_home_id,
+            RateSource.name == SCE_CATALOG_SOURCE_NAME,
+            RateSyncRun.completed_at.is_not(None),
+        )
+        .order_by(RateSyncRun.completed_at.desc(), RateSyncRun.id.desc())
+        .limit(1)
+    )
+    complete_catalog_runs = (
+        await session.scalars(
+            select(RateSyncRun)
+            .join(RateSource, RateSource.id == RateSyncRun.source_id)
+            .where(
+                RateSyncRun.home_id == scoped_home_id,
+                RateSource.name == SCE_CATALOG_SOURCE_NAME,
+                RateSyncRun.event_code == "SCE_CATALOG_CRAWL_COMPLETE",
+                RateSyncRun.completed_at.is_not(None),
+                RateSyncRun.revision_id.is_not(None),
+            )
+            .order_by(RateSyncRun.completed_at.desc(), RateSyncRun.id.desc())
+            .limit(50)
+        )
+    ).all()
+    last_complete_catalog_run: RateSyncRun | None = None
+    for complete_run in complete_catalog_runs:
+        candidate_manifest = complete_run.evidence.get("catalog_crawl_manifest")
+        candidate_plans = (
+            candidate_manifest.get("plans") if isinstance(candidate_manifest, dict) else None
+        )
+        candidate_entry_count = sum(
+            revision.id == complete_run.revision_id for _entry, revision, _source in rows
+        )
+        if (
+            isinstance(candidate_manifest, dict)
+            and isinstance(candidate_plans, list)
+            and complete_run.revision_id in available_revision_ids
+            and _catalog_manifest_proves_discovery_closure(candidate_manifest)
+            and candidate_entry_count == len(candidate_plans)
+        ):
+            last_complete_catalog_run = complete_run
+            break
+    last_success = (
+        last_complete_catalog_run.completed_at if last_complete_catalog_run is not None else None
+    )
+    latest_manifest: dict[str, object] | None = None
+    if latest_catalog_run is not None:
+        raw_manifest = latest_catalog_run.evidence.get("catalog_crawl_manifest")
+        if isinstance(raw_manifest, dict):
+            latest_manifest = raw_manifest
+    raw_closure = latest_manifest.get("closure") if latest_manifest is not None else None
+    closure = raw_closure if isinstance(raw_closure, dict) else {}
+    latest_manifest_revision_id = (
+        latest_catalog_run.revision_id
+        if latest_catalog_run is not None and latest_manifest is not None
+        else None
+    )
+    if latest_manifest_revision_id not in available_revision_ids:
+        latest_manifest_revision_id = None
+    complete_revision_id = (
+        last_complete_catalog_run.revision_id if last_complete_catalog_run is not None else None
+    )
+    latest_snapshot_by_name: dict[str, tuple[SceCatalogEntry, RateSourceRevision, RateSource]] = {}
+    complete_snapshot_by_name: dict[
+        str, tuple[SceCatalogEntry, RateSourceRevision, RateSource]
+    ] = {}
+    for entry, revision, source in rows:
+        if revision.id == latest_manifest_revision_id:
+            latest_snapshot_by_name.setdefault(
+                entry.canonical_name,
+                (entry, revision, source),
+            )
+        if revision.id == complete_revision_id:
+            complete_snapshot_by_name.setdefault(
+                entry.canonical_name,
+                (entry, revision, source),
+            )
+
+    if latest_manifest_revision_id is None and not complete_snapshot_by_name and rows:
+        fallback_revision_id = rows[0][1].id
+        for entry, revision, source in rows:
+            if revision.id == fallback_revision_id:
+                latest_snapshot_by_name.setdefault(
+                    entry.canonical_name,
+                    (entry, revision, source),
+                )
+
+    manifest_plans = latest_manifest.get("plans") if latest_manifest is not None else None
+    manifest_plan_count = len(manifest_plans) if isinstance(manifest_plans, list) else -1
+    catalog_ready = (
+        latest_catalog_run is not None
+        and latest_catalog_run.event_code == "SCE_CATALOG_CRAWL_COMPLETE"
+        and latest_manifest is not None
+        and _catalog_manifest_proves_discovery_closure(latest_manifest)
+        and len(latest_snapshot_by_name) == manifest_plan_count
+    )
+    latest_by_name = (
+        dict(latest_snapshot_by_name)
+        if catalog_ready
+        else {**complete_snapshot_by_name, **latest_snapshot_by_name}
+    )
+    plans_silently_omitted = 0 if catalog_ready else None
+    raw_completeness_reason = closure.get("reason")
+    completeness_reason = (
+        str(raw_completeness_reason)
+        if isinstance(raw_completeness_reason, str) and raw_completeness_reason
+        else "bounded_crawl_not_yet_completed"
+        if latest_catalog_run is None
+        else "latest_official_check_failed_before_closure_manifest"
+    )
+
+    entries: list[dict[str, object]] = []
+    effective_dates: list[str] = []
+    for canonical_name, latest_result in latest_by_name.items():
+        latest_entry, latest_revision, _latest_source = latest_result
+        selected_result = latest_result
+        retained_last_known_good = False
+        complete_result = complete_snapshot_by_name.get(canonical_name)
+        if not catalog_ready and complete_result is not None:
+            selected_result = complete_result
+            retained_last_known_good = True
+        entry, revision, source = selected_result
+        plan = entry.normalized_plan if isinstance(entry.normalized_plan, dict) else {}
+        raw_periods = plan.get("periods")
+        periods: list[object] = raw_periods if isinstance(raw_periods, list) else []
+        seasons = sorted(
+            {
+                str(period.get("season"))
+                for period in periods
+                if isinstance(period, dict) and period.get("season") is not None
+            }
+        )
+        metadata = plan.get("catalog_metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        effective_start = metadata.get("effective_start")
+        if isinstance(effective_start, str) and effective_start:
+            effective_dates.append(effective_start)
+        season_definitions = metadata.get("season_definitions")
+        if not isinstance(season_definitions, dict | list):
+            season_definitions = {}
+        schedule: list[dict[str, object]] = []
+        for period in periods:
+            if not isinstance(period, dict):
+                continue
+            start_minute = period.get("start_minute")
+            end_minute = period.get("end_minute")
+            if not isinstance(start_minute, int) or isinstance(start_minute, bool):
+                start_minute = None
+            if not isinstance(end_minute, int) or isinstance(end_minute, bool):
+                end_minute = None
+
+            def local_time(value: int | None) -> str | None:
+                if value is None or value < 0 or value > 1440:
+                    return None
+                if value == 1440:
+                    return "24:00"
+                return f"{value // 60:02d}:{value % 60:02d}"
+
+            raw_components = period.get("rate_components", plan.get("rate_components"))
+            components: list[dict[str, object] | str]
+            if isinstance(raw_components, list):
+                components = [
+                    component for component in raw_components if isinstance(component, dict | str)
+                ]
+            elif isinstance(raw_components, str) and raw_components:
+                components = [
+                    {
+                        "component": raw_components,
+                        "amount_per_kwh": None,
+                        "source_status": "combined_only",
+                    }
+                ]
+            else:
+                components = []
+            schedule.append(
+                {
+                    "season": period.get("season"),
+                    "day_type": period.get("day_type"),
+                    "period_name": period.get("name"),
+                    "start_minute": start_minute,
+                    "end_minute": end_minute,
+                    "local_start_time": local_time(start_minute),
+                    "local_end_time": local_time(end_minute),
+                    "price_per_kwh": period.get("price_per_kwh"),
+                    "currency": period.get("currency", metadata.get("currency", "USD")),
+                    "energy_unit": period.get("unit", "kWh"),
+                    "rate_components": components,
+                    "tier": {
+                        "lower_bound_kwh": period.get("tier_min_kwh"),
+                        "upper_bound_kwh": period.get("tier_max_kwh"),
+                        "boundary_inclusive": period.get("boundary_inclusive", True),
+                        "threshold_basis": period.get(
+                            "threshold_basis", plan.get("tier_threshold_basis")
+                        ),
+                        "threshold_value": period.get("threshold_value"),
+                    },
+                    "source_label": period.get("source_label"),
+                }
+            )
+        entries.append(
+            {
+                "id": entry.id,
+                "canonical_name": entry.canonical_name,
+                "public_plan_name": entry.public_plan_name,
+                "official_schedule_code": entry.official_schedule_code,
+                "plan_type": entry.plan_type,
+                "enrollment_status": entry.enrollment_status,
+                "eligibility": entry.eligibility,
+                "eligibility_requirements": [
+                    {
+                        "requirement": requirement,
+                        "verification": "home_confirmation_required",
+                    }
+                    for requirement in entry.eligibility
+                ],
+                "description": plan.get("description"),
+                "effective_start": effective_start,
+                "effective_end": metadata.get("effective_end"),
+                "timezone": metadata.get("timezone", "America/Los_Angeles"),
+                "currency": metadata.get("currency", "USD"),
+                "energy_unit": "kWh",
+                "source_version": revision.artifact_sha256,
+                "holiday_treatment": metadata.get("holiday_treatment", "unresolved"),
+                "season_definitions": season_definitions,
+                "seasons": seasons,
+                "day_types": sorted(
+                    {
+                        str(period.get("day_type"))
+                        for period in periods
+                        if isinstance(period, dict) and period.get("day_type") is not None
+                    }
+                ),
+                "period_count": len(periods),
+                "periods": schedule,
+                "schedule": schedule,
+                "daily_fixed_charge": plan.get("daily_fixed_charge"),
+                "monthly_fixed_charge": plan.get("monthly_fixed_charge"),
+                "minimum_charge": plan.get("minimum_charge"),
+                "meter_charge": plan.get("meter_charge"),
+                "other_fixed_charge": plan.get("other_fixed_charge"),
+                "baseline_credit_per_kwh": plan.get("baseline_credit_per_kwh"),
+                "tier_threshold_basis": plan.get("tier_threshold_basis"),
+                "verification_state": entry.discovery_state,
+                "latest_discovery_state": latest_entry.discovery_state,
+                "latest_discovery_revision_id": latest_revision.id,
+                "last_known_good_retained": retained_last_known_good,
+                "exclusion_reason": entry.exclusion_reason,
+                "currently_used": entry.canonical_name in active_names,
+                "source": {
+                    "level": entry.source_level,
+                    "name": source.name,
+                    "url": entry.source_url,
+                    "revision_id": revision.id,
+                    "artifact_sha256": revision.artifact_sha256,
+                    "retrieved_at": revision.retrieved_at,
+                    "parser_version": revision.parser_version,
+                },
+            }
+        )
+    entries.sort(key=lambda item: str(item["public_plan_name"]).casefold())
+    raw_manifest_counts = latest_manifest.get("counts") if latest_manifest is not None else None
+    manifest_counts = raw_manifest_counts if isinstance(raw_manifest_counts, dict) else {}
+
+    def latest_health_count(key: str, fallback: int) -> int:
+        value = manifest_counts.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) else fallback
+
+    return {
+        "home_id": scoped_home_id,
+        "summary": {
+            "plans_discovered": latest_health_count(
+                "plans_discovered",
+                len(latest_snapshot_by_name) or len(entries),
+            ),
+            "plans_parsed": latest_health_count(
+                "plans_parsed",
+                sum(
+                    item[0].discovery_state == "parsed" for item in latest_snapshot_by_name.values()
+                ),
+            ),
+            "plans_requiring_parser_updates": latest_health_count(
+                "plans_requiring_parser_updates",
+                sum(
+                    item[0].discovery_state == "requires_parser"
+                    for item in latest_snapshot_by_name.values()
+                ),
+            ),
+            "plans_explicitly_excluded": latest_health_count(
+                "plans_explicitly_excluded",
+                sum(
+                    item[0].discovery_state == "excluded"
+                    for item in latest_snapshot_by_name.values()
+                ),
+            ),
+            "plans_silently_omitted": plans_silently_omitted,
+            "last_successful_official_check": last_success,
+            "current_catalog_effective_date": max(effective_dates) if effective_dates else None,
+            "open_plans": sum(
+                item[0].enrollment_status == "open_or_eligibility_required"
+                for item in latest_by_name.values()
+            ),
+            "eligibility_required_plans": sum(
+                bool(item[0].eligibility) for item in latest_by_name.values()
+            ),
+            "existing_customer_only_plans": sum(
+                item[0].enrollment_status == "existing_customers_only"
+                for item in latest_by_name.values()
+            ),
+        },
+        "plans": entries,
+        "source_policy": "official_public_sce_only",
+        "inventory_scope": "bounded_official_multi_document_crawl",
+        "catalog_completeness": "closure_proved" if catalog_ready else "crawl_incomplete",
+        "catalog_ready": catalog_ready,
+        "completeness_reason": completeness_reason,
+        "live_source_access_performed": False,
     }
 
 

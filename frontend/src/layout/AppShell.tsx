@@ -43,6 +43,8 @@ export function AppShell() {
     document.documentElement.dataset.decimalPrecision = String(preferences.data.decimal_precision);
     document.documentElement.dataset.powerUnit = preferences.data.power_unit;
     document.documentElement.dataset.energyUnit = preferences.data.energy_unit;
+    if (preferences.data.display_timezone) document.documentElement.dataset.displayTimezone = preferences.data.display_timezone;
+    else delete document.documentElement.dataset.displayTimezone;
   }, [preferences.data]);
 
   useEffect(() => {

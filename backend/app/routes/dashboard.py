@@ -34,6 +34,7 @@ from ..models import (
     IntervalCostSelection,
     NormalizedInterval,
     RateAssignment,
+    RateDatedPrice,
     RateHoliday,
     RatePeriod,
     RatePlan,
@@ -54,7 +55,19 @@ from ..services.commands import (
     create_command,
     validate_commit_token,
 )
-from ..services.cost_engine import current_cost_per_hour_microdollars
+from ..services.cost_engine import (
+    CostContext,
+    DatedPrice,
+    PricePeriod,
+    RateVersion,
+    current_cost_per_hour_microdollars,
+    event_calendar_from_evidence,
+    holiday_calendar_from_evidence,
+    resolve_price_period,
+    season_definitions_from_storage,
+    season_from_storage,
+)
+from ..services.rate_workflow import resolve_assigned_utility_account_cycle_tier_threshold
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 
@@ -302,9 +315,9 @@ async def _current_rate(
     device_ids: tuple[str, ...],
     cycle_start: datetime,
 ) -> dict[str, object] | None:
-    row = (
+    rows = (
         await session.execute(
-            select(RatePlanVersion, RatePlan, UtilityAccount)
+            select(RateAssignment, RatePlanVersion, RatePlan, UtilityAccount)
             .join(RateAssignment, RateAssignment.rate_plan_version_id == RatePlanVersion.id)
             .join(UtilityAccount, UtilityAccount.id == RateAssignment.utility_account_id)
             .join(RatePlan, RatePlan.id == RatePlanVersion.rate_plan_id)
@@ -317,22 +330,33 @@ async def _current_rate(
                 (RatePlanVersion.effective_end.is_(None) | (RatePlanVersion.effective_end > now)),
             )
             .order_by(RateAssignment.effective_start.desc())
-            .limit(1)
+            .limit(2)
         )
-    ).one_or_none()
-    if row is None:
+    ).all()
+    if len(rows) != 1:
         return None
-    version, plan, account = row
+    assignment, version, plan, account = rows[0]
     local = now.astimezone(ZoneInfo(version.timezone))
-    season = "summer" if local.month in (6, 7, 8, 9) else "winter"
-    holiday = await session.scalar(
-        select(RateHoliday.id).where(
-            RateHoliday.rate_plan_version_id == version.id,
-            RateHoliday.local_date == local.date(),
-        )
+    season = season_from_storage(version.season_definitions, local)
+    holidays = frozenset(
+        (
+            await session.scalars(
+                select(RateHoliday.local_date).where(RateHoliday.rate_plan_version_id == version.id)
+            )
+        ).all()
     )
-    day_type = "holiday" if holiday else "weekend" if local.weekday() >= 5 else "weekday"
-    minute = local.hour * 60 + local.minute
+    period_rows = (
+        await session.scalars(
+            select(RatePeriod).where(RatePeriod.rate_plan_version_id == version.id)
+        )
+    ).all()
+    dated_price_rows = (
+        await session.scalars(
+            select(RateDatedPrice)
+            .where(RateDatedPrice.rate_plan_version_id == version.id)
+            .order_by(RateDatedPrice.start_utc)
+        )
+    ).all()
     cumulative_mwh = int(
         await session.scalar(
             select(func.sum(NormalizedInterval.energy_mwh))
@@ -353,65 +377,118 @@ async def _current_rate(
     )
     cumulative_kwh = Decimal(cumulative_mwh) / Decimal(1_000_000)
     effective_tier_threshold: Decimal | None = None
-    if version.tier_threshold_kwh_per_day is not None and version.tier_threshold_season in (
-        season,
-        "all",
+    cycle_local = cycle_start.astimezone(ZoneInfo(account.timezone))
+    next_year = cycle_local.year + (1 if cycle_local.month == 12 else 0)
+    next_month = 1 if cycle_local.month == 12 else cycle_local.month + 1
+    billing_cycle_days = (
+        date(next_year, next_month, account.billing_day) - cycle_local.date()
+    ).days
+    cycle_end = datetime(
+        next_year,
+        next_month,
+        account.billing_day,
+        tzinfo=ZoneInfo(account.timezone),
+    ).astimezone(UTC)
+    one_version_for_cycle = (
+        aware_utc(assignment.effective_start) <= cycle_start
+        and (assignment.effective_end is None or aware_utc(assignment.effective_end) >= cycle_end)
+        and aware_utc(version.effective_start) <= cycle_start
+        and (version.effective_end is None or aware_utc(version.effective_end) >= cycle_end)
+    )
+    account_threshold = await resolve_assigned_utility_account_cycle_tier_threshold(
+        session,
+        utility_account_id=account.id,
+        timezone=account.timezone,
+        cycle_start=cycle_start,
+        cycle_end=cycle_end,
+    )
+    if account_threshold is not None:
+        effective_tier_threshold = account_threshold.total_kwh
+    elif (
+        one_version_for_cycle
+        and version.tier_threshold_kwh_per_day is not None
+        and version.tier_threshold_season in (season, "all")
     ):
-        cycle_local = cycle_start.astimezone(ZoneInfo(account.timezone))
-        next_year = cycle_local.year + (1 if cycle_local.month == 12 else 0)
-        next_month = 1 if cycle_local.month == 12 else cycle_local.month + 1
-        cycle_days = (date(next_year, next_month, account.billing_day) - cycle_local.date()).days
-        effective_tier_threshold = version.tier_threshold_kwh_per_day * cycle_days
-    candidates = (
-        await session.scalars(
-            select(RatePeriod).where(
-                RatePeriod.rate_plan_version_id == version.id,
-                RatePeriod.season.in_((season, "all")),
-                RatePeriod.day_type.in_((day_type, "all")),
-                RatePeriod.start_minute <= minute,
-                RatePeriod.end_minute > minute,
-            )
-        )
-    ).all()
+        # Backward compatibility for immutable versions published before the
+        # account-scoped threshold table existed.
+        effective_tier_threshold = version.tier_threshold_kwh_per_day * billing_cycle_days
     tier_requires_usage = version.pricing_model in ("tiered", "seasonal_tiered") or any(
-        period.tier_start_kwh > 0 or period.tier_end_kwh is not None for period in candidates
+        period.tier_start_kwh > 0 or period.tier_end_kwh is not None for period in period_rows
+    )
+    tier_requires_account_threshold = any(
+        period.threshold_basis == "account_daily_baseline" for period in period_rows
     )
     cycle_summary = await _summary(session, device_ids, cycle_start, now)
     reading_coverage = Decimal(str(cycle_summary["completeness"]))
-    tier_confirmed = not tier_requires_usage or reading_coverage >= Decimal("1")
-    candidates = [
-        period
-        for period in candidates
-        if cumulative_kwh
-        >= (
-            effective_tier_threshold
-            if effective_tier_threshold is not None
-            and version.tier_threshold_source_kwh is not None
-            and period.tier_start_kwh == version.tier_threshold_source_kwh
-            else period.tier_start_kwh
-        )
-        and (
-            period.tier_end_kwh is None
-            or cumulative_kwh
-            < (
-                effective_tier_threshold
-                if effective_tier_threshold is not None
-                and version.tier_threshold_source_kwh is not None
-                and period.tier_end_kwh == version.tier_threshold_source_kwh
-                else period.tier_end_kwh
+    tier_confirmed = (not tier_requires_usage or reading_coverage >= Decimal("1")) and (
+        not tier_requires_account_threshold or effective_tier_threshold is not None
+    )
+    period = None
+    if tier_confirmed:
+        try:
+            holiday_calendar = holiday_calendar_from_evidence(version.eligibility_evidence)
+            if holiday_calendar is not None and holiday_calendar.local_dates != holidays:
+                raise ValueError(
+                    "stored holiday calendar does not match its persisted holiday rows"
+                )
+            domain_rate = RateVersion(
+                id=version.id,
+                rate_plan_id=version.rate_plan_id,
+                timezone=version.timezone,
+                effective_start=aware_utc(version.effective_start),
+                effective_end=aware_utc(version.effective_end) if version.effective_end else None,
+                periods=tuple(
+                    PricePeriod(
+                        season=item.season,
+                        day_type=item.day_type,
+                        name=item.period_name,
+                        start_minute=item.start_minute,
+                        end_minute=item.end_minute,
+                        price_per_kwh=item.price_per_kwh,
+                        tier_start_kwh=item.tier_start_kwh,
+                        tier_end_kwh=item.tier_end_kwh,
+                        boundary_inclusive=item.boundary_inclusive,
+                        threshold_basis=item.threshold_basis,
+                    )
+                    for item in period_rows
+                ),
+                dated_prices=tuple(
+                    DatedPrice(
+                        start_utc=aware_utc(item.start_utc),
+                        end_utc=aware_utc(item.end_utc),
+                        name=item.source_label,
+                        price_per_kwh=item.price_per_kwh,
+                    )
+                    for item in dated_price_rows
+                ),
+                season_definitions=season_definitions_from_storage(version.season_definitions),
+                holiday_treatment=version.holiday_treatment,
+                holiday_calendar=holiday_calendar,
+                event_calendar=event_calendar_from_evidence(version.eligibility_evidence),
+                tier_threshold_kwh_per_day=version.tier_threshold_kwh_per_day,
+                tier_threshold_season=version.tier_threshold_season,
+                tier_threshold_source_kwh=version.tier_threshold_source_kwh,
+                tier1_boundary_inclusive=version.tier1_boundary_inclusive,
             )
-        )
-    ]
-    if candidates:
-        specificity = max(
-            int(period.season == season) + int(period.day_type == day_type) for period in candidates
-        )
-        candidates = [
-            period
-            for period in candidates
-            if int(period.season == season) + int(period.day_type == day_type) == specificity
-        ]
-    period = candidates[0] if len(candidates) == 1 else None
+            period = resolve_price_period(
+                domain_rate,
+                now,
+                cumulative_kwh,
+                CostContext(
+                    cumulative_cycle_kwh_before=cumulative_kwh,
+                    billing_cycle_days=billing_cycle_days,
+                    tier_threshold_cycle_kwh=(
+                        account_threshold.total_kwh if account_threshold else None
+                    ),
+                    tier_threshold_season=season if account_threshold else None,
+                    tier1_boundary_inclusive=(
+                        account_threshold.tier1_boundary_inclusive if account_threshold else True
+                    ),
+                    holidays=holidays,
+                ),
+            )
+        except ValueError:
+            period = None
     effective_price = None
     next_change_at = None
     if period is not None and tier_confirmed:
@@ -425,18 +502,29 @@ async def _current_rate(
         if baseline_applies:
             effective_price -= version.baseline_credit_per_kwh
         effective_price = max(Decimal("0"), effective_price)
-        local_midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
-        next_local = local_midnight + timedelta(minutes=period.end_minute)
-        if next_local <= local:
-            next_local += timedelta(days=1)
-        next_change_at = next_local.astimezone(UTC)
+        matching_dated_price = next(
+            (
+                item
+                for item in dated_price_rows
+                if aware_utc(item.start_utc) <= now < aware_utc(item.end_utc)
+            ),
+            None,
+        )
+        if matching_dated_price is not None:
+            next_change_at = aware_utc(matching_dated_price.end_utc)
+        else:
+            local_midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+            next_local = local_midnight + timedelta(minutes=period.end_minute)
+            if next_local <= local:
+                next_local += timedelta(days=1)
+            next_change_at = next_local.astimezone(UTC)
     return {
         "plan_name": plan.name,
         "version_id": version.id,
         "effective_start": version.effective_start,
-        "period": period.period_name if period and tier_confirmed else None,
+        "period": period.name if period and tier_confirmed else None,
         "tier_state": (
-            period.period_name
+            period.name
             if period and tier_confirmed
             else "not_confirmed"
             if tier_requires_usage

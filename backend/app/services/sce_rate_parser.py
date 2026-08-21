@@ -639,9 +639,22 @@ def parse_sce_public_page(body: bytes, media_type: str) -> ParsedRateCandidate:
     if classification == "flat":
         return _flat_candidate(text)
 
+    matched_definitions = tuple(
+        definition
+        for definition in PLAN_DEFINITIONS
+        if re.search(definition.heading, text, flags=re.IGNORECASE) is not None
+    )
+    if not matched_definitions:
+        raise SourceParseError(
+            "LAYOUT_MISSING_SECTION",
+            "the SCE time-of-use source contains no supported plan section",
+        )
     plans: list[dict[str, Any]] = []
-    for definition in PLAN_DEFINITIONS:
-        block = _section(text, definition.heading, definition.next_heading)
+    for index, definition in enumerate(matched_definitions):
+        next_heading = (
+            matched_definitions[index + 1].heading if index + 1 < len(matched_definitions) else None
+        )
+        block = _section(text, definition.heading, next_heading)
         _require_component_scope(block)
         summer = _section(
             block,

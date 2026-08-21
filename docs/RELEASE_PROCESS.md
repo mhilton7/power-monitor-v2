@@ -13,16 +13,16 @@ valid signed server `v0.1.0-rc.4` tag
 is historical failed prepublication evidence, not a Release. Hardware execution
 confirmed that firmware rc.1 through rc.5 crash in the main stack before
 provisioning. Public `v0.1.0-rc.16` is installation evidence for the prior
-durable sensor-backlog architecture. Candidate `v0.1.0-rc.21` retains
+durable sensor-backlog architecture. Candidate `v0.1.0-rc.22` retains
 `pm-protocol/1.0.0`, adds `pm-telemetry/2.0.0`, and extends the Alembic head to
-`20260818_0017`. It moves current telemetry durability and History ownership to
-PostgreSQL, removes active microSD/backlog behavior from new firmware, preserves
+`20260820_0018`. It retains PostgreSQL telemetry and History ownership, removes
+active microSD/backlog behavior from new firmware, preserves
 NVS identity/configuration, and adds Main-service History and exact tiered
 Billing. Firmware and server rc.16 remain immutable and must not be relabeled.
 Firmware rc.17 is immutable failed-candidate evidence because its public
 compatibility record omitted the telemetry protocol binding. The exact
-firmware rc.21 metadata and artifacts must be published and independently
-verified before the server rc.21 tag is created; server
+firmware rc.22 metadata and artifacts must be published and independently
+verified before the server rc.22 tag is created; server
 publication still requires every automated gate to pass.
 Stable publication remains blocked until physical hardware, TLS,
 OTA-install/rollback, and soak certification from the actual marked unit
@@ -83,22 +83,23 @@ assertion. Its generated OpenAPI SHA-256 is
 `66b4e1cfb0f5a5797dadd9a8783ff0b192ca416d1f4264c135a4e380b2b94591`.
 
 Public rc.16 carries named service branches and the explicitly designated Main
-service. Candidate rc.21 makes the server the durable owner of independently
+service. Candidate rc.22 keeps the server the durable owner of independently
 accepted telemetry and active History. Firmware keeps one in-flight and one
 newest pending sample in RAM, and a missing sample never blocks a later sample.
 The UI removes normal storage/backlog controls; History preserves connection
 gaps and cumulative-energy recovery without inventing a power curve. Billing
 uses Main service with exact Decimal tier and fixed-charge semantics.
-The generated rc.21 OpenAPI SHA-256 is
-`6d276b738467c867d062ab78b6cdc76d246f15d5aca7e2c505cddabf9b6f2c24`;
+The generated rc.22 OpenAPI SHA-256 is
+`f15e5429ca0333dbf5f1defeef01197d8a21d2bc9e684c78463f44e279b03123`;
 control remains `pm-protocol/1.0.0`, telemetry is `pm-telemetry/2.0.0`, and the
-Alembic head is `20260818_0017`.
+Alembic head is `20260820_0018`.
 The checked-in YAML retains `UNPUBLISHED_*` sentinels until its tagged workflow
-supplies exact registry digests. Rc.21 must pass clean
+supplies exact registry digests. Rc.22 must pass clean
 dependency/backend/PostgreSQL gates, security scans, public package
 verification, first-run plus idempotent initializer smoke, checksums, and
-attestations. Its explicit migration chain extends to `20260818_0017`;
-revision 0017 is additive and its downgrade refuses to delete accepted
+attestations. Its explicit migration chain extends to `20260820_0018`;
+revision 0018 adds catalog/lifecycle evidence and fails closed on unsafe
+downgrade; revision 0017 remains additive and refuses to delete accepted
 stateless telemetry or cutover evidence. The
 0008 preflight refuses conflicting immutable ingestion evidence without
 deleting or rewriting it. Revision 0011 uses PostgreSQL write locks across its
@@ -142,8 +143,8 @@ Release assets include manifest, digest-pinned YAML, SBOMs/attestations,
 test/security/migration reports, checksums, installation/upgrade/rollback
 guides, the tracked Windows SMB staging helper, the auditable initializer
 source embedded in the API image, and release notes. The GitHub Release
-cross-links the compatible firmware release. Coordinated rc.21 publishes under
-a new immutable tag without rewriting rc.20 or any earlier release.
+cross-links the compatible firmware release. Coordinated rc.22 publishes under
+a new immutable tag without rewriting rc.21 or any earlier release.
 
 ## Stable prohibition and promotion
 
@@ -151,11 +152,11 @@ Tagged builds publish as prerelease candidates while hardware certification is
 pending. Stable promotion is manual through
 `.github/workflows/stable-promotion.yml` and an approval-protected
 `stable-release` environment. It promotes the already tested candidate digests
-without rebuilding. It requires an actual `pm-hardware-certification/1.0.0`
+without rebuilding. It requires an actual `pm-hardware-certification/2.0.0`
 marked-unit record, schema validation, canonical record hash, matching public
 firmware release commit and `firmware.bin` SHA-256, all physical/TLS/HMAC/OTA/
-recovery booleans true, unique physical-photo hashes, a passing soak of at
-least 72 hours, zero unexplained reboots, zero sequence regressions, every
+recovery booleans true, unique physical-photo hashes, a passing stateless soak of at
+least 72 hours, zero unexplained reboots, identity changes, or configuration losses, every
 server report passed, and compatible release links. Simulation cannot satisfy
 that gate.
 

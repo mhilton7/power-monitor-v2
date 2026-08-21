@@ -15,16 +15,22 @@ function handleVisibilityChange() {
   if (document.visibilityState === 'visible') publishCurrentTime();
 }
 
+function handleFocus() {
+  publishCurrentTime();
+}
+
 function startTicker() {
   currentNow = Date.now();
   intervalId = window.setInterval(publishCurrentTime, 1_000);
   document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('focus', handleFocus);
 }
 
 function stopTicker() {
   if (intervalId !== null) window.clearInterval(intervalId);
   intervalId = null;
   document.removeEventListener('visibilitychange', handleVisibilityChange);
+  window.removeEventListener('focus', handleFocus);
 }
 
 function subscribe(listener: Listener) {

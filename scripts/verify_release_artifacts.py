@@ -17,7 +17,8 @@ except ImportError:  # pragma: no cover - direct script execution
 
 def verify_release_artifacts(manifest_path: Path) -> None:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("schema") != "pm-server-release/1.0.0":
+    manifest_schema = manifest.get("schema")
+    if manifest_schema not in {"pm-server-release/1.0.0", "pm-server-release/1.1.0"}:
         raise ValueError("unsupported release manifest schema")
     if manifest.get("protocol") != "pm-protocol/1.0.0":
         raise ValueError("protocol mismatch")
@@ -85,8 +86,34 @@ def verify_release_artifacts(manifest_path: Path) -> None:
     expected_firmware_repository = "https://github.com/mhilton7/power-monitor-sensor-headless"
     if firmware.get("repository") != expected_firmware_repository:
         raise ValueError("release manifest firmware repository is invalid")
-    if not isinstance(firmware.get("build_id"), int) or firmware["build_id"] < 1:
-        raise ValueError("release manifest firmware build identifier is invalid")
+    if manifest_schema == "pm-server-release/1.0.0":
+        # Immutable pre-RC22 release assets used the ambiguous build_id name for
+        # the monotonic numeric build. Keep those artifacts verifiable without
+        # permitting that legacy shape in newly rendered 1.1 manifests.
+        legacy_build_id = firmware.get("build_id")
+        if (
+            not isinstance(legacy_build_id, int)
+            or isinstance(legacy_build_id, bool)
+            or not 1 <= legacy_build_id <= 4_294_967_295
+        ):
+            raise ValueError("legacy release manifest firmware build identifier is invalid")
+        if "build_number" in firmware or "firmware_build_id" in firmware:
+            raise ValueError("legacy release manifest mixes incompatible firmware identities")
+    else:
+        build_number = firmware.get("build_number")
+        firmware_build_id = firmware.get("firmware_build_id")
+        if (
+            not isinstance(build_number, int)
+            or isinstance(build_number, bool)
+            or not 1 <= build_number <= 4_294_967_295
+        ):
+            raise ValueError("release manifest firmware build number is invalid")
+        if not isinstance(firmware_build_id, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", firmware_build_id
+        ):
+            raise ValueError("release manifest firmware build ID is invalid")
+        if "build_id" in firmware:
+            raise ValueError("release manifest uses the ambiguous legacy firmware build_id field")
     if firmware.get("protocol") != manifest["protocol"]:
         raise ValueError("release manifest firmware protocol is incompatible")
     if firmware.get("telemetry_protocol") != manifest["telemetry_protocol"]:
@@ -145,7 +172,7 @@ def verify_release_artifacts(manifest_path: Path) -> None:
         if hashlib.sha256(evidence).hexdigest() != certification.get("sha256"):
             raise ValueError("hardware certification checksum mismatch")
         parsed_evidence = json.loads(evidence)
-        if parsed_evidence.get("schema") != "pm-hardware-certification/1.0.0":
+        if parsed_evidence.get("schema") != "pm-hardware-certification/2.0.0":
             raise ValueError("hardware certification schema mismatch")
         if parsed_evidence.get("result") != "pass":
             raise ValueError("hardware certification did not pass")

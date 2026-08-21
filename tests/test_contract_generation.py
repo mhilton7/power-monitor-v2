@@ -35,6 +35,7 @@ def test_stateless_telemetry_contract_is_additive_strict_and_has_no_success_reje
     )
     assert request_schema["additionalProperties"] is False
     assert request_schema["properties"]["telemetry_protocol"]["const"] == ("pm-telemetry/2.0.0")
+    assert request_schema["properties"]["firmware_build_id"]["pattern"] == ("^[0-9a-f]{64}$")
     assert response_schema["properties"]["status"]["enum"] == ["accepted", "duplicate"]
     assert "rejected" not in json.dumps(response_schema)
 
@@ -46,5 +47,6 @@ def test_stateless_telemetry_contract_is_additive_strict_and_has_no_success_reje
     openapi_request = operation["requestBody"]["content"]["application/json"]["schema"]
     assert openapi_request["additionalProperties"] is False
     assert openapi_request["properties"]["telemetry_protocol"]["const"] == ("pm-telemetry/2.0.0")
+    assert openapi_request["properties"]["firmware_build_id"]["pattern"] == ("^[0-9a-f]{64}$")
     response_ref = operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
     assert response_ref.endswith("/StatelessTelemetryResponse")

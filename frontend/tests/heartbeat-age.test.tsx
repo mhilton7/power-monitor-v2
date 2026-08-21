@@ -65,6 +65,14 @@ describe('browser heartbeat age ticker', () => {
     }
   });
 
+  it('recalculates immediately when the window regains focus', () => {
+    render(<HeartbeatAge timestamp="2026-08-16T17:59:55.000Z" />);
+    expect(screen.getByText('5s ago')).toBeInTheDocument();
+    vi.setSystemTime(new Date('2026-08-16T18:00:20.000Z'));
+    void act(() => window.dispatchEvent(new Event('focus')));
+    expect(screen.getByText('25s ago')).toBeInTheDocument();
+  });
+
   it('shares one timer, performs no fetch, and cleans up after the last subscriber', () => {
     const intervalSpy = vi.spyOn(window, 'setInterval');
     const clearSpy = vi.spyOn(window, 'clearInterval');

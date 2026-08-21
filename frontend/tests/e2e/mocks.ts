@@ -1,5 +1,5 @@
 import type { Page, Route } from '@playwright/test';
-import { alerts, apiResponse, backupStatus, billing, circuits, dailyHistory, device, firmwareReleases, history, home, homeScopes, homeUtility, rateCandidate, rateCandidates, rateSourceStatus, session, systemHealth } from '../fixtures';
+import { alerts, apiResponse, backupStatus, billing, circuits, dailyHistory, device, firmwareLifecycleSettings, firmwareReleases, history, home, homeScopes, homeUtility, rateCandidate, rateCandidates, rateSourceStatus, sceRateCatalog, session, systemHealth } from '../fixtures';
 
 interface MockWorkflow { state: string; [key: string]: unknown }
 type MockDevice = Omit<typeof device, 'last_server_received_at'> & { last_server_received_at: string | null };
@@ -89,6 +89,7 @@ export async function mockApi(page: Page, options: MockOptions = {}) {
     if (path.endsWith('/billing')) { await json(route, options.billingById?.[homeId] ?? billing); return; }
     if (path.endsWith('/bill-rate-imports')) { await json(route, { extractions: [] }); return; }
     if (path.endsWith('/rate-sources/status')) { await json(route, options.rateStatusById?.[homeId] ?? { ...rateSourceStatus, home_id: homeId }); return; }
+    if (path.endsWith('/rate-sources/catalog')) { await json(route, { ...sceRateCatalog, home_id: homeId }); return; }
     if (path.endsWith('/rate-sources/candidates') && method === 'GET') { await json(route, { home_id: homeId, candidates: candidatesFor(homeId) }); return; }
     if (path.endsWith('/rate-sources/runs')) { await json(route, { home_id: homeId, runs: [] }); return; }
     if (path.endsWith('/rate-sources/manual-candidates') && method === 'POST') {
@@ -161,6 +162,16 @@ export async function mockApi(page: Page, options: MockOptions = {}) {
     if (path.endsWith('/system/health')) { await json(route, systemHealth); return; }
     if (path.endsWith('/backups/status')) { await json(route, backupStatus); return; }
     if (path.endsWith('/firmware/releases') && method === 'POST') { await json(route, { release: firmwareReleases.releases[0], manifest_signature: 'fixture-signature', physical_certification: 'pending' }, 201); return; }
+    if (path.includes('/firmware/releases/') && path.endsWith('/archive') && method === 'POST') { await json(route, { ...firmwareReleases.releases[0], release_state: 'archived', archive_eligible: false, restore_eligible: true, deploy_eligible: false }); return; }
+    if (path.includes('/firmware/releases/') && path.endsWith('/restore') && method === 'POST') { await json(route, { ...firmwareReleases.releases[0], release_state: 'available', archive_eligible: true, restore_eligible: false, deploy_eligible: true }); return; }
+    if (path.includes('/firmware/releases/') && path.endsWith('/make-current') && method === 'POST') { await json(route, { ...firmwareReleases.releases[0], release_state: 'current', rollback_pinned: false }); return; }
+    if (path.includes('/firmware/releases/') && path.endsWith('/rollback-pin') && method === 'PATCH') { await json(route, { ...firmwareReleases.releases[0], rollback_pinned: true }); return; }
+    if (path.includes('/firmware/releases/') && path.endsWith('/delete-permanently') && method === 'POST') { await route.fulfill({ status: 204 }); return; }
+    if (path.endsWith('/firmware/lifecycle-settings') && method === 'PATCH') { await json(route, firmwareLifecycleSettings); return; }
+    if (path.endsWith('/firmware/lifecycle-settings')) { await json(route, firmwareLifecycleSettings); return; }
+    if (path.includes('/firmware/deployment-batches/') && path.endsWith('/archive') && method === 'POST') { await json(route, { ...firmwareReleases.releases[0]!.deployment_batches[0], state: 'archived', deployment_state: 'archived', archived_at: '2026-08-13T18:00:00Z', archive_eligible: false, restore_eligible: true, delete_eligibility: { eligible: true, protection_reasons: [] } }); return; }
+    if (path.includes('/firmware/deployment-batches/') && path.endsWith('/restore') && method === 'POST') { await json(route, firmwareReleases.releases[0]!.deployment_batches[0]); return; }
+    if (path.includes('/firmware/deployment-batches/') && path.endsWith('/delete-permanently') && method === 'POST') { await route.fulfill({ status: 204 }); return; }
     if (path.includes('/firmware/releases/') && method === 'DELETE') { await route.fulfill({ status: 204 }); return; }
     if (path.endsWith('/firmware/releases')) { await json(route, firmwareReleases); return; }
     if (path.includes('/firmware/releases/') && path.endsWith('/deploy')) { await json(route, { batch_id: 'deployment-batch-1', batch_state: 'in_progress', deployments: [{ id: 'deployment-1', device_id: device.id, state: 'queued' }] }, 202); return; }

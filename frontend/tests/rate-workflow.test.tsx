@@ -5,7 +5,7 @@ import { api } from '../src/api';
 import { BillingPage } from '../src/pages/BillingPage';
 import { RateSourceWorkflow } from '../src/rates/RateSourceWorkflow';
 import { rateCandidateSchema } from '../src/api/schemas';
-import { apiResponse, billing, homeScopes, rateCandidate, rateCandidates } from './fixtures';
+import { apiResponse, billing, homeScopes, rateCandidate, rateCandidates, sceRateCatalog } from './fixtures';
 import { installFetchMock, renderWithProviders } from './render';
 
 const homeId = homeScopes[0]!.id;
@@ -21,6 +21,59 @@ function WorkflowSwitchHarness({ secondHomeId }: { secondHomeId: string }) {
 }
 
 describe('exact-home SCE rate workflow', () => {
+  it('labels the bounded official catalog incomplete and keeps technical source values behind details', async () => {
+    installFetchMock(apiResponse);
+    renderWithProviders(<RateSourceWorkflow homeId={homeId} accounts={billing.accounts} />);
+
+    expect(await screen.findByRole('heading', { name: 'Available SCE rate plans' })).toBeInTheDocument();
+    expect(await screen.findByText(/Silently omitted plans: unknown\./)).toBeInTheDocument();
+    expect(screen.getByText(/has not yet accounted for every discovered in-scope document/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'View SCE Domestic rate plan' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'SCE Domestic' });
+    expect(within(dialog).getByText('$0.76900 per day')).toBeInTheDocument();
+    expect(within(dialog).getAllByText('Summer')).toHaveLength(3);
+    expect(within(dialog).getByText('$0.30863/kWh')).toBeInTheDocument();
+    expect(within(dialog).getByText('sce-public-catalog-v1')).not.toBeVisible();
+    await userEvent.click(within(dialog).getByText('Technical details'));
+    expect(within(dialog).getByText('sce-public-catalog-v1')).toBeInTheDocument();
+  });
+
+  it('distinguishes proven discovery closure from reviewed rate approval', async () => {
+    const closedCatalog = {
+      ...structuredClone(sceRateCatalog),
+      catalog_completeness: 'closure_proved',
+      catalog_ready: true,
+      completeness_reason: 'all_discovered_links_accounted_for',
+      summary: { ...sceRateCatalog.summary, plans_silently_omitted: 0 },
+    };
+    installFetchMock((path, method) => path.includes('/rate-sources/catalog')
+      ? { status: 200, body: closedCatalog }
+      : apiResponse(path, method));
+    renderWithProviders(<RateSourceWorkflow homeId={homeId} accounts={billing.accounts} />);
+
+    expect(await screen.findByText(/No plan link was silently omitted/)).toBeInTheDocument();
+    expect(screen.getByText(/Exact rates, eligibility, and home-specific parameters still require/)).toBeInTheDocument();
+  });
+
+  it('shows an unsplit combined rate once instead of duplicating it as delivery and generation', async () => {
+    const combinedCatalog = structuredClone(sceRateCatalog);
+    combinedCatalog.plans[0]!.periods[0]!.rate_components = [{ component: 'sce_delivery_and_generation_combined', amount_per_kwh: '0.30863' }];
+    installFetchMock((path, method) => path.includes('/rate-sources/catalog')
+      ? { status: 200, body: combinedCatalog }
+      : apiResponse(path, method));
+    renderWithProviders(<RateSourceWorkflow homeId={homeId} accounts={billing.accounts} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'View SCE Domestic rate plan' }));
+    const dialog = screen.getByRole('dialog', { name: 'SCE Domestic' });
+    const row = within(dialog).getAllByText('Tier 1')[0]!.closest('tr');
+    expect(row).not.toBeNull();
+    const cells = within(row!).getAllByRole('cell');
+    expect(cells[4]).toHaveTextContent('—');
+    expect(cells[5]).toHaveTextContent('—');
+    expect(cells[6]).toHaveTextContent('$0.30863');
+  });
+
   it('rejects prohibited or uncontracted fields in normalized candidate rate facts', () => {
     expect(() => rateCandidateSchema.parse({
       ...rateCandidate,
@@ -101,7 +154,7 @@ describe('exact-home SCE rate workflow', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: new RegExp(`Open official rate update ${candidate.id}`) }));
     expect(screen.getByText(/Additional baseline evidence required/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Confirm candidate review' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Apply reviewed rate plan' })).toBeDisabled();
   });
 
   it('rejects a typed rate response whose home UUID does not match the request', async () => {
@@ -180,7 +233,7 @@ describe('exact-home SCE rate workflow', () => {
     await userEvent.type(screen.getByLabelText('Effective start date'), '2026-08-01');
     await userEvent.click(screen.getByLabelText(/confirmed this exact effective range/));
     await userEvent.click(screen.getByLabelText(/confirmed the recorded source/));
-    await userEvent.click(screen.getByRole('button', { name: 'Confirm candidate review' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Apply reviewed rate plan' }));
     expect(await screen.findByText(/Review recorded/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Publish reviewed version' }));
@@ -189,7 +242,7 @@ describe('exact-home SCE rate workflow', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Activate for selected account' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Activate exact account' }));
-    expect(await screen.findByText(new RegExp(`Active for account ${billing.accounts[0]!.utility_account_id}`))).toBeInTheDocument();
+    expect(await screen.findByText(/Active for the selected account/)).toBeInTheDocument();
 
     expect(requests).toHaveLength(3);
     for (const request of requests) expect(new URL(request.path, 'http://frontend.test').searchParams.get('home_id')).toBe(homeId);

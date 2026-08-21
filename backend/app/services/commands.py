@@ -20,12 +20,17 @@ from ..models import (
     DeviceCommandAttempt,
     DeviceCredential,
     FirmwareDeployment,
+    FirmwareRelease,
     aware_utc,
 )
 from ..schemas.device import CommandEnvelope, CommandResult
 from ..security.crypto import decrypt_secret
 from .firmware_deployments import (
+    ACTIVE_FIRMWARE_DEPLOYMENT_STATES,
+    ACTIVE_OTA_COMMAND_STATES,
+    FirmwareOTAGraphLocks,
     halt_staged_siblings_after_failure,
+    lock_firmware_ota_graph,
     recalculate_firmware_batch,
 )
 
@@ -120,8 +125,13 @@ async def _terminalize_linked_ota_deployment(
     deployment_id = command.payload.get("deployment_id")
     if not isinstance(deployment_id, str):
         return
-    deployment = await session.scalar(
-        select(FirmwareDeployment).where(FirmwareDeployment.id == deployment_id).with_for_update()
+    preflight = await session.get(FirmwareDeployment, deployment_id)
+    if preflight is None:
+        return
+    graph = await lock_firmware_ota_graph(session, (preflight,), lock_commands=False)
+    deployment = next(
+        (row for row in graph.deployments if row.id == deployment_id),
+        None,
     )
     if deployment is None or deployment.state in {
         "succeeded",
@@ -516,15 +526,94 @@ async def apply_command_results(
     results: list[CommandResult],
     *,
     authenticated_credential_id: str | None = None,
-) -> None:
-    for result in results:
-        command = await session.scalar(
-            select(DeviceCommand)
-            .where(DeviceCommand.id == result.command_id, DeviceCommand.device_id == device_id)
-            .with_for_update()
+    reported_firmware_version: str | None = None,
+) -> FirmwareOTAGraphLocks:
+    result_ids = [result.command_id for result in results]
+    if len(set(result_ids)) != len(result_ids):
+        raise IntegrityConflict("a command result may appear only once per request")
+    active_ota_command_ids = set(
+        (
+            await session.scalars(
+                select(DeviceCommand.id).where(
+                    DeviceCommand.device_id == device_id,
+                    DeviceCommand.command_type == "ota_install",
+                    DeviceCommand.state.in_(ACTIVE_OTA_COMMAND_STATES),
+                )
+            )
+        ).all()
+    )
+    command_ids = sorted(set(result_ids) | active_ota_command_ids)
+    locked_commands = (
+        list(
+            (
+                await session.scalars(
+                    select(DeviceCommand)
+                    .where(
+                        DeviceCommand.id.in_(command_ids),
+                        DeviceCommand.device_id == device_id,
+                    )
+                    .order_by(DeviceCommand.id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).all()
         )
-        if command is None:
-            raise NotFound("command result does not belong to this device")
+        if command_ids
+        else []
+    )
+    commands_by_id = {command.id: command for command in locked_commands}
+    if any(command_id not in commands_by_id for command_id in result_ids):
+        raise NotFound("command result does not belong to this device")
+
+    linked_deployment_ids = {
+        deployment_id
+        for command in locked_commands
+        if command.command_type == "ota_install"
+        for deployment_id in (command.payload.get("deployment_id"),)
+        if isinstance(deployment_id, str)
+    }
+    preflight_deployments = list(
+        (
+            await session.scalars(
+                select(FirmwareDeployment)
+                .where(
+                    FirmwareDeployment.device_id == device_id,
+                    (
+                        FirmwareDeployment.state.in_(ACTIVE_FIRMWARE_DEPLOYMENT_STATES)
+                        | FirmwareDeployment.id.in_(linked_deployment_ids)
+                    ),
+                )
+                .order_by(FirmwareDeployment.id)
+            )
+        ).all()
+    )
+    additional_release_ids: tuple[str, ...] = ()
+    if reported_firmware_version is not None:
+        normalized_version = reported_firmware_version.removeprefix("v")
+        reported_versions = {
+            reported_firmware_version,
+            normalized_version,
+            f"v{normalized_version}",
+        }
+        additional_release_ids = tuple(
+            (
+                await session.scalars(
+                    select(FirmwareRelease.id)
+                    .where(FirmwareRelease.semantic_version.in_(reported_versions))
+                    .order_by(FirmwareRelease.id)
+                )
+            ).all()
+        )
+    ingestion_graph = await lock_firmware_ota_graph(
+        session,
+        preflight_deployments,
+        lock_commands=True,
+        additional_release_ids=additional_release_ids,
+    )
+    deployments_by_id = {deployment.id: deployment for deployment in ingestion_graph.deployments}
+
+    for result in results:
+        command = commands_by_id[result.command_id]
         if command.state in TERMINAL_STATES:
             if command.state != result.state:
                 server_result_code = (command.last_result or {}).get("result_code")
@@ -820,9 +909,7 @@ async def apply_command_results(
         if command.command_type == "ota_install":
             deployment_id = command.payload.get("deployment_id")
             deployment = (
-                await session.get(FirmwareDeployment, deployment_id)
-                if isinstance(deployment_id, str)
-                else None
+                deployments_by_id.get(deployment_id) if isinstance(deployment_id, str) else None
             )
             if deployment is not None:
                 transition_at = datetime.now(UTC)
@@ -872,3 +959,5 @@ async def apply_command_results(
             attempt.result_at = datetime.now(UTC)
             attempt.result_code = result.result_code
             attempt.evidence = result.evidence
+    await session.flush()
+    return ingestion_graph

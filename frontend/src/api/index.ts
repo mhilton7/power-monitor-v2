@@ -8,7 +8,10 @@ import {
   commandSchema,
   deviceRotationSchema,
   devicesSchema,
+  firmwareReleaseListSchema,
   firmwareReleaseSchema,
+  firmwareDeploymentBatchSchema,
+  firmwareLifecycleSettingsSchema,
   historySchema,
   homeScopesSchema,
   homeUtilitySchema,
@@ -21,6 +24,7 @@ import {
   ratePublishResponseSchema,
   rateSourceRunsSchema,
   rateSourceStatusSchema,
+  sceRateCatalogSchema,
   rateWorkflowResponseSchema,
   userPreferencesSchema,
   roleSchema,
@@ -164,6 +168,7 @@ export const api = {
   rateSourceStatus: async (homeId: string) => exactHome(homeId, await apiRequest(homePath('/rate-sources/status', homeId), rateSourceStatusSchema)),
   rateSourceCandidates: async (homeId: string) => exactHome(homeId, await apiRequest(homePath('/rate-sources/candidates', homeId), rateCandidatesSchema)),
   rateSourceRuns: async (homeId: string) => exactHome(homeId, await apiRequest(homePath('/rate-sources/runs', homeId), rateSourceRunsSchema)),
+  sceRateCatalog: async (homeId: string) => exactHome(homeId, await apiRequest(homePath('/rate-sources/catalog', homeId), sceRateCatalogSchema)),
   createManualRateCandidate: async (homeId: string, payload: ManualRateCandidateInput) => exactHome(homeId, await apiRequest(homePath('/rate-sources/manual-candidates', homeId), manualRateCandidateResponseSchema, { method: 'POST', body: jsonBody(payload) })),
   reviewRateCandidate: async (homeId: string, candidateId: string, payload: RateCandidateReviewInput) => exactHome(homeId, await apiRequest(homePath(`/rate-sources/candidates/${encodeURIComponent(candidateId)}/review`, homeId), rateWorkflowResponseSchema, { method: 'POST', body: jsonBody(payload) })),
   rejectRateCandidate: async (homeId: string, candidateId: string) => exactHome(homeId, await apiRequest(homePath(`/rate-sources/candidates/${encodeURIComponent(candidateId)}/reject`, homeId), rateWorkflowResponseSchema, { method: 'POST' })),
@@ -182,8 +187,32 @@ export const api = {
   changePassword: (currentPassword: string, newPassword: string) => apiRequest('/auth/change-password', z.undefined(), { method: 'POST', body: jsonBody({ current_password: currentPassword, new_password: newPassword }) }),
   preferences: async () => (await apiRequest('/auth/preferences', z.object({ preferences: userPreferencesSchema }))).preferences,
   updatePreferences: async (payload: z.infer<typeof userPreferencesSchema>) => (await apiRequest('/auth/preferences', z.object({ preferences: userPreferencesSchema }), { method: 'PUT', body: jsonBody(payload) })).preferences,
-  firmwareReleases: () => apiRequest('/firmware/releases', z.object({ releases: z.array(firmwareReleaseSchema) })),
-  uploadFirmware: async (file: File, fields: { semantic_version: string; build_number: number; board_profile: string; minimum_boot_version: number; minimum_config_version: number; expected_sha256: string; release_notes: string }) => {
+  firmwareReleases: (options?: { showArchived?: boolean; showDeleted?: boolean; showDeploymentHistory?: boolean }) => {
+    const query = new URLSearchParams();
+    if (options?.showArchived) query.set('show_archived', 'true');
+    if (options?.showDeleted) query.set('show_deleted', 'true');
+    if (options?.showDeploymentHistory) query.set('show_deployment_history', 'true');
+    const suffix = query.toString();
+    return apiRequest(`/firmware/releases${suffix ? `?${suffix}` : ''}`, firmwareReleaseListSchema);
+  },
+  archiveFirmwareRelease: (releaseId: string) => apiRequest(`/firmware/releases/${encodeURIComponent(releaseId)}/archive`, firmwareReleaseSchema, { method: 'POST', body: jsonBody({ confirmation: 'ARCHIVE FIRMWARE RECORD' }) }),
+  restoreFirmwareRelease: (releaseId: string) => apiRequest(`/firmware/releases/${encodeURIComponent(releaseId)}/restore`, firmwareReleaseSchema, { method: 'POST', body: jsonBody({ confirmation: 'RESTORE FIRMWARE RECORD' }) }),
+  makeFirmwareReleaseCurrent: (release: { release_id: string; semantic_version: string; sha256: string }) => apiRequest(`/firmware/releases/${encodeURIComponent(release.release_id)}/make-current`, firmwareReleaseSchema, { method: 'POST', body: jsonBody({ confirmation: 'MAKE CURRENT FIRMWARE', semantic_version: release.semantic_version, sha256: release.sha256 }) }),
+  updateFirmwareRollbackProtection: (releaseId: string, rollbackPinned: boolean) => apiRequest(`/firmware/releases/${encodeURIComponent(releaseId)}/rollback-pin`, firmwareReleaseSchema, { method: 'PATCH', body: jsonBody({ confirmation: 'UPDATE ROLLBACK PROTECTION', rollback_pinned: rollbackPinned }) }),
+  deleteFirmwareReleasePermanently: (release: { release_id: string; semantic_version: string; build_number: number; sha256: string }) => apiRequest(`/firmware/releases/${encodeURIComponent(release.release_id)}/delete-permanently`, z.undefined(), { method: 'POST', body: jsonBody({ confirmation: 'DELETE RELEASE PERMANENTLY', semantic_version: release.semantic_version, build_number: String(release.build_number), sha256: release.sha256 }) }),
+  firmwareDeploymentBatches: (options?: { showArchived?: boolean; showDeleted?: boolean }) => {
+    const query = new URLSearchParams();
+    if (options?.showArchived) query.set('show_archived', 'true');
+    if (options?.showDeleted) query.set('show_deleted', 'true');
+    const suffix = query.toString();
+    return apiRequest(`/firmware/deployment-batches${suffix ? `?${suffix}` : ''}`, z.object({ deployment_batches: z.array(firmwareDeploymentBatchSchema) }));
+  },
+  archiveFirmwareDeployment: (batchId: string) => apiRequest(`/firmware/deployment-batches/${encodeURIComponent(batchId)}/archive`, firmwareDeploymentBatchSchema, { method: 'POST', body: jsonBody({ confirmation: 'ARCHIVE DEPLOYMENT RECORD' }) }),
+  restoreFirmwareDeployment: (batchId: string) => apiRequest(`/firmware/deployment-batches/${encodeURIComponent(batchId)}/restore`, firmwareDeploymentBatchSchema, { method: 'POST', body: jsonBody({ confirmation: 'RESTORE DEPLOYMENT RECORD' }) }),
+  deleteFirmwareDeploymentPermanently: (batchId: string) => apiRequest(`/firmware/deployment-batches/${encodeURIComponent(batchId)}/delete-permanently`, z.undefined(), { method: 'POST', body: jsonBody({ confirmation: 'DELETE DEPLOYMENT RECORD', deployment_batch_id: batchId }) }),
+  firmwareLifecycleSettings: () => apiRequest('/firmware/lifecycle-settings', firmwareLifecycleSettingsSchema),
+  updateFirmwareLifecycleSettings: (deploymentRetentionDays: 90 | 180 | 365 | null) => apiRequest('/firmware/lifecycle-settings', firmwareLifecycleSettingsSchema, { method: 'PATCH', body: jsonBody({ deployment_retention_days: deploymentRetentionDays, ...(deploymentRetentionDays === null ? {} : { confirmation: 'DELETE EXPIRED DEPLOYMENT HISTORY' }) }) }),
+  uploadFirmware: async (file: File, fields: { semantic_version: string; build_number: number; board_profile: string; minimum_boot_version: number; minimum_config_version: number; expected_sha256: string; firmware_build_id?: string; release_notes: string }) => {
     const body = new FormData();
     body.set('image', file, file.name);
     body.set('semantic_version', fields.semantic_version);
@@ -192,6 +221,7 @@ export const api = {
     body.set('minimum_boot_version', String(fields.minimum_boot_version));
     body.set('minimum_config_version', String(fields.minimum_config_version));
     body.set('expected_sha256', fields.expected_sha256);
+    if (fields.firmware_build_id) body.set('firmware_build_id', fields.firmware_build_id);
     body.set('release_notes', fields.release_notes);
     return apiRequest('/firmware/releases', z.object({ release: firmwareReleaseSchema, manifest_signature: z.string(), physical_certification: z.string() }), { method: 'POST', body });
   },
