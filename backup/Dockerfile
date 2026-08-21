@@ -1,6 +1,6 @@
 FROM postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4
 
-ARG VERSION=0.1.0-rc.24
+ARG VERSION=0.1.0-rc.25
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
 LABEL org.opencontainers.image.title="PowerMeter V2 backup" \

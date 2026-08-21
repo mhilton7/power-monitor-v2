@@ -18,7 +18,7 @@ bridge for strictly allowlisted official SCE synchronization. Frontend is
 reachable only from Caddy. No service mounts the Docker socket, uses privileged
 mode, or receives extra Linux capabilities.
 
-The v0.1.0-rc.24 release contract retains the one-shot `initialize` service, making
+The v0.1.0-rc.25 release contract retains the one-shot `initialize` service, making
 eight services total. It reuses the exact API
 image digest, has no network, and receives only the three file-metadata
 capabilities needed to validate and repair the UI-created host paths. Every

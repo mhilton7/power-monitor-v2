@@ -9,7 +9,7 @@ one-shot initializer source beside its generated YAML. The no-shell initializer
 model began with the complete signed v0.1.0-rc.5 release asset set; that public
 server release remains installable with its own attached files. Public rc.6 is
 also immutable and installable with its own attached files. The current source
-guide is prepared for coordinated rc.24 and must not be combined with the
+guide is prepared for coordinated rc.25 and must not be combined with the
 failed server rc.22 candidate, rc.21, rc.20, rc.17, rc.16, rc.15, rc.6,
 rc.5, rc.3, or any other release. The signed server rc.4 tag has no GitHub
 Release or YAML and is not an installation source.

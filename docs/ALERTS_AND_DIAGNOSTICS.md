@@ -18,7 +18,7 @@ telemetry, server delivery state, PZEM health, command/OTA state, resource
 watermarks, and exact evidence identifiers. Normal UI does not expose storage
 capacity, backlog, cursor, missing-prefix, format, or backlog-sync controls.
 Legacy fields may remain hidden temporarily while RC20 devices are staged to
-RC24.
+RC25.
 
 Operational views are home-scoped and permission-checked. Cross-home or
 unowned evidence is omitted fail closed.
