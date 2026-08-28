@@ -617,6 +617,7 @@ def test_api_image_uses_the_zero_finding_alpine_base_and_pinned_ocr() -> None:
     assert dockerfile.count(f"FROM {base}") == 2
     assert "slim-bookworm" not in dockerfile
     assert "/sbin/apk add --no-cache" in dockerfile
+    assert "openssl=3.5.8-r0" in dockerfile
     assert "tesseract-ocr=5.5.1-r0" in dockerfile
     assert "tesseract-ocr-data-eng=5.5.1-r0" in dockerfile
     assert "font-dejavu=2.37-r6" in dockerfile
@@ -966,6 +967,10 @@ def test_frontend_uses_clean_runtime_base_and_ci_scans_every_final_image() -> No
     )
     assert dockerfile.count(f"FROM {runtime_base}") == 1
     assert "1.28.0-alpine3.21" not in dockerfile
+    assert "libcrypto3=3.5.8-r0" in dockerfile
+    assert "libssl3=3.5.8-r0" in dockerfile
+    assert dockerfile.index("USER root") < dockerfile.index("libcrypto3=3.5.8-r0")
+    assert dockerfile.index("libssl3=3.5.8-r0") < dockerfile.index("USER 101")
     assert dockerfile.index(f"FROM {runtime_base}") < dockerfile.index("USER 101")
 
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")

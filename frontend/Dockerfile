@@ -18,6 +18,10 @@ FROM nginxinc/nginx-unprivileged:1.30.4-alpine3.24@sha256:44e36330f74d4f3a1d4e22
 ARG VERSION=0.1.0-rc.26
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
+USER root
+RUN /sbin/apk add --no-cache --upgrade \
+      libcrypto3=3.5.8-r0 \
+      libssl3=3.5.8-r0
 LABEL org.opencontainers.image.title="PowerMeter V2 frontend" \
       org.opencontainers.image.description="Same-origin PowerMeter V2 browser application" \
       org.opencontainers.image.source="https://github.com/mhilton7/power-monitor-v2" \
