@@ -60,7 +60,7 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
 - Live power charts retain their last successful data while a new authenticated
   reading is fetched, eliminating the full-card flash without fabricating or
   smoothing any reading.
-- API and frontend final images require Alpine OpenSSL 3.5.8-r0, closing
+- API, frontend, and backup final images require Alpine OpenSSL 3.5.8-r0, closing
   CVE-2026-14456; the tagged workflow still scans every final image and fails
   on any HIGH or CRITICAL finding.
 - Diagnostics now distinguishes server receipt time from trusted sensor sample

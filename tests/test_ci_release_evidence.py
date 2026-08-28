@@ -595,6 +595,7 @@ def test_backup_image_removes_unused_inherited_privilege_helper() -> None:
     removal = "rm -f /usr/local/bin/gosu"
     assert removal in dockerfile
     assert "test ! -e /usr/local/bin/gosu" in dockerfile
+    assert "openssl=3.5.8-r0" in dockerfile
     assert dockerfile.index(removal) < dockerfile.index("USER 568:568")
     assert 'ENTRYPOINT ["/opt/powermeter/entrypoint.sh"]' in dockerfile
 
