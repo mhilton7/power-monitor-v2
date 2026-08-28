@@ -11,7 +11,7 @@ from .sce_rate_parser import ParsedRateCandidate
 DiscoveryState = Literal["parsed", "requires_parser", "excluded"]
 CatalogLinkKind = Literal["plan", "traversal", "excluded"]
 
-CATALOG_CRAWLER_VERSION = "sce-residential-catalog-crawl-v2"
+CATALOG_CRAWLER_VERSION = "sce-power-monitor-compatible-crawl-v3"
 OFFICIAL_SCE_CATALOG_HOSTS = frozenset({"sce.com", "www.sce.com"})
 OFFICIAL_SCE_PUBLIC_PATH_PREFIXES = ("/regulatory/", "/save-money/")
 SCE_CATALOG_DISCOVERY_URL = (
@@ -60,6 +60,7 @@ class SceCatalogLinkInspection:
     """Offline HTML link extraction result with fail-closed parse evidence."""
 
     links: tuple[DiscoveredSceCatalogLink, ...]
+    primary_plans: tuple[tuple[str, str], ...]
     error_code: str | None
 
 
@@ -102,6 +103,8 @@ class _OfficialLinks(HTMLParser):
         self._heading_tag: str | None = None
         self._heading_text: list[str] = []
         self._current_family: str | None = None
+        self._primary_region_depths: list[int] = []
+        self.primary_headings: list[str] = []
         self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -123,6 +126,9 @@ class _OfficialLinks(HTMLParser):
                 attributes.get("aria-label", ""),
             )
         ).lower()
+        classes = set(attributes.get("class", "").lower().split())
+        if classes.intersection({"accordion-container-bg-layout", "rate-plan-card"}):
+            self._primary_region_depths.append(self._depth)
         if self._in_main() and (
             lower in {"nav", "header", "footer", "aside"}
             or any(
@@ -164,6 +170,8 @@ class _OfficialLinks(HTMLParser):
             self._anchor_family = None
         if self._heading_tag == lower:
             heading = " ".join(" ".join(self._heading_text).split())
+            if lower == "h2" and self._primary_region_depths and heading:
+                self.primary_headings.append(heading)
             self._current_family = _supported_canonical(heading)
             self._heading_tag = None
             self._heading_text = []
@@ -171,6 +179,8 @@ class _OfficialLinks(HTMLParser):
             self._skip_depth -= 1
         if self._blocked_depths and self._blocked_depths[-1] == self._depth:
             self._blocked_depths.pop()
+        if self._primary_region_depths and self._primary_region_depths[-1] == self._depth:
+            self._primary_region_depths.pop()
         if self._main_depth == self._depth:
             self._main_depth = None
             self._current_family = None
@@ -288,6 +298,14 @@ def _eligibility(label: str) -> tuple[str, ...]:
     return tuple(key for key, needles in terms.items() if any(item in upper for item in needles))
 
 
+def _stored_eligibility(value: object, label: str) -> tuple[str, ...]:
+    if isinstance(value, list | tuple):
+        stored = tuple(item for item in value if isinstance(item, str) and item)
+        if stored:
+            return stored
+    return _eligibility(label)
+
+
 def _is_official_tariff_document(label: str, href: str) -> bool:
     value = f"{label} {href}".upper()
     return urlparse(href).path.lower().endswith(".pdf") or any(
@@ -357,17 +375,23 @@ def inspect_sce_catalog_links(
     """
 
     if media_type not in {"text/html", "application/xhtml+xml"}:
-        return SceCatalogLinkInspection(links=(), error_code="CATALOG_INDEX_MEDIA_TYPE")
+        return SceCatalogLinkInspection(
+            links=(), primary_plans=(), error_code="CATALOG_INDEX_MEDIA_TYPE"
+        )
     try:
         text = body.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
-        return SceCatalogLinkInspection(links=(), error_code="CATALOG_INDEX_INVALID_UTF8")
+        return SceCatalogLinkInspection(
+            links=(), primary_plans=(), error_code="CATALOG_INDEX_INVALID_UTF8"
+        )
     parser = _OfficialLinks()
     try:
         parser.feed(text)
         parser.close()
     except Exception:
-        return SceCatalogLinkInspection(links=(), error_code="CATALOG_INDEX_HTML_PARSE_FAILED")
+        return SceCatalogLinkInspection(
+            links=(), primary_plans=(), error_code="CATALOG_INDEX_HTML_PARSE_FAILED"
+        )
 
     discovered: dict[str, DiscoveredSceCatalogLink] = {}
     for href, raw_label, scoped_family in parser.links:
@@ -415,8 +439,14 @@ def inspect_sce_catalog_links(
         prior = discovered.get(target_url)
         if prior is None:
             discovered[target_url] = candidate
+    primary: dict[str, str] = {}
+    for label in parser.primary_headings:
+        canonical, _schedule = _canonical(label)
+        if canonical in SUPPORTED_PLAN_NAMES or canonical.startswith("TOU-D-"):
+            primary.setdefault(canonical, label[:160])
     return SceCatalogLinkInspection(
         links=tuple(discovered[url] for url in sorted(discovered)),
+        primary_plans=tuple((name, primary[name]) for name in sorted(primary)),
         error_code=None,
     )
 
@@ -522,6 +552,7 @@ def discover_sce_catalog(
     *,
     source_url: str,
     parsed: ParsedRateCandidate | None,
+    enrichment_for: str | None = None,
 ) -> tuple[DiscoveredScePlan, ...]:
     """Inventory every plan-like official link in one captured SCE revision.
 
@@ -546,13 +577,51 @@ def discover_sce_catalog(
                 raw_name = plan.get("rate_plan_name")
                 if isinstance(raw_name, str) and raw_name:
                     canonical, _schedule = _canonical(raw_name)
-                    if canonical in SUPPORTED_PLAN_NAMES and _candidate_signature_complete(
-                        plan, parsed
+                    if (
+                        canonical in SUPPORTED_PLAN_NAMES
+                        and (enrichment_for is None or canonical == enrichment_for)
+                        and _candidate_signature_complete(plan, parsed)
                     ):
                         parsed_plans[canonical] = _normalized_catalog_plan(plan, parsed)
 
     discovered: dict[str, DiscoveredScePlan] = {}
-    for link in discover_sce_catalog_links(body, media_type, source_url=source_url):
+    inspection = inspect_sce_catalog_links(
+        body,
+        media_type,
+        source_url=source_url,
+        enrichment_for=enrichment_for,
+    )
+    if enrichment_for is None:
+        for canonical, label in inspection.primary_plans:
+            parsed_plan = parsed_plans.get(canonical)
+            normalized = {
+                **(parsed_plan or {}),
+                "discovery_evidence": {
+                    "kind": "primary_plan_heading",
+                    "crawler_version": CATALOG_CRAWLER_VERSION,
+                    "source_url": source_url,
+                },
+            }
+            primary_state: DiscoveryState = (
+                "parsed" if parsed_plan is not None else "requires_parser"
+            )
+            _canonical_name, schedule = _canonical(label)
+            discovered[canonical] = DiscoveredScePlan(
+                source_url=source_url,
+                public_plan_name=SUPPORTED_PLAN_NAMES.get(canonical, label),
+                canonical_name=canonical,
+                official_schedule_code=schedule,
+                plan_type=_stored_plan_type(normalized.get("pricing_model"), label),
+                enrollment_status=str(
+                    normalized.get("enrollment_status") or _enrollment_status(label)
+                ),
+                eligibility=_stored_eligibility(normalized.get("eligibility"), label),
+                discovery_state=primary_state,
+                exclusion_reason=None,
+                normalized_plan=normalized,
+                source_level=2,
+            )
+    for link in inspection.links:
         if link.kind == "traversal":
             continue
         if link.kind == "excluded":
@@ -569,7 +638,7 @@ def discover_sce_catalog(
         state: DiscoveryState = "parsed" if normalized else "requires_parser"
         discovered[link.canonical_name] = DiscoveredScePlan(
             source_url=link.target_url,
-            public_plan_name=SUPPORTED_PLAN_NAMES[link.canonical_name],
+            public_plan_name=SUPPORTED_PLAN_NAMES.get(link.canonical_name, link.label),
             canonical_name=link.canonical_name,
             official_schedule_code=link.official_schedule_code,
             plan_type=_stored_plan_type(normalized.get("pricing_model"), link.label),

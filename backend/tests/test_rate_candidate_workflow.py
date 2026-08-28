@@ -100,6 +100,11 @@ def _install_authoritative_holiday_calendar_parser(
     def parse_with_holidays(body: bytes, media_type: str) -> ParsedRateCandidate:
         parsed = original_parser(body, media_type)
         normalized = copy.deepcopy(parsed.normalized_rates)
+        plans = normalized.get("plans")
+        if isinstance(plans, list):
+            for plan in plans:
+                if isinstance(plan, dict):
+                    plan["rate_precision"] = "approved_tariff_exact"
         normalized["holiday_calendar"] = {
             "status": "resolved",
             "authority": "Southern California Edison",
@@ -117,6 +122,12 @@ def _install_authoritative_holiday_calendar_parser(
             validation_evidence={
                 **parsed.validation_evidence,
                 "holiday_calendar": "authoritative_bounded_fixture",
+                "warnings": [
+                    warning
+                    for warning in parsed.validation_evidence.get("warnings", [])
+                    if warning != "PUBLIC_SOURCE_PRICES_ARE_DISPLAY_ROUNDED"
+                ],
+                "price_precision": "approved_tariff_exact_fixture",
             },
         )
 
@@ -273,7 +284,9 @@ async def test_manual_candidate_review_publish_activate_preserves_exact_provenan
 async def test_semantic_tier_candidate_cannot_publish_without_account_baseline(
     owner_client: AsyncClient,
     rate_artifact_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _install_authoritative_holiday_calendar_parser(monkeypatch)
     home_id = (await owner_client.get("/api/v1/home-scopes")).json()["home_scopes"][0]["id"]
     async with session_factory() as session:
         source = RateSource(

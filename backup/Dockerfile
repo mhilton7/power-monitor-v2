@@ -1,6 +1,6 @@
 FROM postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4
 
-ARG VERSION=0.1.0-rc.25
+ARG VERSION=0.1.0-rc.26
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
 LABEL org.opencontainers.image.title="PowerMeter V2 backup" \
@@ -17,6 +17,7 @@ RUN apk add --no-cache \
       findutils=4.10.0-r0 \
       gnupg=2.4.9-r0 \
       jq=1.8.1-r0 \
+      openssl=3.5.8-r0 \
       tzdata=2026c-r0 \
     && rm -f /usr/local/bin/gosu \
     && test ! -e /usr/local/bin/gosu \

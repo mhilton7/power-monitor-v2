@@ -81,6 +81,7 @@ from ..services.rate_workflow import (
     review_rate_candidate,
     safe_review,
 )
+from ..services.sce_catalog import CATALOG_CRAWLER_VERSION, SUPPORTED_PLAN_NAMES
 from ..services.tiered_billing import (
     EnergyQuality,
     billing_calculation_state,
@@ -2144,7 +2145,7 @@ async def list_sce_rate_catalog(
     """Return the latest explicit result for every discovered official SCE plan."""
 
     scoped_home_id = await _resolve_user_home(session, user.id, home_id)
-    rows = (
+    queried_rows = (
         await session.execute(
             select(SceCatalogEntry, RateSourceRevision, RateSource)
             .join(
@@ -2167,6 +2168,22 @@ async def list_sce_rate_catalog(
             )
         )
     ).all()
+
+    def valid_catalog_entry(entry: SceCatalogEntry) -> bool:
+        if entry.canonical_name in SUPPORTED_PLAN_NAMES:
+            return True
+        normalized = entry.normalized_plan if isinstance(entry.normalized_plan, dict) else {}
+        discovery = normalized.get("discovery_evidence")
+        return (
+            isinstance(discovery, dict)
+            and discovery.get("kind") == "primary_plan_heading"
+            and discovery.get("crawler_version") == CATALOG_CRAWLER_VERSION
+        )
+
+    # Old broad-discovery rows remain immutable source evidence, but cannot be
+    # active catalog plans. Future structurally discovered primary headings are
+    # retained as parser-update records through the bounded evidence marker.
+    rows = [row for row in queried_rows if valid_catalog_entry(row[0])]
     available_revision_ids = {revision.id for _entry, revision, _source in rows}
 
     now = datetime.now(UTC)
@@ -2437,6 +2454,10 @@ async def list_sce_rate_catalog(
                 "other_fixed_charge": plan.get("other_fixed_charge"),
                 "baseline_credit_per_kwh": plan.get("baseline_credit_per_kwh"),
                 "tier_threshold_basis": plan.get("tier_threshold_basis"),
+                "rate_precision": plan.get("rate_precision", "unverified"),
+                "exact_rates_verified": plan.get("rate_precision") == "approved_tariff_exact",
+                "rate_component_scope": plan.get("rate_components"),
+                "baseline_credit_scope": plan.get("baseline_credit_scope"),
                 "verification_state": entry.discovery_state,
                 "latest_discovery_state": latest_entry.discovery_state,
                 "latest_discovery_revision_id": latest_revision.id,

@@ -1,13 +1,13 @@
-# PowerMeter V2 v0.1.0-rc.25
+# PowerMeter V2 v0.1.0-rc.26
 
-RC25 carries forward the public RC24 server-owned History, billing presentation,
+RC26 carries forward the public RC25 server-owned History, billing presentation,
 official-rate catalog, responsive chart, and firmware/deployment lifecycle
 work while completing the remaining web application repairs. The
 firmware runtime remains stateless; this candidate advances its coordinated
 release binding without reintroducing storage or backlog behavior. It remains
 a release candidate because marked-unit hardware certification is pending.
 
-## Public RC24 baseline retained
+## Public RC25 baseline retained
 
 - Power History now tracks the active brush selection and formats the selected
   local-time range compactly. Its footer uses a bounded responsive grid so the
@@ -23,7 +23,7 @@ a release candidate because marked-unit hardware certification is pending.
   `artifact_quarantines`. The response remains strict about the typed evidence
   while tolerating future additive lifecycle fields, so the view no longer
   fails when the current server returns those fields.
-- Firmware/server RC24 and RC23 remain immutable public prereleases. RC22 remains
+- Firmware/server RC25 and RC24 remain immutable public prereleases. RC22 remains
   immutable failed-candidate evidence and is not rewritten or relabeled.
 
 The signed server `v0.1.0-rc.22` tag and run
@@ -40,6 +40,11 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
   only Schedule D, TOU-D 4–9 PM, TOU-D 5–8 PM, and TOU-D-PRIME from the
   primary page content. Navigation, footer, marketing, solar, comparison,
   FAQ, and cross-family enrichment links cannot become rate candidates.
+- The production parser reads the three embedded TOU families from the
+  allowlisted page structure and follows only the exact Tiered-plan link.
+  Obsolete false candidates are excluded from the active catalog without
+  deleting their stored provenance, and rounded public prices remain
+  review-only until exact tariff components are verified.
 - Billing keeps authenticated measured, cumulative-meter recovered, bounded
   estimated, and unknown energy separate. Tiered totals may remain exact when
   the PZEM cumulative counter safely closes a chart gap; TOU cost remains
@@ -52,6 +57,14 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
   and labels accepted, recovered, estimated, and unallocated gap energy
   without rewriting History. Chart range selection remains stable across
   refreshes and exposes explicit reset/resume controls.
+- Live power charts retain their last successful data while a new authenticated
+  reading is fetched, eliminating the full-card flash without fabricating or
+  smoothing any reading.
+- API, frontend, and backup final images require Alpine OpenSSL 3.5.8-r0, closing
+  CVE-2026-14456; the tagged workflow still scans every final image and fails
+  on any HIGH or CRITICAL finding.
+- The API final image also requires Alpine sqlite-libs 3.53.4-r0, closing
+  CVE-2026-11822 and CVE-2026-11824 before publication.
 - Diagnostics now distinguishes server receipt time from trusted sensor sample
   time and reports only server-owned stored-History and accepted-sample
   evidence. Additive OTA lifecycle response evidence remains schema-compatible.
@@ -168,25 +181,25 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
 
 ## Release binding
 
-- Server and frontend version: `0.1.0-rc.25`.
-- Compatible firmware tag: `v0.1.0-rc.25`, build number `28`.
+- Server and frontend version: `0.1.0-rc.26`.
+- Compatible firmware tag: `v0.1.0-rc.26`, build number `29`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
 - Alembic head: `20260821_0019`.
 - Generated contract-document SHA-256:
-  `f40aed47eb572db1d328e3130fd0a86e6a8c9c123ba244d4cb90db3a4dd039bb`.
+  `22d5025b80dbee17ccd714beef4649c87e7169364ec8d3ea652fa9be0c74490d`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned
-`power-monitor-v2-v0.1.0-rc.25.yaml`, release manifest, migration/security/test
+`power-monitor-v2-v0.1.0-rc.26.yaml`, release manifest, migration/security/test
 evidence, and checksums. The firmware prerelease must be published and
 independently verified first, then the server compatibility variable must be
-set to the exact RC25 firmware tag.
+set to the exact RC26 firmware tag.
 
 ## Deployment boundary
 
-Deploy the server RC25 YAML before applying the firmware RC25 update. Existing
-RC21 through RC24 sensors remain protocol-compatible throughout. Automated
+Deploy the server RC26 YAML before applying the firmware RC26 update. Existing
+RC21 through RC25 sensors remain protocol-compatible throughout. Automated
 tests do not install firmware on physical sensors. No card was formatted and no
 NVS namespace was erased while preparing this release.
 

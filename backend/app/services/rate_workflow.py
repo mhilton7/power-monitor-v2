@@ -1513,6 +1513,19 @@ async def publish_rate_candidate(
     tier_threshold_rule = _canonical_tier_threshold_rule(
         review.tier_threshold_rule or plan_data.get("tier_threshold_rule")
     )
+    warnings = candidate.validation_evidence.get("warnings", [])
+    if isinstance(warnings, list) and "PUBLIC_SOURCE_PRICES_ARE_DISPLAY_ROUNDED" in warnings:
+        raise RateWorkflowConflict(
+            "candidate exact tariff prices are required; rounded public prices are review-only"
+        )
+    if normalized.get("rate_component_scope_verified") is False:
+        raise RateWorkflowConflict(
+            "candidate rate component scope requires authoritative tariff evidence"
+        )
+    if normalized.get("baseline_credit_scope_verified") is False:
+        raise RateWorkflowConflict(
+            "candidate baseline credit scope requires authoritative tariff evidence"
+        )
     coverage = candidate.validation_evidence.get("coverage")
     if coverage != "complete":
         if coverage != "semantic_tier_coverage" or pricing_model not in {
@@ -1523,11 +1536,6 @@ async def publish_rate_candidate(
         if tier_threshold_rule is None:
             raise RateWorkflowConflict(
                 "candidate reusable schedule is incomplete; account baseline evidence is required"
-            )
-        warnings = candidate.validation_evidence.get("warnings", [])
-        if isinstance(warnings, list) and "PUBLIC_SOURCE_PRICES_ARE_DISPLAY_ROUNDED" in warnings:
-            raise RateWorkflowConflict(
-                "candidate exact tariff prices are required; rounded public prices are review-only"
             )
     dated_prices = (
         _canonical_dated_prices(

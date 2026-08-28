@@ -105,18 +105,18 @@ deterministic build number 25. The signed server rc.22 tag and workflow run
 release assembly was skipped, so there is no server rc.22 Release or generated
 YAML. None of that evidence is moved or relabeled.
 
-Coordinated firmware rc.25 must name server `v0.1.0-rc.25`, retain
+Coordinated firmware rc.26 must name server `v0.1.0-rc.26`, retain
 `pm-protocol/1.0.0`, declare `pm-telemetry/2.0.0`, and bind generated OpenAPI
 SHA-256
-`f40aed47eb572db1d328e3130fd0a86e6a8c9c123ba244d4cb90db3a4dd039bb`. Public RC20 build number is 23, RC22 build number 25,
-RC23 build number 26, and RC24 build number 27 remain immutable; RC25 uses
-deterministic build number 28. It
+`22d5025b80dbee17ccd714beef4649c87e7169364ec8d3ea652fa9be0c74490d`. Public RC20 build number is 23, RC22 build number 25,
+RC23 build number 26, RC24 build number 27, and RC25 build number 28 remain immutable; RC26 uses
+deterministic build number 29. It
 retains the stateless runtime, anchors successful telemetry to fixed cadence
 deadlines so HTTPS latency does not create artificial missing samples, keeps
 only one in-flight and one newest pending sample in RAM, and preserves existing
-NVS identity/configuration through the schema-v1 layout. RC25 metadata and
+NVS identity/configuration through the schema-v1 layout. RC26 metadata and
 artifacts must be created, signed, published, and independently verified before
-the server rc.25 tag is created.
+the server rc.26 tag is created.
 
 All firmware candidates retain hardware-certification status `pending`.
 Marked-unit identity/electrical evidence, TLS/HMAC, OTA install/rollback,

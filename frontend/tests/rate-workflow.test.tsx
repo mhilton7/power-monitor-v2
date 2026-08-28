@@ -21,6 +21,29 @@ function WorkflowSwitchHarness({ secondHomeId }: { secondHomeId: string }) {
 }
 
 describe('exact-home SCE rate workflow', () => {
+  it('renders only the four structurally discovered residential plan families', async () => {
+    const catalog = structuredClone(sceRateCatalog);
+    const base = catalog.plans[0]!;
+    catalog.plans = [
+      base,
+      { ...structuredClone(base), id: 'catalog-tou-4-9', canonical_name: 'TOU-D-4-9PM', public_plan_name: 'TOU-D 4 PM to 9 PM', official_schedule_code: 'TOU-D-4-9PM', plan_type: 'time_of_use_with_baseline_credit', currently_used: false },
+      { ...structuredClone(base), id: 'catalog-tou-5-8', canonical_name: 'TOU-D-5-8PM', public_plan_name: 'TOU-D 5 PM to 8 PM', official_schedule_code: 'TOU-D-5-8PM', plan_type: 'time_of_use_with_baseline_credit', currently_used: false },
+      { ...structuredClone(base), id: 'catalog-tou-prime', canonical_name: 'TOU-D-PRIME', public_plan_name: 'TOU-D-PRIME', official_schedule_code: 'TOU-D-PRIME', plan_type: 'time_of_use', currently_used: false },
+    ];
+    catalog.summary.plans_discovered = 4;
+    catalog.summary.plans_parsed = 4;
+    installFetchMock((path, method) => path.includes('/rate-sources/catalog')
+      ? { status: 200, body: catalog }
+      : apiResponse(path, method));
+    renderWithProviders(<RateSourceWorkflow homeId={homeId} accounts={billing.accounts} />);
+
+    for (const name of ['SCE Domestic', 'TOU-D 4 PM to 9 PM', 'TOU-D 5 PM to 8 PM', 'TOU-D-PRIME']) {
+      expect(await screen.findByRole('button', { name: `View ${name} rate plan` })).toBeInTheDocument();
+    }
+    expect(screen.queryByText(/Solar Billing Plan/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Understanding Updates to Your Electricity Bill/)).not.toBeInTheDocument();
+  });
+
   it('labels the bounded official catalog incomplete and keeps technical source values behind details', async () => {
     installFetchMock(apiResponse);
     renderWithProviders(<RateSourceWorkflow homeId={homeId} accounts={billing.accounts} />);
@@ -72,6 +95,22 @@ describe('exact-home SCE rate workflow', () => {
     expect(cells[4]).toHaveTextContent('—');
     expect(cells[5]).toHaveTextContent('—');
     expect(cells[6]).toHaveTextContent('$0.30863');
+  });
+
+  it('labels consumer-page prices as rounded instead of claiming exact tariff totals', async () => {
+    const roundedCatalog = structuredClone(sceRateCatalog);
+    roundedCatalog.plans[0]!.rate_precision = 'consumer_display_rounded';
+    roundedCatalog.plans[0]!.exact_rates_verified = false;
+    installFetchMock((path, method) => path.includes('/rate-sources/catalog')
+      ? { status: 200, body: roundedCatalog }
+      : apiResponse(path, method));
+    renderWithProviders(<RateSourceWorkflow homeId={homeId} accounts={billing.accounts} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'View SCE Domestic rate plan' }));
+    const dialog = screen.getByRole('dialog', { name: 'SCE Domestic' });
+    expect(within(dialog).getByText('Rounded public prices.')).toBeInTheDocument();
+    expect(within(dialog).getByRole('columnheader', { name: 'Rounded public total' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('columnheader', { name: 'Exact total' })).not.toBeInTheDocument();
   });
 
   it('rejects prohibited or uncontracted fields in normalized candidate rate facts', () => {

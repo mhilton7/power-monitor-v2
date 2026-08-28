@@ -15,6 +15,17 @@ import './HomePage.css';
 
 type SensorSummary = HomeData['devices'][number];
 
+function previousAnchorData<T>(
+  previousData: T | undefined,
+  previousKey: readonly unknown[] | undefined,
+  currentKey: readonly unknown[],
+): T | undefined {
+  if (!previousKey || previousKey.length !== currentKey.length) return undefined;
+  return previousKey.slice(0, -1).every((value, index) => value === currentKey[index])
+    ? previousData
+    : undefined;
+}
+
 function historyParams(homeId: string, scope: { deviceId?: string; aggregateCircuitId?: string }, from: Date, to: Date, metric: string, resolutionSeconds?: number) {
   const query = new URLSearchParams({ home_id: homeId, from: from.toISOString(), to: to.toISOString(), metric });
   if (scope.aggregateCircuitId) query.set('aggregate_circuit_id', scope.aggregateCircuitId);
@@ -256,15 +267,19 @@ export function HomePage() {
   const powerBrushKey = `${dashboardDays}:${historyScopeKey}`;
   const hasServerDailyComparisons = dashboardDays === 1 && home.data?.summaries.yesterday !== undefined;
   const historyAnchorMs = new Date(home.data?.generated_at ?? now).getTime();
+  const history24Key = ['history', selectedHomeId, 'home-dashboard', dashboardDays, historyScopeKey, historyAnchorMs] as const;
+  const dailyKey = ['history', selectedHomeId, 'home-daily', dashboardDays, historyScopeKey, historyAnchorMs] as const;
   const history24 = useQuery({
-    queryKey: ['history', selectedHomeId, 'home-dashboard', dashboardDays, historyScopeKey, historyAnchorMs],
+    queryKey: history24Key,
     queryFn: () => api.history(historyParams(selectedHomeId, { deviceId: historyDeviceId, aggregateCircuitId }, new Date(historyAnchorMs - dashboardDays * 24 * 60 * 60 * 1000), new Date(historyAnchorMs), 'power', dashboardDays === 1 ? 300 : 3600)),
     enabled: Boolean(home.data && selectedHomeId && (historyDeviceId || aggregateCircuitId)),
+    placeholderData: (previousData, previousQuery) => previousAnchorData(previousData, previousQuery?.queryKey, history24Key),
   });
   const daily = useQuery({
-    queryKey: ['history', selectedHomeId, 'home-daily', dashboardDays, historyScopeKey, historyAnchorMs],
+    queryKey: dailyKey,
     queryFn: () => api.history(historyParams(selectedHomeId, { deviceId: historyDeviceId, aggregateCircuitId }, new Date(historyAnchorMs - dashboardDays * 24 * 60 * 60 * 1000), new Date(historyAnchorMs), 'energy', dashboardDays === 1 ? 300 : 3600)),
     enabled: Boolean(home.data && selectedHomeId && (historyDeviceId || aggregateCircuitId)),
+    placeholderData: (previousData, previousQuery) => previousAnchorData(previousData, previousQuery?.queryKey, dailyKey),
   });
   const command = useMutation({ mutationFn: () => api.command(commandDeviceId, 'reboot'), onSuccess: () => { setRebootOpen(false); void queryClient.invalidateQueries({ queryKey: ['devices'] }); } });
 

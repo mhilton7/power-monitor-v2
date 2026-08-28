@@ -64,15 +64,14 @@ def test_flat_plan_does_not_require_holiday_rules() -> None:
     assert parsed.normalized_rates["holiday_treatment"] == "not_applicable"
 
 
-def test_tou_missing_holiday_treatment_reports_specific_diagnostic() -> None:
+def test_incomplete_tou_without_holiday_evidence_reports_missing_structure() -> None:
     with pytest.raises(SourceParseError) as captured:
         parse_sce_public_page(
             _html("<h1>Time-of-Use TOU-D-4-9PM</h1><p>weekday on peak schedule</p>"),
             "text/html",
         )
 
-    assert captured.value.error_code == "HOLIDAY_RULE_MISSING"
-    assert captured.value.evidence["classification"] == "time_of_use"
+    assert captured.value.error_code == "LAYOUT_MISSING_SECTION"
 
 
 def test_unknown_plan_reports_classification_not_holiday_error() -> None:

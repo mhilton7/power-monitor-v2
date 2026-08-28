@@ -230,6 +230,10 @@ export const sceRateCatalog = {
     monthly_fixed_charge: '0',
     baseline_credit_per_kwh: '0',
     tier_threshold_basis: 'daily_baseline_allowance',
+    rate_precision: 'approved_tariff_exact',
+    exact_rates_verified: true,
+    rate_component_scope: 'sce_delivery_and_generation_itemized',
+    baseline_credit_scope: 'not_applicable',
     verification_state: 'parsed',
     latest_discovery_state: 'parsed',
     latest_discovery_revision_id: '00000000-0000-0000-0000-000000000081',
@@ -255,7 +259,7 @@ export const sceRateCatalog = {
 };
 
 export const systemHealth = {
-  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.25', protocol: 'pm-protocol/1.0.0', database: 'reachable',
+  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.26', protocol: 'pm-protocol/1.0.0', database: 'reachable',
   sensors: [{ device_id: 'device-main', state: 'online', heartbeat_age_seconds: 5, pzem_status: 'ok', telemetry_protocol: 'direct_https', server_delivery_status: 'received', last_server_received_at: '2026-08-13T17:32:11Z', last_sensor_sampled_at: '2026-08-13T17:32:10Z', sensor_time_trusted: true }],
   open_alert_count: 1, last_rate_sync: { id: 'rate-run-old', state: 'review_required', event_code: 'RATE_SOURCE_SNAPSHOT_CAPTURED', completed_at: '2026-08-13T16:00:00Z' },
   backup: {}, restore_test: {}, physical_hardware_certification: 'pending',

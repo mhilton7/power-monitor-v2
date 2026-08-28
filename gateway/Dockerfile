@@ -49,7 +49,7 @@ RUN set -eux; \
 
 FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
 
-ARG VERSION=0.1.0-rc.25
+ARG VERSION=0.1.0-rc.26
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
 LABEL org.opencontainers.image.title="PowerMeter V2 gateway" \
