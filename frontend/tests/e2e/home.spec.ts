@@ -103,6 +103,31 @@ test('Power History five-second range interaction stays local and avoids disrupt
   await expect(page.getByRole('button', { name: 'Reset zoom' })).toBeVisible();
 });
 
+test('Power History slider remains responsive through repeated drag adjustments', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  const chart = page.getByTestId('usage-chart');
+  const leftHandle = chart.locator('.recharts-brush-traveller').first();
+  await expect(leftHandle).toBeVisible();
+  const initial = await leftHandle.boundingBox();
+  const chartBox = await chart.boundingBox();
+  expect(initial).not.toBeNull();
+  expect(chartBox).not.toBeNull();
+
+  const positions: number[] = [];
+  for (const targetX of [180, 280, 380]) {
+    await leftHandle.dragTo(chart, { targetPosition: { x: targetX, y: chartBox!.height - 14 }, force: true });
+    const moved = await leftHandle.boundingBox();
+    expect(moved).not.toBeNull();
+    positions.push(moved!.x);
+  }
+
+  expect(positions.every((position, index) => index === 0 || position > positions[index - 1]!)).toBe(true);
+  expect(positions.at(-1)! - initial!.x).toBeGreaterThan(200);
+  await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
+  await expect(page.getByRole('button', { name: 'Reset zoom' })).toBeVisible();
+});
+
 test('Home preserves measured zero while showing missing voltage as unavailable', async ({ page }) => {
   await page.unrouteAll({ behavior: 'wait' });
   await mockApi(page, { homeOverride: { ...home, devices: [{ ...home.devices[0]!, measurement: { ...home.devices[0]!.measurement, active_power_w: 0, voltage_v: null } }] } });

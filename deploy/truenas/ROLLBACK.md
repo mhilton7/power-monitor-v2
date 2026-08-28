@@ -1,6 +1,6 @@
 # Roll back PowerMeter V2 on TrueNAS
 
-> This UI-oriented source document is prepared for v0.1.0-rc.26. Public rc.25 and earlier releases
+> This UI-oriented source document is prepared for v0.1.0-rc.27. Public rc.26 and earlier releases
 > and immutable older releases retain their own attached instructions. Never
 > combine asset sets.
 
@@ -22,7 +22,7 @@ read a database touched by the new release.
 
 ## Restored rollback only
 
-A direct application-only rollback from v0.1.0-rc.26 to an earlier public
+A direct application-only rollback from v0.1.0-rc.27 to an earlier public
 release is unauthorized without a separate recovery test. Rc.26 uses Alembic
 head `20260821_0019`; revision 0019 refuses to discard customized billing
 configuration, revision 0018 refuses to remove lifecycle or catalog
