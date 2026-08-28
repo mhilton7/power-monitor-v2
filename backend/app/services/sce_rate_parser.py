@@ -7,7 +7,7 @@ from html.parser import HTMLParser
 from itertools import pairwise
 from typing import Any, Literal
 
-PARSER_VERSION = "sce-residential-public-v2"
+PARSER_VERSION = "sce-power-monitor-compatible-v3"
 CANDIDATE_SCHEMA = "sce-rate-candidate/1.0.0"
 
 PlanClassification = Literal[
@@ -49,25 +49,106 @@ class ParsedRateCandidate:
 
 
 class _VisibleText(HTMLParser):
+    """Collect visible text from the predecessor's bounded plan container.
+
+    The live SCE document includes site navigation, educational articles, and
+    FAQs containing rate-like words.  The predecessor parser succeeded because
+    it read the ``accordion-container-bg-layout`` plan region rather than the
+    entire document.  Prefer that exact region, then ``main``, and use the full
+    body only for isolated plan documents and deterministic parser fixtures.
+    """
+
+    _VOID_TAGS = frozenset(
+        {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "source",
+            "track",
+            "wbr",
+        }
+    )
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
+        self._depth = 0
         self._skip_depth = 0
-        self.values: list[str] = []
+        self._main_depth: int | None = None
+        self._primary_depths: list[int] = []
+        self._blocked_depths: list[int] = []
+        self._all_values: list[str] = []
+        self._main_values: list[str] = []
+        self._primary_values: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() in {"script", "style", "noscript", "template"}:
+        lower = tag.lower()
+        if lower not in self._VOID_TAGS:
+            self._depth += 1
+        attributes = {key.lower(): value or "" for key, value in attrs}
+        if lower in {"script", "style", "noscript", "template"}:
             self._skip_depth += 1
+        if self._main_depth is None and (
+            lower == "main" or attributes.get("role", "").lower() == "main"
+        ):
+            self._main_depth = self._depth
+        classes = set(attributes.get("class", "").lower().split())
+        if "accordion-container-bg-layout" in classes:
+            self._primary_depths.append(self._depth)
+        marker = " ".join(
+            (
+                attributes.get("id", ""),
+                attributes.get("class", ""),
+                attributes.get("aria-label", ""),
+            )
+        ).lower()
+        if lower in {"nav", "header", "footer", "aside"} or any(
+            value in marker
+            for value in (
+                "faq",
+                "frequently-asked",
+                "glossary",
+                "related-link",
+                "site-navigation",
+                "marketing",
+            )
+        ):
+            self._blocked_depths.append(self._depth)
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() in {"script", "style", "noscript", "template"} and self._skip_depth:
+        lower = tag.lower()
+        if lower in self._VOID_TAGS:
+            return
+        if lower in {"script", "style", "noscript", "template"} and self._skip_depth:
             self._skip_depth -= 1
+        if self._blocked_depths and self._blocked_depths[-1] == self._depth:
+            self._blocked_depths.pop()
+        if self._primary_depths and self._primary_depths[-1] == self._depth:
+            self._primary_depths.pop()
+        if self._main_depth == self._depth:
+            self._main_depth = None
+        self._depth = max(0, self._depth - 1)
 
     def handle_data(self, data: str) -> None:
-        if self._skip_depth:
+        if self._skip_depth or self._blocked_depths:
             return
         value = " ".join(data.replace("\xa0", " ").split())
         if value:
-            self.values.append(value)
+            self._all_values.append(value)
+            if self._main_depth is not None:
+                self._main_values.append(value)
+            if self._primary_depths:
+                self._primary_values.append(value)
+
+    @property
+    def values(self) -> list[str]:
+        return self._primary_values or self._main_values or self._all_values
 
 
 @dataclass(frozen=True)
@@ -208,7 +289,9 @@ def _require_time_sequence(text: str, expected: tuple[str, ...]) -> None:
             re.IGNORECASE,
         )
     )
-    if labels[: len(expected)] != expected:
+    observed = labels[: len(expected)]
+    legacy_terminal_midnight_omitted = expected[-1:] == ("12am",) and labels == expected[:-1]
+    if observed != expected and not legacy_terminal_midnight_omitted:
         raise SourceParseError(
             "TIME_BOUNDARY_MISMATCH",
             "SCE period time boundaries did not match the approved structure",
@@ -277,10 +360,10 @@ def _charge(block: str) -> Decimal:
     return value
 
 
-def _baseline_credit(block: str, required: bool) -> Decimal:
+def _baseline_credit(block: str, required: bool) -> tuple[Decimal, bool]:
     if not required:
         if re.search(r"BASELINE\s+CREDIT\s*:?\s*(?:\|\s*)?NONE", block, re.IGNORECASE):
-            return Decimal("0.00000000")
+            return Decimal("0.00000000"), True
         raise SourceParseError(
             "BASELINE_RULE_MISSING", "SCE baseline-credit absence is not explicit"
         )
@@ -290,29 +373,33 @@ def _baseline_credit(block: str, required: bool) -> Decimal:
         block,
         re.IGNORECASE,
     )
+    scope_verified = match is not None
     if match is None:
-        raise SourceParseError(
-            "BASELINE_RULE_MISSING",
-            "SCE capped baseline-credit rule is missing or ambiguous",
+        match = re.search(
+            r"BASELINE\s+CREDIT\s*:?\s*(?:\|\s*)?\$\s*(?P<amount>\d+(?:\.\d+)?)\s*"
+            r"(?:PER|/)\s*KWH",
+            block,
+            re.IGNORECASE,
         )
+    if match is None:
+        raise SourceParseError("BASELINE_RULE_MISSING", "SCE baseline credit is missing")
     value = Decimal(match.group("amount")).quantize(Decimal("0.00000001"))
     if value <= 0 or value > Decimal("1"):
         raise SourceParseError(
             "BASELINE_RULE_INVALID", "SCE baseline credit is outside safe bounds"
         )
-    return value
+    return value, scope_verified
 
 
-def _require_component_scope(block: str) -> None:
-    if not re.search(
-        r"RATES\s+SHOWN\s+REFLECT\s+PRICING.*DELIVERY\s+AND\s+GENERATION.*SCE",
-        block,
-        re.IGNORECASE | re.DOTALL,
-    ):
-        raise SourceParseError(
-            "RATE_COMPONENT_SCOPE_MISSING",
-            "SCE delivery/generation price-component scope is missing or ambiguous",
+def _component_scope_verified(block: str) -> bool:
+    return (
+        re.search(
+            r"RATES\s+SHOWN\s+REFLECT\s+PRICING.*DELIVERY\s+AND\s+GENERATION.*SCE",
+            block,
+            re.IGNORECASE | re.DOTALL,
         )
+        is not None
+    )
 
 
 def _classify_plan(text: str) -> PlanClassification:
@@ -377,14 +464,7 @@ def _holiday_treatment(text: str, classification: PlanClassification) -> Holiday
         return "no_special_treatment"
     if re.search(r"HOLIDAY\s+(?:RATE|SCHEDULE|PERIOD)", text, re.IGNORECASE):
         return "explicit_schedule"
-    raise SourceParseError(
-        "HOLIDAY_RULE_MISSING",
-        "the time-of-use SCE source does not establish holiday treatment",
-        evidence={
-            "classification": classification,
-            "required_day_types": ["weekday", "weekend", "holiday"],
-        },
-    )
+    return "unresolved"
 
 
 def _visible_text(body: bytes, media_type: str) -> str:
@@ -527,6 +607,7 @@ def _tiered_candidate(
                 "monthly_fixed_charge": "0.00000000",
                 "baseline_credit_per_kwh": "0.00000000",
                 "rate_components": "sce_delivery_and_generation_combined",
+                "rate_precision": "consumer_display_rounded",
                 "tier_threshold_basis": "home_baseline_allocation_review_required",
                 "periods": periods,
             }
@@ -595,6 +676,7 @@ def _flat_candidate(text: str) -> ParsedRateCandidate:
                 "monthly_fixed_charge": "0.00000000",
                 "baseline_credit_per_kwh": "0.00000000",
                 "rate_components": "sce_delivery_and_generation_combined",
+                "rate_precision": "consumer_display_rounded",
                 "periods": [
                     {
                         "season": "all",
@@ -652,12 +734,15 @@ def parse_sce_public_page(body: bytes, media_type: str) -> ParsedRateCandidate:
             "the SCE time-of-use source contains no supported plan section",
         )
     plans: list[dict[str, Any]] = []
+    component_scope_verified = True
+    baseline_scope_verified = True
     for index, definition in enumerate(matched_definitions):
         next_heading = (
             matched_definitions[index + 1].heading if index + 1 < len(matched_definitions) else None
         )
         block = _section(text, definition.heading, next_heading)
-        _require_component_scope(block)
+        plan_component_scope_verified = _component_scope_verified(block)
+        component_scope_verified = component_scope_verified and plan_component_scope_verified
         summer = _section(
             block,
             r"JUNE\s*[-\u2013\u2014]\s*SEPTEMBER",
@@ -668,12 +753,23 @@ def parse_sce_public_page(body: bytes, media_type: str) -> ParsedRateCandidate:
         periods.extend(_parse_group(summer, definition.groups[0]))
         periods.extend(_parse_group(summer, definition.groups[1]))
         periods.extend(_parse_group(winter, definition.groups[2]))
+        if treatment == "unresolved":
+            periods = [
+                {**period, "day_type": "weekend"}
+                if period["day_type"] == "weekend_holiday"
+                else period
+                for period in periods
+            ]
         if len(periods) != 10:
             raise SourceParseError(
                 "PERIOD_COUNT_INVALID",
                 "SCE plan does not contain the required complete period set",
                 evidence={"plan": definition.name, "observed_period_count": len(periods)},
             )
+        baseline_credit, plan_baseline_scope_verified = _baseline_credit(
+            block, definition.has_baseline_credit
+        )
+        baseline_scope_verified = baseline_scope_verified and plan_baseline_scope_verified
         plans.append(
             {
                 "rate_plan_name": definition.name,
@@ -685,11 +781,29 @@ def parse_sce_public_page(body: bytes, media_type: str) -> ParsedRateCandidate:
                 ),
                 "daily_fixed_charge": format(_charge(block), "f"),
                 "monthly_fixed_charge": "0.00000000",
-                "baseline_credit_per_kwh": format(
-                    _baseline_credit(block, definition.has_baseline_credit),
-                    "f",
+                "baseline_credit_per_kwh": format(baseline_credit, "f"),
+                "baseline_credit_scope": (
+                    "through_home_baseline_allocation"
+                    if plan_baseline_scope_verified
+                    else "unresolved"
                 ),
-                "rate_components": "sce_delivery_and_generation_combined",
+                "rate_components": (
+                    "sce_delivery_and_generation_combined"
+                    if plan_component_scope_verified
+                    else "unresolved"
+                ),
+                "rate_precision": "consumer_display_rounded",
+                "eligibility": (
+                    [
+                        "electric_vehicle",
+                        "plug_in_hybrid",
+                        "residential_battery",
+                        "heat_pump_or_electrification",
+                    ]
+                    if definition.name == "TOU-D-PRIME"
+                    else []
+                ),
+                "enrollment_status": "open_or_eligibility_required",
                 "periods": periods,
             }
         )
@@ -706,10 +820,17 @@ def parse_sce_public_page(body: bytes, media_type: str) -> ParsedRateCandidate:
         },
         "plan_classification": classification,
         "holiday_treatment": treatment,
-        "holiday_rule": "weekend_rates",
+        "holiday_rule": {
+            "weekend_schedule": "weekend_rates",
+            "no_special_treatment": "no_special_treatment",
+            "explicit_schedule": "explicit_schedule",
+            "unresolved": "unresolved",
+        }[treatment],
         "effective_start": effective_date,
         "effective_end": None,
         "effective_date_confirmation_required": effective_date is None,
+        "rate_component_scope_verified": component_scope_verified,
+        "baseline_credit_scope_verified": baseline_scope_verified,
         "plans": plans,
     }
     return ParsedRateCandidate(
@@ -722,10 +843,32 @@ def parse_sce_public_page(body: bytes, media_type: str) -> ParsedRateCandidate:
             "plan_count": len(plans),
             "period_count": sum(len(plan["periods"]) for plan in plans),
             "seasons": ["summer", "winter"],
-            "day_types": ["weekday", "weekend", "holiday"],
+            "day_types": (
+                ["weekday", "weekend", "holiday"]
+                if treatment != "unresolved"
+                else ["weekday", "weekend"]
+            ),
             "coverage": "complete",
             "price_unit": "USD/kWh",
             "effective_date": effective_date or "administrator_confirmation_required",
+            "warnings": [
+                "PUBLIC_SOURCE_PRICES_ARE_DISPLAY_ROUNDED",
+                *(
+                    ["HOLIDAY_TREATMENT_REQUIRES_AUTHORITATIVE_EVIDENCE"]
+                    if treatment == "unresolved"
+                    else []
+                ),
+                *(
+                    ["RATE_COMPONENT_SCOPE_REQUIRES_AUTHORITATIVE_EVIDENCE"]
+                    if not component_scope_verified
+                    else []
+                ),
+                *(
+                    ["BASELINE_CREDIT_SCOPE_REQUIRES_AUTHORITATIVE_EVIDENCE"]
+                    if not baseline_scope_verified
+                    else []
+                ),
+            ],
         },
     )
 

@@ -1,11 +1,45 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { adaptiveTimeTicks, groupDailyEnergy, localCalendarDay } from '../src/lib/chart';
 import { HomePage } from '../src/pages/HomePage';
-import { apiResponse, billing, device, history, home } from './fixtures';
+import { apiResponse, billing, device, history, home, homeScopes } from './fixtures';
 import { installFetchMock, renderWithProviders } from './render';
 
 describe('Home', () => {
+  it('keeps power and energy charts mounted while a new reading anchor is loading', async () => {
+    const requestUrl = (input: RequestInfo | URL) => typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    const fetchMock = installFetchMock((path, method) => path.includes('/history')
+      ? { status: 200, body: history }
+      : apiResponse(path, method));
+    const { queryClient } = renderWithProviders(<HomePage />);
+
+    expect(await screen.findByTestId('usage-chart')).toBeVisible();
+    expect(await screen.findByTestId('daily-chart')).toBeVisible();
+    const initialHistoryRequests = fetchMock.mock.calls.filter(([input]) => requestUrl(input).includes('/history')).length;
+    const settledFetch = fetchMock.getMockImplementation();
+    expect(settledFetch).toBeDefined();
+    fetchMock.mockImplementation((input, init) => requestUrl(input).includes('/history')
+      ? new Promise<Response>(() => undefined)
+      : settledFetch!(input, init));
+
+    act(() => {
+      queryClient.setQueryData(['home', homeScopes[0]!.id], {
+        ...home,
+        generated_at: '2026-08-13T17:33:15Z',
+      });
+    });
+
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => requestUrl(input).includes('/history')).length).toBeGreaterThan(initialHistoryRequests));
+    expect(screen.getByTestId('usage-chart')).toBeVisible();
+    expect(screen.getByTestId('daily-chart')).toBeVisible();
+    expect(screen.queryByText('Loading saved readings')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading daily energy')).not.toBeInTheDocument();
+  });
+
   it('limits adaptive time ticks to the available label width', () => {
     const start = Date.parse('2026-08-20T00:00:00Z');
     const end = Date.parse('2026-08-21T00:00:00Z');

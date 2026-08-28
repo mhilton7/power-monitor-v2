@@ -245,7 +245,7 @@ async def ensure_default_sce_source(
 
 
 async def ensure_default_sce_catalog_source(session: AsyncSession) -> RateSource:
-    source = await session.scalar(
+    named = await session.scalar(
         select(RateSource)
         .where(
             RateSource.name == SCE_CATALOG_SOURCE_NAME,
@@ -254,31 +254,57 @@ async def ensure_default_sce_catalog_source(session: AsyncSession) -> RateSource
         .with_for_update()
         .limit(1)
     )
-    if source is not None:
-        if source.https_url != SCE_CATALOG_URL:
-            collision = await session.scalar(
-                select(RateSource.id).where(
-                    RateSource.https_url == SCE_CATALOG_URL,
-                    RateSource.id != source.id,
-                )
-            )
-            if collision is not None:
-                raise ValueError("official SCE catalog source URL is already owned")
-        source.https_url = SCE_CATALOG_URL
-        source.enabled = True
-        source.check_interval_hours = 168
-        await session.flush()
-        return source
-    source = await session.scalar(
+    exact = await session.scalar(
         select(RateSource).where(RateSource.https_url == SCE_CATALOG_URL).with_for_update()
     )
-    if source is not None:
-        source.name = SCE_CATALOG_SOURCE_NAME
-        source.source_type = "official_https"
-        source.enabled = True
-        source.check_interval_hours = 168
+    if named is not None and named.https_url == SCE_CATALOG_URL:
+        named.enabled = True
+        named.check_interval_hours = 168
         await session.flush()
-        return cast(RateSource, source)
+        return named
+    if named is not None:
+        legacy_id = named.id
+        named.name = "SCE residential rate catalog inventory (legacy root)"
+        named.enabled = False
+        if exact is None:
+            exact = RateSource(
+                name=SCE_CATALOG_SOURCE_NAME,
+                source_type="official_https",
+                https_url=SCE_CATALOG_URL,
+                enabled=True,
+                check_interval_hours=168,
+            )
+            session.add(exact)
+            await session.flush()
+        else:
+            exact.name = SCE_CATALOG_SOURCE_NAME
+            exact.source_type = "official_https"
+            exact.enabled = True
+            exact.check_interval_hours = 168
+        session.add(
+            AuditEvent(
+                actor_user_id=None,
+                event_code="RATE_SOURCE_IDENTITY_REPAIRED",
+                target_type="rate_source",
+                target_id=exact.id,
+                details={
+                    "operation": "catalog_source_identity_repair",
+                    "legacy_source_id": legacy_id,
+                    "canonical_source_id": exact.id,
+                    "evidence_preserved": True,
+                    "rows_deleted": 0,
+                },
+            )
+        )
+        await session.flush()
+        return exact
+    if exact is not None:
+        exact.name = SCE_CATALOG_SOURCE_NAME
+        exact.source_type = "official_https"
+        exact.enabled = True
+        exact.check_interval_hours = 168
+        await session.flush()
+        return exact
     candidate = RateSource(
         name=SCE_CATALOG_SOURCE_NAME,
         source_type="official_https",
@@ -629,7 +655,13 @@ async def _crawl_sce_catalog(
         source_url=root_url,
     )
     root_links = root_inspection.links
-    root_parsed: ParsedRateCandidate | None = None
+    root_parsed, root_parser_error = await _parse_catalog_document(
+        root_fetch.body,
+        root_fetch.media_type,
+        timeout_seconds=settings.sce_catalog_parse_timeout_seconds,
+    )
+    if not _parsed_catalog_names(root_parsed):
+        root_parsed = None
 
     entries: dict[str, DiscoveredScePlan] = {}
     for item in discover_sce_catalog(
@@ -648,13 +680,21 @@ async def _crawl_sce_catalog(
             "artifact_sha256": root_fetch.sha256,
             "artifact_revision_id": root_revision.id,
             "classification": (
-                "catalog_index"
+                "catalog_index_with_primary_plans"
+                if root_parsed is not None and root_inspection.error_code is None
+                else "catalog_index"
                 if root_links and root_inspection.error_code is None
                 else "unresolved_empty_catalog"
             ),
             "parser_error_code": (
                 root_inspection.error_code
-                or ("CATALOG_INDEX_NO_LINKS_EXTRACTED" if not root_links else None)
+                or (
+                    "CATALOG_INDEX_NO_LINKS_EXTRACTED"
+                    if not root_links and root_parsed is None
+                    else root_parser_error
+                    if root_parsed is None
+                    else None
+                )
             ),
         }
     ]
@@ -705,7 +745,7 @@ async def _crawl_sce_catalog(
     limit_reasons: set[str] = set()
     if root_inspection.error_code is not None:
         limit_reasons.add("root_catalog_index_parse_failed")
-    if not root_links:
+    if not root_links and root_parsed is None:
         limit_reasons.add("root_catalog_index_no_links")
     while queue:
         link, depth = queue.popleft()
@@ -857,6 +897,7 @@ async def _crawl_sce_catalog(
             fetched.media_type,
             source_url=fetched.url,
             parsed=parsed,
+            enrichment_for=link.canonical_name,
         ):
             _merge_catalog_entry(entries, item)
         if link.canonical_name in parsed_names:

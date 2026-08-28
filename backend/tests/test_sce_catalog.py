@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -10,7 +11,14 @@ from pathlib import Path
 import pytest
 from backend.app.config import Settings
 from backend.app.main import session_factory
-from backend.app.models import Home, RateSource, RateSyncRun, SceCatalogEntry
+from backend.app.models import (
+    AuditEvent,
+    Home,
+    RateSource,
+    RateSourceRevision,
+    RateSyncRun,
+    SceCatalogEntry,
+)
 from backend.app.services.rate_sources import SourceFetch, SourceHop, fetch_official_source
 from backend.app.services.rate_sync import (
     SCE_CATALOG_SOURCE_NAME,
@@ -108,8 +116,126 @@ async def test_live_public_sce_catalog_root_is_fetchable_and_main_scoped() -> No
         fetched.media_type,
         source_url=fetched.url,
     )
-    assert {link.canonical_name for link in links}.issubset(SUPPORTED_PLAN_NAMES)
+    parsed = parse_sce_tou_public_page(fetched.body, fetched.media_type)
+    plans = discover_sce_catalog(
+        fetched.body,
+        fetched.media_type,
+        source_url=fetched.url,
+        parsed=parsed,
+    )
+    assert {plan.canonical_name for plan in plans} == set(SUPPORTED_PLAN_NAMES)
+    assert all(
+        plan.discovery_state == "parsed" for plan in plans if plan.canonical_name != "DOMESTIC"
+    )
+    assert next(plan for plan in plans if plan.canonical_name == "DOMESTIC").discovery_state == (
+        "requires_parser"
+    )
+    assert parsed.normalized_rates["holiday_treatment"] == "unresolved"
+    assert parsed.normalized_rates["effective_date_confirmation_required"] is True
     assert all("/my-account/" not in link.target_url.lower() for link in links)
+    assert fetched.hops
+
+    tiered_link = next(link for link in links if link.canonical_name == "DOMESTIC")
+    await asyncio.sleep(0.25)
+    tiered_fetch = await fetch_official_source(
+        tiered_link.target_url,
+        max_bytes=2_000_000,
+        max_redirects=3,
+        connect_timeout_seconds=5,
+        read_timeout_seconds=15,
+        total_timeout_seconds=30,
+    )
+    assert tiered_fetch.status_code == 200
+    assert tiered_fetch.body is not None
+    assert tiered_fetch.media_type in {"text/html", "application/xhtml+xml"}
+    tiered_parsed = parse_sce_tou_public_page(tiered_fetch.body, tiered_fetch.media_type)
+    tiered_plans = discover_sce_catalog(
+        tiered_fetch.body,
+        tiered_fetch.media_type,
+        source_url=tiered_fetch.url,
+        parsed=tiered_parsed,
+        enrichment_for="DOMESTIC",
+    )
+    assert [(plan.canonical_name, plan.discovery_state) for plan in tiered_plans] == [
+        ("DOMESTIC", "parsed")
+    ]
+    assert tiered_fetch.hops
+
+
+def test_current_live_structure_discovers_embedded_tou_and_exact_tiered_link_only() -> None:
+    body = _catalog_body("current-live-time-of-use-plans.html")
+    parsed = parse_sce_tou_public_page(body, "text/html")
+    inspection = inspect_sce_catalog_links(body, "text/html", source_url=SCE_CATALOG_URL)
+    plans = discover_sce_catalog(
+        body,
+        "text/html",
+        source_url=SCE_CATALOG_URL,
+        parsed=parsed,
+    )
+
+    assert inspection.primary_plans == (
+        ("TOU-D-4-9PM", "TOU-D 4 PM to 9 PM"),
+        ("TOU-D-5-8PM", "TOU-D 5 PM to 8 PM"),
+        ("TOU-D-PRIME", "TOU-D-PRIME"),
+    )
+    assert [(link.canonical_name, link.target_url) for link in inspection.links] == [
+        ("DOMESTIC", TIERED_URL)
+    ]
+    assert {plan.canonical_name for plan in plans} == set(SUPPORTED_PLAN_NAMES)
+    assert all(
+        plan.discovery_state == "parsed" for plan in plans if plan.canonical_name != "DOMESTIC"
+    )
+    assert next(plan for plan in plans if plan.canonical_name == "DOMESTIC").discovery_state == (
+        "requires_parser"
+    )
+    serialized = json.dumps([plan.__dict__ for plan in plans], sort_keys=True)
+    for false_candidate in (
+        "Rate Plans",
+        "Solar Billing Plan",
+        "Understanding Updates to Your Electricity Bill",
+        "TOU-D-A",
+        "TOU-D-B",
+        "TOU-D-T",
+    ):
+        assert false_candidate not in serialized
+
+
+def test_child_enrichment_cannot_introduce_another_primary_plan() -> None:
+    parsed = parse_sce_tou_public_page(
+        _catalog_body("current-live-time-of-use-plans.html"), "text/html"
+    )
+    entries = discover_sce_catalog(
+        _catalog_body("current-live-time-of-use-plans.html"),
+        "text/html",
+        source_url=TOU_4_URL,
+        parsed=parsed,
+        enrichment_for="TOU-D-4-9PM",
+    )
+
+    assert [entry.canonical_name for entry in entries] == ["TOU-D-4-9PM"]
+
+
+def test_new_primary_tou_heading_is_retained_as_parser_update_not_invented() -> None:
+    body = b"""
+      <html><body><main>
+        <div class="accordion-container-bg-layout">
+          <h2 class="accordion-container-header-button-headline">TOU-D-FUTURE</h2>
+          <p>The official page layout changed and has no reusable rate schedule yet.</p>
+        </div>
+        <section class="faq"><h2>TOU-D-FAKE FAQ</h2></section>
+      </main></body></html>
+    """
+    plans = discover_sce_catalog(
+        body,
+        "text/html",
+        source_url=SCE_CATALOG_URL,
+        parsed=None,
+    )
+
+    assert [(plan.canonical_name, plan.discovery_state) for plan in plans] == [
+        ("TOU-D-FUTURE", "requires_parser")
+    ]
+    assert plans[0].normalized_plan["discovery_evidence"]["kind"] == ("primary_plan_heading")
 
 
 def test_discovery_is_exact_main_scoped_and_rejects_false_candidates() -> None:
@@ -258,6 +384,45 @@ def test_zero_period_candidate_is_not_complete() -> None:
     assert tou.normalized_plan == {}
 
 
+def test_power_monitor_predecessor_fixture_characterizes_schedule_semantics() -> None:
+    """Freeze the proven predecessor output before adapting its parser behavior."""
+
+    parsed = parse_sce_tou_public_page(
+        _catalog_body("power-monitor-public-tou-page.html"),
+        "text/html",
+    )
+    plan = parsed.normalized_rates["plans"][0]
+
+    assert plan["rate_plan_name"] == "TOU-D-4-9PM"
+    assert plan["daily_fixed_charge"] == "0.79000000"
+    assert plan["baseline_credit_per_kwh"] == "0.10000000"
+    assert parsed.normalized_rates["effective_start"] is None
+    assert parsed.normalized_rates["effective_date_confirmation_required"] is True
+    assert parsed.normalized_rates["holiday_treatment"] == "unresolved"
+    assert [
+        (
+            period["season"],
+            period["day_type"],
+            period["name"],
+            period["start_minute"],
+            period["end_minute"],
+            period["price_per_kwh"],
+        )
+        for period in plan["periods"]
+    ] == [
+        ("summer", "weekday", "off_peak", 0, 960, "0.34000000"),
+        ("summer", "weekday", "on_peak", 960, 1260, "0.58000000"),
+        ("summer", "weekday", "off_peak", 1260, 1440, "0.34000000"),
+        ("summer", "weekend", "off_peak", 0, 960, "0.34000000"),
+        ("summer", "weekend", "mid_peak", 960, 1260, "0.46000000"),
+        ("summer", "weekend", "off_peak", 1260, 1440, "0.34000000"),
+        ("winter", "all_days", "off_peak", 0, 480, "0.37000000"),
+        ("winter", "all_days", "super_off_peak", 480, 960, "0.33000000"),
+        ("winter", "all_days", "mid_peak", 960, 1260, "0.51000000"),
+        ("winter", "all_days", "off_peak", 1260, 1440, "0.37000000"),
+    ]
+
+
 @pytest.mark.parametrize(
     ("fixture_name", "canonical_name", "period_count"),
     (
@@ -316,7 +481,80 @@ async def test_catalog_source_adopts_exact_official_root_without_losing_identity
 
 
 @pytest.mark.asyncio
-async def test_bounded_catalog_crawl_fetches_only_four_authorized_plan_sources(
+async def test_catalog_source_collision_is_reconciled_without_deleting_evidence(
+    owner_client: AsyncClient,
+) -> None:
+    del owner_client
+    old_root = "https://www.sce.com/save-money/rates-financing/residential-rate-plans"
+    async with session_factory() as session:
+        legacy = RateSource(
+            name=SCE_CATALOG_SOURCE_NAME,
+            source_type="official_https",
+            https_url=old_root,
+            enabled=True,
+        )
+        exact = RateSource(
+            name="SCE residential TOU public page",
+            source_type="official_https",
+            https_url=SCE_CATALOG_URL,
+            enabled=True,
+        )
+        session.add_all((legacy, exact))
+        await session.flush()
+        session.add_all(
+            (
+                RateSourceRevision(
+                    source_id=legacy.id,
+                    artifact_sha256="a" * 64,
+                    parser_version="legacy-catalog-parser",
+                ),
+                RateSourceRevision(
+                    source_id=exact.id,
+                    artifact_sha256="b" * 64,
+                    parser_version="exact-root-parser",
+                ),
+            )
+        )
+        await session.commit()
+        legacy_id = legacy.id
+        exact_id = exact.id
+
+    async with session_factory() as session:
+        canonical = await ensure_default_sce_catalog_source(session)
+        await session.commit()
+        assert canonical.id == exact_id
+        assert canonical.name == SCE_CATALOG_SOURCE_NAME
+        assert canonical.enabled is True
+
+    async with session_factory() as session:
+        preserved_legacy = await session.get(RateSource, legacy_id)
+        assert preserved_legacy is not None
+        assert preserved_legacy.name == "SCE residential rate catalog inventory (legacy root)"
+        assert preserved_legacy.enabled is False
+        revisions = (
+            await session.scalars(
+                select(RateSourceRevision).where(
+                    RateSourceRevision.source_id.in_((legacy_id, exact_id))
+                )
+            )
+        ).all()
+        assert {(revision.source_id, revision.artifact_sha256) for revision in revisions} == {
+            (legacy_id, "a" * 64),
+            (exact_id, "b" * 64),
+        }
+        audit = await session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.event_code == "RATE_SOURCE_IDENTITY_REPAIRED",
+                AuditEvent.target_id == exact_id,
+            )
+        )
+        assert audit is not None
+        assert audit.details["evidence_preserved"] is True
+        assert audit.details["rows_deleted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_bounded_catalog_crawl_parses_root_plans_and_fetches_only_tiered_detail(
     owner_client: AsyncClient,
     catalog_artifact_dir: Path,
 ) -> None:
@@ -325,7 +563,7 @@ async def test_bounded_catalog_crawl_fetches_only_four_authorized_plan_sources(
     async def fetcher(url: str, **kwargs: object) -> SourceFetch:
         requests.append(url)
         if url == SCE_CATALOG_URL:
-            body = _catalog_body("time-of-use-plans-v2.html")
+            body = _catalog_body("current-live-time-of-use-plans.html")
         else:
             body = _catalog_body(DETAIL_FIXTURES[url])
         max_bytes = kwargs["max_bytes"]
@@ -385,13 +623,15 @@ async def test_bounded_catalog_crawl_fetches_only_four_authorized_plan_sources(
         ).all()
         assert {entry.public_plan_name for entry in entries} == set(SUPPORTED_PLAN_NAMES.values())
 
-    assert requests == [SCE_CATALOG_URL, TIERED_URL, TOU_4_URL, TOU_5_URL, TOU_PRIME_URL]
+    assert requests == [SCE_CATALOG_URL, TIERED_URL]
     response = await owner_client.get(f"/api/v1/rate-sources/catalog?home_id={home_id}")
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["catalog_ready"] is True
     assert payload["summary"]["plans_discovered"] == 4
     assert {plan["canonical_name"] for plan in payload["plans"]} == set(SUPPORTED_PLAN_NAMES)
+    assert all(plan["rate_precision"] == "consumer_display_rounded" for plan in payload["plans"])
+    assert all(plan["exact_rates_verified"] is False for plan in payload["plans"])
 
 
 @pytest.mark.asyncio
@@ -548,7 +788,7 @@ async def test_catalog_api_uses_latest_complete_source_after_later_failed_check(
         revision = RateSourceRevision(
             source_id=source.id,
             artifact_sha256="c" * 64,
-            parser_version="sce-residential-catalog-crawl-v2",
+            parser_version="sce-power-monitor-compatible-crawl-v3",
             retrieved_at=datetime(2026, 8, 20, tzinfo=UTC),
         )
         session.add(revision)
@@ -566,6 +806,21 @@ async def test_catalog_api_uses_latest_complete_source_after_later_failed_check(
                 eligibility=list(plan.eligibility),
                 discovery_state="parsed",
                 normalized_plan=plan.normalized_plan,
+            )
+        )
+        session.add(
+            SceCatalogEntry(
+                source_revision_id=revision.id,
+                source_url="https://www.sce.com/save-money/solar-billing-plan",
+                source_level=2,
+                official_schedule_code=None,
+                public_plan_name="Solar Billing Plan Maximize savings with solar energy credits",
+                canonical_name="SOLAR-BILLING-PLAN",
+                plan_type="unknown",
+                enrollment_status="unknown",
+                eligibility=[],
+                discovery_state="parsed",
+                normalized_plan={},
             )
         )
         session.add(
@@ -608,4 +863,9 @@ async def test_catalog_api_uses_latest_complete_source_after_later_failed_check(
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["live_source_access_performed"] is False
-    assert payload["plans"][0]["canonical_name"] == "TOU-D-4-9PM"
+    assert [plan["canonical_name"] for plan in payload["plans"]] == ["TOU-D-4-9PM"]
+    async with session_factory() as session:
+        preserved_false_evidence = await session.scalar(
+            select(SceCatalogEntry).where(SceCatalogEntry.canonical_name == "SOLAR-BILLING-PLAN")
+        )
+        assert preserved_false_evidence is not None

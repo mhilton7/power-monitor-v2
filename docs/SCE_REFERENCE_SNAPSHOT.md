@@ -1,22 +1,29 @@
 # SCE public-page reference snapshot
 
-Checked in UTC on **2026-08-13** against the official [SCE Time-of-Use Rate Plans](https://www.sce.com/save-money/rates-financing/residential-rate-plans/time-of-use-plans) page.
+Checked in UTC on **2026-08-28** against the official [SCE Time-of-Use Rate Plans](https://www.sce.com/save-money/rates-financing/residential-rate-plans/time-of-use-plans) page.
 
 | Evidence | Value |
 |---|---|
 | Final URL | `https://www.sce.com/save-money/rates-financing/residential-rate-plans/time-of-use-plans` |
 | HTTP result | `200` |
-| Response bytes | `299557` |
-| Response SHA-256 | `f1e42bb9f0adac1760b88f18b962b36f681db6f22973bbb3891c5ca8b27b80af` |
-| ETag | `"1786644703-gzip"` |
-| Last-Modified | `2026-08-13T18:11:43Z` |
-| Pinned connected peer | `45.60.77.211` (from the prevalidated public DNS set) |
+| HTTP content type | `text/html` |
+| Redirects | `0` |
+| Response bytes | `301779` |
+| Response SHA-256 | `06c529356cec7de8864df0bae3a41108de8a8a8c7f7ad9058cae569b0ea9b5ec` |
+| ETag | `"1787767107-gzip"` |
+| Last-Modified | `2026-08-26T17:58:27Z` |
 
 The response is mutable public-page evidence. Its hash is not a tariff effective date. Release/sync processing must retain its own immutable artifact and require an official tariff date or administrator confirmation.
 
-The current page does not explicitly state holiday treatment. The production strict parser
-therefore records `HOLIDAY_RULE_MISSING` and creates no normalized candidate from this page
-alone. This is review evidence, not a reason to infer that holidays follow weekend pricing.
+The current page embeds the three TOU schedules inside the primary
+`accordion-container-bg-layout` region and links separately to the Tiered Rate Plan. The
+bounded production crawl parses those primary TOU sections and follows only that exact Tiered
+link. It does not crawl navigation, footer, FAQ, solar, glossary, related, or educational links.
+
+The page does not explicitly state holiday treatment or an official tariff effective date.
+The parser therefore records `holiday_treatment=unresolved`, preserves the displayed rates as
+`consumer_display_rounded`, and requires authoritative tariff evidence before publication. It
+does not infer a holiday rule, effective date, component precision, or calculation-grade price.
 
 Common components observed: summer June–September; winter October–May; base service charge `$0.79/day`; TOU-D-4-9PM and TOU-D-5-8PM baseline credit `$0.10/kWh` up to configured baseline allocation; TOU-D-PRIME no baseline credit. Listed rates combine SCE delivery and generation; CCA or Direct Access generation can differ.
 
