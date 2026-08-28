@@ -1,6 +1,6 @@
 # Upgrade PowerMeter V2 on TrueNAS
 
-> This UI-only flow is prepared for the complete signed v0.1.0-rc.26 release
+> This UI-only flow is prepared for the complete signed v0.1.0-rc.27 release
 > asset set. Public rc.25 and earlier releases retain their attached
 > procedures. Never mix release asset sets.
 

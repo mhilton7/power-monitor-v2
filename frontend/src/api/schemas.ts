@@ -406,7 +406,11 @@ export const normalizedRatePlanSchema = z.object({
   daily_fixed_charge: decimal,
   monthly_fixed_charge: decimal,
   baseline_credit_per_kwh: decimal,
-  rate_components: z.enum(['sce_delivery_and_generation_combined', 'administrator_entered_combined_price']),
+  baseline_credit_scope: z.enum(['through_home_baseline_allocation', 'unresolved']).optional(),
+  rate_components: z.enum(['sce_delivery_and_generation_combined', 'administrator_entered_combined_price', 'unresolved']),
+  rate_precision: z.enum(['consumer_display_rounded', 'approved_tariff_exact', 'unverified']).default('unverified'),
+  eligibility: z.array(z.union([z.string(), z.record(z.string(), z.unknown())])).default([]),
+  enrollment_status: z.string().optional(),
   tier_threshold_basis: z.string().optional(),
   periods: z.array(rateCandidatePeriodSchema).min(1),
 }).strict();
@@ -422,10 +426,12 @@ export const normalizedRateCandidateSchema = z.object({
     summer: z.object({ start_month: z.number().int().min(1).max(12), end_month: z.number().int().min(1).max(12) }).strict(),
     winter: z.object({ start_month: z.number().int().min(1).max(12), end_month: z.number().int().min(1).max(12) }).strict(),
   }).strict(),
-  holiday_rule: z.enum(['not_applicable', 'weekend_rates', 'administrator_entered_schedule']),
+  holiday_rule: z.enum(['not_applicable', 'weekend_rates', 'no_special_treatment', 'explicit_schedule', 'unresolved', 'administrator_entered_schedule']),
   effective_start: rateEffectiveDate.nullable(),
   effective_end: rateEffectiveDate.nullable(),
-  effective_date_confirmation_required: z.literal(true),
+  effective_date_confirmation_required: z.boolean(),
+  rate_component_scope_verified: z.boolean().optional(),
+  baseline_credit_scope_verified: z.boolean().optional(),
   plans: z.array(normalizedRatePlanSchema).min(1),
 }).strict();
 

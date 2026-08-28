@@ -231,8 +231,8 @@ jobs:
           --frontend-version 0.1.0-rc.1
           --frontend-asset-id "ci-${GITHUB_SHA:0:16}"
           --database-revision 20260821_0019
-          --firmware-release-url https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.26
-          --firmware-tag v0.1.0-rc.26
+          --firmware-release-url https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.27
+          --firmware-tag v0.1.0-rc.27
           --firmware-revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           --firmware-image-sha256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
           --firmware-build-number 29

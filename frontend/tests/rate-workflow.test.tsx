@@ -120,20 +120,22 @@ describe('exact-home SCE rate workflow', () => {
     })).toThrow();
   });
 
-  it('accepts the locked tiered candidate returned by the official SCE parser', () => {
+  it('accepts the dated rounded-price tiered candidate returned by the official SCE parser', () => {
     const normalized = {
       ...rateCandidate.normalized_rates,
       plan_classification: 'seasonal_tiered',
       holiday_treatment: 'not_applicable',
       holiday_rule: 'not_applicable',
       effective_start: '2026-08-01',
+      effective_date_confirmation_required: false,
       plans: [{
         ...rateCandidate.normalized_rates.plans[0],
         pricing_model: 'seasonal_tiered',
+        rate_precision: 'consumer_display_rounded',
         tier_threshold_basis: 'home_baseline_allocation_review_required',
       }],
     };
-    expect(rateCandidateSchema.parse({
+    const parsed = rateCandidateSchema.parse({
       ...rateCandidate,
       normalized_rates: normalized,
       validation_evidence: {
@@ -156,7 +158,12 @@ describe('exact-home SCE rate workflow', () => {
         change_count: 0,
         truncated: false,
       },
-    }).normalized_rates.effective_start).toBe('2026-08-01');
+    });
+    expect(parsed.normalized_rates.effective_start).toBe('2026-08-01');
+    expect(parsed.normalized_rates.effective_date_confirmation_required).toBe(false);
+    expect(parsed.normalized_rates.plans[0]?.rate_precision).toBe('consumer_display_rounded');
+    expect(parsed.diff.after?.effective_date_confirmation_required).toBe(false);
+    expect(parsed.diff.after?.plans[0]?.rate_precision).toBe('consumer_display_rounded');
   });
 
   it('shows semantic tier evidence without allowing an incomplete baseline to advance', async () => {
