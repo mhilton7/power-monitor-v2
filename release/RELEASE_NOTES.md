@@ -63,6 +63,8 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
 - API, frontend, and backup final images require Alpine OpenSSL 3.5.8-r0, closing
   CVE-2026-14456; the tagged workflow still scans every final image and fails
   on any HIGH or CRITICAL finding.
+- The API final image also requires Alpine sqlite-libs 3.53.4-r0, closing
+  CVE-2026-11822 and CVE-2026-11824 before publication.
 - Diagnostics now distinguishes server receipt time from trusted sensor sample
   time and reports only server-owned stored-History and accepted-sample
   evidence. Additive OTA lifecycle response evidence remains schema-compatible.

@@ -619,6 +619,7 @@ def test_api_image_uses_the_zero_finding_alpine_base_and_pinned_ocr() -> None:
     assert "slim-bookworm" not in dockerfile
     assert "/sbin/apk add --no-cache" in dockerfile
     assert "openssl=3.5.8-r0" in dockerfile
+    assert "sqlite-libs=3.53.4-r0" in dockerfile
     assert "tesseract-ocr=5.5.1-r0" in dockerfile
     assert "tesseract-ocr-data-eng=5.5.1-r0" in dockerfile
     assert "font-dejavu=2.37-r6" in dockerfile

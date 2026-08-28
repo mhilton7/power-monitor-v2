@@ -80,6 +80,7 @@ ENV PYTHONUNBUFFERED=1 \
 RUN /sbin/apk add --no-cache \
        acl=2.3.2-r1 \
        openssl=3.5.8-r0 \
+       sqlite-libs=3.53.4-r0 \
        tesseract-ocr=5.5.1-r0 \
        tesseract-ocr-data-eng=5.5.1-r0 \
        font-dejavu=2.37-r6 \
