@@ -65,6 +65,61 @@ test('Power History slider updates a readable non-overlapping selected range', a
   await expect(page.getByRole('button', { name: 'Reset zoom' })).toHaveCount(0);
 });
 
+test('Power History keeps its selected timestamps through a five-second dashboard refresh without a white chart outline', async ({ page }) => {
+  let homeRequests = 0;
+  await page.addInitScript(() => {
+    class MeasurementEventSource extends EventTarget {
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      static readonly CLOSED = 2;
+      readonly CONNECTING = 0;
+      readonly OPEN = 1;
+      readonly CLOSED = 2;
+      readonly readyState = 1;
+      readonly url = '/api/v1/events';
+      readonly withCredentials = true;
+      onerror = null;
+      onmessage = null;
+      onopen = null;
+
+      constructor() {
+        super();
+        window.setTimeout(() => this.dispatchEvent(new Event('measurement_accepted')), 5_000);
+      }
+
+      close() { /* The test emits one accepted measurement. */ }
+    }
+    window.EventSource = MeasurementEventSource as unknown as typeof EventSource;
+  });
+  await page.route('**/api/v1/home?**', async (route) => {
+    homeRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...home, generated_at: new Date(Date.parse(home.generated_at) + homeRequests * 5_000).toISOString() }),
+    });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+
+  const chart = page.getByTestId('usage-chart');
+  const rangeLabel = page.getByTestId('power-selected-range');
+  const leftHandle = chart.locator('.recharts-brush-traveller').first();
+  const brushSlide = chart.locator('.recharts-brush-slide');
+  await leftHandle.dragTo(brushSlide, { targetPosition: { x: 150, y: 10 }, force: true });
+  await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
+  const selected = await rangeLabel.innerText();
+
+  const surface = chart.locator('.recharts-surface');
+  await surface.focus();
+  await expect.poll(() => surface.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe('none');
+
+  await expect.poll(() => homeRequests, { timeout: 8_000 }).toBeGreaterThanOrEqual(2);
+  await expect(rangeLabel).toHaveText(selected);
+  await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
+  await expect(page.getByRole('button', { name: 'Reset zoom' })).toBeVisible();
+});
+
 test('Power History five-second range interaction stays local and avoids disruptive long tasks', async ({ page }, testInfo) => {
   let historyRequests = 0;
   page.on('request', (request) => {

@@ -196,6 +196,36 @@ class RateCandidateActivationRequest(BaseModel):
     utility_account_id: str = Field(min_length=36, max_length=36)
 
 
+class RateSourceCheckRequest(BaseModel):
+    """Optional administrator-selected official SCE page for a source check."""
+
+    model_config = ConfigDict(extra="forbid")
+    source_url: str | None = Field(default=None, min_length=12, max_length=500)
+
+    @field_validator("source_url")
+    @classmethod
+    def bounded_official_sce_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        parsed = urlparse(cleaned)
+        if (
+            any(ord(character) <= 32 or ord(character) == 127 for character in cleaned)
+            or parsed.scheme != "https"
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in (None, 443)
+            or parsed.fragment
+            or parsed.query
+            or (parsed.hostname or "").lower().rstrip(".") not in {"sce.com", "www.sce.com"}
+            or not parsed.path.startswith(("/save-money/rates-financing/", "/regulatory/"))
+        ):
+            raise ValueError(
+                "source URL must be ordinary HTTPS on an approved official SCE rate path"
+            )
+        return cleaned.rstrip("/")
+
+
 class ManualRatePeriodRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     season: Literal["summer", "winter", "all"]

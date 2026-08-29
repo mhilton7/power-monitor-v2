@@ -375,6 +375,26 @@
 .dashboard-chart-card .chart-actions .text-button { padding: 6px 2px; white-space: nowrap; }
 .dashboard-chart-card .chart-helper { margin: -8px 0 4px; font-size: .68rem; }
 
+.dashboard-power-history .chart-wrap:focus,
+.dashboard-power-history .chart-wrap:focus-visible,
+.dashboard-power-history .recharts-wrapper:focus,
+.dashboard-power-history .recharts-wrapper:focus-visible,
+.dashboard-power-history .recharts-surface:focus,
+.dashboard-power-history .recharts-surface:focus-visible,
+.dashboard-power-history .recharts-brush-traveller:focus,
+.dashboard-power-history .recharts-brush-traveller:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.dashboard-power-history .recharts-surface:focus .recharts-brush-slide,
+.dashboard-power-history .recharts-surface:focus-visible .recharts-brush-slide,
+.dashboard-power-history .recharts-brush-traveller:focus rect,
+.dashboard-power-history .recharts-brush-traveller:focus-visible rect {
+  stroke: var(--accent-bright);
+  stroke-width: 2px;
+}
+
 .dashboard-power-history .chart-footer {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

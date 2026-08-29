@@ -1829,6 +1829,27 @@
         "title": "RatePublishRequest",
         "type": "object"
       },
+      "RateSourceCheckRequest": {
+        "additionalProperties": false,
+        "description": "Optional administrator-selected official SCE page for a source check.",
+        "properties": {
+          "source_url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 12,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "title": "RateSourceCheckRequest",
+        "type": "object"
+      },
       "RoleCreateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2567,7 +2588,7 @@
   },
   "info": {
     "title": "PowerMeter V2 API",
-    "version": "0.1.0-rc.27"
+    "version": "0.1.0-rc.28"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -8743,6 +8764,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RateSourceCheckRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "content": {

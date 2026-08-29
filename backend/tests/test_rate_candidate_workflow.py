@@ -2387,10 +2387,10 @@ async def test_scheduled_sync_projects_one_network_result_to_each_home(
         )
         await session.flush()
         result = await sync_due_rate_sources(session, settings, fetcher=fetch_once)
-        assert result == {"checked": 2, "failed": 0, "review_required": 1, "unchanged": 1}
-        assert calls == 3
+        assert result == {"checked": 1, "failed": 0, "review_required": 0, "unchanged": 1}
+        assert calls == 2
         runs = (await session.scalars(select(RateSyncRun))).all()
-        assert len(runs) == 4
+        assert len(runs) == 2
         assert {run.home_id for run in runs} == set((await session.scalars(select(Home.id))).all())
         assert all(run.evidence["initiator"] == "scheduled_worker" for run in runs)
         assert all(run.home_id is not None for run in runs)

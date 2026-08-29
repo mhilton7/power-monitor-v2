@@ -314,6 +314,9 @@ code { max-width: 100%; overflow-wrap: anywhere; color: #a6f0c1; background: #0e
 .source-card .button { margin-top: 14px; }
 .source-card > small { display: block; margin-top: 9px; }
 .source-card > .notice { margin-top: 12px; }
+.rate-source-check-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; margin-top: 14px; }
+.rate-source-check-form .button { margin-top: 0; white-space: nowrap; }
+.rate-source-check-form small { display: block; margin-top: 6px; color: var(--muted); font-size: .66rem; }
 .source-evidence-list dd { max-width: 62%; overflow-wrap: anywhere; }
 .compact-field { min-width: min(240px, 100%); }
 .compact-field label { font-size: .66rem; }
@@ -616,6 +619,8 @@ html[data-density="compact"] .page { gap: 11px; }
   .dialog-actions { flex-wrap: wrap; }
   .dialog-actions .button { flex: 1; }
   .field-evidence { padding: 0; }
+  .rate-source-check-form { grid-template-columns: 1fr; }
+  .rate-source-check-form .button { justify-self: start; }
   .source-evidence-list dd { max-width: 55%; }
   .catalog-summary-grid { grid-template-columns: 1fr; }
   .catalog-plan-list > button { align-items: flex-start; flex-wrap: wrap; }

@@ -19,7 +19,11 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..config import DEFAULT_SCE_RATE_SOURCE_URL, Settings
+from ..config import (
+    DEFAULT_SCE_RATE_SOURCE_URL,
+    LEGACY_SCE_TIERED_RATE_SOURCE_URL,
+    Settings,
+)
 from ..errors import RateSyncBusy
 from ..models import (
     AuditEvent,
@@ -207,6 +211,9 @@ async def ensure_default_sce_source(
 ) -> RateSource:
     source = await session.scalar(select(RateSource).where(RateSource.https_url == source_url))
     if source is not None:
+        source.enabled = True
+        source.check_interval_hours = 168
+        await session.flush()
         return source
     managed = await session.scalar(
         select(RateSource)
@@ -244,6 +251,42 @@ async def ensure_default_sce_source(
     return candidate
 
 
+async def _retire_legacy_tiered_default(session: AsyncSession, *, canonical_id: str) -> None:
+    legacy_sources = (
+        await session.scalars(
+            select(RateSource)
+            .where(
+                RateSource.id != canonical_id,
+                RateSource.name == SCE_SOURCE_NAME,
+                RateSource.source_type == "official_https",
+                RateSource.https_url == LEGACY_SCE_TIERED_RATE_SOURCE_URL,
+                RateSource.enabled.is_(True),
+            )
+            .order_by(RateSource.id)
+            .with_for_update()
+        )
+    ).all()
+    for legacy in legacy_sources:
+        legacy.enabled = False
+        session.add(
+            AuditEvent(
+                actor_user_id=None,
+                event_code="RATE_SOURCE_DEFAULT_REPLACED",
+                target_type="rate_source",
+                target_id=legacy.id,
+                details={
+                    "replacement_source_id": canonical_id,
+                    "replacement_url": SCE_CATALOG_URL,
+                    "legacy_url": LEGACY_SCE_TIERED_RATE_SOURCE_URL,
+                    "evidence_preserved": True,
+                    "rows_deleted": 0,
+                },
+            )
+        )
+    if legacy_sources:
+        await session.flush()
+
+
 async def ensure_default_sce_catalog_source(session: AsyncSession) -> RateSource:
     named = await session.scalar(
         select(RateSource)
@@ -261,6 +304,7 @@ async def ensure_default_sce_catalog_source(session: AsyncSession) -> RateSource
         named.enabled = True
         named.check_interval_hours = 168
         await session.flush()
+        await _retire_legacy_tiered_default(session, canonical_id=named.id)
         return named
     if named is not None:
         legacy_id = named.id
@@ -297,6 +341,7 @@ async def ensure_default_sce_catalog_source(session: AsyncSession) -> RateSource
             )
         )
         await session.flush()
+        await _retire_legacy_tiered_default(session, canonical_id=exact.id)
         return exact
     if exact is not None:
         exact.name = SCE_CATALOG_SOURCE_NAME
@@ -304,6 +349,7 @@ async def ensure_default_sce_catalog_source(session: AsyncSession) -> RateSource
         exact.enabled = True
         exact.check_interval_hours = 168
         await session.flush()
+        await _retire_legacy_tiered_default(session, canonical_id=exact.id)
         return exact
     candidate = RateSource(
         name=SCE_CATALOG_SOURCE_NAME,
@@ -322,7 +368,9 @@ async def ensure_default_sce_catalog_source(session: AsyncSession) -> RateSource
         )
         if existing is None:
             raise
+        await _retire_legacy_tiered_default(session, canonical_id=existing.id)
         return existing
+    await _retire_legacy_tiered_default(session, canonical_id=candidate.id)
     return candidate
 
 

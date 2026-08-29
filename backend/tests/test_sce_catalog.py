@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from backend.app.config import Settings
+from backend.app.config import LEGACY_SCE_TIERED_RATE_SOURCE_URL, Settings
 from backend.app.main import session_factory
 from backend.app.models import (
     AuditEvent,
@@ -23,6 +23,7 @@ from backend.app.services.rate_sources import SourceFetch, SourceHop, fetch_offi
 from backend.app.services.rate_sync import (
     SCE_CATALOG_SOURCE_NAME,
     SCE_CATALOG_URL,
+    SCE_SOURCE_NAME,
     ensure_default_sce_catalog_source,
     sync_official_rate_source,
 )
@@ -478,6 +479,63 @@ async def test_catalog_source_adopts_exact_official_root_without_losing_identity
         assert adopted.enabled is True
         assert adopted.check_interval_hours == 168
         await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_catalog_default_retires_old_tiered_default_without_deleting_evidence(
+    owner_client: AsyncClient,
+) -> None:
+    del owner_client
+    async with session_factory() as session:
+        legacy = RateSource(
+            name=SCE_SOURCE_NAME,
+            source_type="official_https",
+            https_url=LEGACY_SCE_TIERED_RATE_SOURCE_URL,
+            enabled=True,
+        )
+        canonical = RateSource(
+            name=SCE_CATALOG_SOURCE_NAME,
+            source_type="official_https",
+            https_url=SCE_CATALOG_URL,
+            enabled=True,
+        )
+        session.add_all((legacy, canonical))
+        await session.flush()
+        session.add(
+            RateSourceRevision(
+                source_id=legacy.id,
+                artifact_sha256="c" * 64,
+                parser_version="legacy-tiered-parser",
+            )
+        )
+        await session.commit()
+        legacy_id = legacy.id
+        canonical_id = canonical.id
+
+    async with session_factory() as session:
+        selected = await ensure_default_sce_catalog_source(session)
+        await session.commit()
+        assert selected.id == canonical_id
+
+    async with session_factory() as session:
+        preserved = await session.get(RateSource, legacy_id)
+        assert preserved is not None
+        assert preserved.enabled is False
+        revision = await session.scalar(
+            select(RateSourceRevision).where(RateSourceRevision.source_id == legacy_id)
+        )
+        assert revision is not None
+        assert revision.artifact_sha256 == "c" * 64
+        audit = await session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.event_code == "RATE_SOURCE_DEFAULT_REPLACED",
+                AuditEvent.target_id == legacy_id,
+            )
+        )
+        assert audit is not None
+        assert audit.details["replacement_source_id"] == canonical_id
+        assert audit.details["evidence_preserved"] is True
+        assert audit.details["rows_deleted"] == 0
 
 
 @pytest.mark.asyncio

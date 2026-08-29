@@ -214,10 +214,13 @@ describe('exact-home SCE rate workflow', () => {
 
   it('reports a synchronous validation failure honestly and preserves exact-home scope', async () => {
     let requestedHome = '';
-    installFetchMock((path, method) => {
+    let requestedSource = '';
+    installFetchMock((path, method, body) => {
       const url = new URL(path, 'http://frontend.test');
       if (url.pathname.endsWith('/rate-sources/check-now') && method === 'POST') {
         requestedHome = url.searchParams.get('home_id') ?? '';
+        const payload = jsonRequestBody(body);
+        requestedSource = typeof payload.source_url === 'string' ? payload.source_url : '';
         return { status: 202, body: { run_id: 'run-failed', state: 'failed', event_code: 'RATE_SOURCE_VALIDATION_FAILED', revision_id: null, candidate_id: null, error_code: 'HOLIDAY_RULE_MISSING' } };
       }
       return apiResponse(path, method);
@@ -230,6 +233,29 @@ describe('exact-home SCE rate workflow', () => {
     expect(screen.getByText(/No candidate or active rate was changed/)).toBeInTheDocument();
     expect(screen.queryByText(/queued/i)).not.toBeInTheDocument();
     expect(requestedHome).toBe(homeId);
+    expect(requestedSource).toBe('https://www.sce.com/save-money/rates-financing/residential-rate-plans/time-of-use-plans');
+  });
+
+  it('submits an administrator-selected official SCE rate URL', async () => {
+    const customUrl = 'https://www.sce.com/regulatory/tariff-books/rates-pricing-choices';
+    let requestedSource = '';
+    installFetchMock((path, method, body) => {
+      const url = new URL(path, 'http://frontend.test');
+      if (url.pathname.endsWith('/rate-sources/check-now') && method === 'POST') {
+        const payload = jsonRequestBody(body);
+        requestedSource = typeof payload.source_url === 'string' ? payload.source_url : '';
+        return { status: 202, body: { run_id: 'run-custom', state: 'unchanged', event_code: 'RATE_SOURCE_CONTENT_UNCHANGED', revision_id: rateCandidate.source.revision_id, candidate_id: rateCandidate.id, error_code: null } };
+      }
+      return apiResponse(path, method);
+    });
+    renderWithProviders(<BillingPage mode="settings" />);
+
+    const input = await screen.findByLabelText('Official SCE source URL');
+    await userEvent.clear(input);
+    await userEvent.type(input, customUrl);
+    await userEvent.click(screen.getByRole('button', { name: 'Check now' }));
+    expect(await screen.findByText(/The verified source is unchanged/)).toBeInTheDocument();
+    expect(requestedSource).toBe(customUrl);
   });
 
   it('reports a valid unchanged tiered check as success without a holiday error', async () => {
