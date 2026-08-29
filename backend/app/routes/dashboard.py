@@ -14,13 +14,14 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
 from ..errors import IntegrityConflict, InvalidRequest, NotFound, PermissionDenied
 from ..models import (
     Alert,
+    AlertDismissal,
     BillingEstimate,
     BillingEstimateSelection,
     Circuit,
@@ -1941,7 +1942,16 @@ async def alerts(
     rows = (
         await session.scalars(
             select(Alert)
-            .where(Alert.home_id.in_(homes), Alert.state.in_(("open", "acknowledged")))
+            .where(
+                Alert.home_id.in_(homes),
+                Alert.state.in_(("open", "acknowledged")),
+                ~exists(
+                    select(AlertDismissal.alert_id).where(
+                        AlertDismissal.alert_id == Alert.id,
+                        AlertDismissal.user_id == user.id,
+                    )
+                ),
+            )
             .order_by(Alert.opened_at.desc())
             .limit(100)
         )

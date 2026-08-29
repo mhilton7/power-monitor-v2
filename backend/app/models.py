@@ -1559,6 +1559,19 @@ class AlertEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class AlertDismissal(Base):
+    __tablename__ = "alert_dismissals"
+    alert_id: Mapped[str] = mapped_column(
+        ForeignKey("alerts.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    dismissed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
 class AlertConditionState(Base):
     __tablename__ = "alert_condition_states"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)

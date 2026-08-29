@@ -84,6 +84,8 @@ export async function mockApi(page: Page, options: MockOptions = {}) {
     if (path.endsWith('/alerts')) { await json(route, alerts); return; }
     if (path.endsWith('/acknowledge')) { await json(route, { id: 'alert-delivery', state: 'acknowledged' }); return; }
     if (path.endsWith('/silence')) { await json(route, { id: 'alert-delivery', silenced_until: '2026-08-14T17:32:00Z' }); return; }
+    if (path.endsWith('/alerts/notifications') && method === 'DELETE') { await json(route, { dismissed_count: alerts.alerts.length }); return; }
+    if (path.endsWith('/notification') && method === 'DELETE') { await json(route, { id: 'alert-delivery', dismissed_at: '2026-08-29T17:00:00Z' }); return; }
     if (path.endsWith('/history/export.csv')) { await route.fulfill({ status: 200, contentType: 'text/csv', body: 'timestamp,value\n2026-08-13T10:00:00Z,0\n' }); return; }
     if (path.endsWith('/history')) {
       if (url.searchParams.get('metric') === 'energy') {

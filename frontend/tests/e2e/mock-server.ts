@@ -31,6 +31,8 @@ const server = createServer((request, response) => {
   if (path.endsWith('/alerts')) return json(response, 200, alerts);
   if (path.endsWith('/acknowledge')) return json(response, 200, { id: 'alert-delivery', state: 'acknowledged' });
   if (path.endsWith('/silence')) return json(response, 200, { id: 'alert-delivery', silenced_until: '2026-08-14T17:32:00Z' });
+  if (path.endsWith('/alerts/notifications') && request.method === 'DELETE') return json(response, 200, { dismissed_count: alerts.alerts.length });
+  if (path.endsWith('/notification') && request.method === 'DELETE') return json(response, 200, { id: 'alert-delivery', dismissed_at: '2026-08-29T17:00:00Z' });
   if (path.endsWith('/history/export.csv')) { response.writeHead(200, { 'Content-Type': 'text/csv' }); response.end('timestamp,value\n2026-08-13T10:00:00Z,0\n'); return; }
   if (path.endsWith('/history')) return json(response, 200, url.searchParams.get('resolution_seconds') === '86400' ? dailyHistory : history);
   if (path.endsWith('/billing')) return json(response, 200, billing);

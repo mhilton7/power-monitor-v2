@@ -259,7 +259,7 @@ export const sceRateCatalog = {
 };
 
 export const systemHealth = {
-  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.28', protocol: 'pm-protocol/1.0.0', database: 'reachable',
+  generated_at: '2026-08-13T17:32:00Z', version: '0.1.0-rc.29', protocol: 'pm-protocol/1.0.0', database: 'reachable',
   sensors: [{ device_id: 'device-main', state: 'online', heartbeat_age_seconds: 5, pzem_status: 'ok', telemetry_protocol: 'direct_https', server_delivery_status: 'received', last_server_received_at: '2026-08-13T17:32:11Z', last_sensor_sampled_at: '2026-08-13T17:32:10Z', sensor_time_trusted: true }],
   open_alert_count: 1, last_rate_sync: { id: 'rate-run-old', state: 'review_required', event_code: 'RATE_SOURCE_SNAPSHOT_CAPTURED', completed_at: '2026-08-13T16:00:00Z' },
   backup: {}, restore_test: {}, physical_hardware_certification: 'pending',
@@ -309,6 +309,8 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (path.endsWith('/alerts')) return { status: 200, body: alerts };
   if (path.endsWith('/acknowledge')) return { status: 200, body: { id: 'alert-delivery', state: 'acknowledged' } };
   if (path.endsWith('/silence')) return { status: 200, body: { id: 'alert-delivery', silenced_until: '2026-08-14T17:32:00Z' } };
+  if (path.endsWith('/alerts/notifications') && method === 'DELETE') return { status: 200, body: { dismissed_count: alerts.alerts.length } };
+  if (path.endsWith('/notification') && method === 'DELETE') return { status: 200, body: { id: 'alert-delivery', dismissed_at: '2026-08-29T17:00:00Z' } };
   if (pathname.endsWith('/billing')) return { status: 200, body: billing };
   if (pathname.endsWith('/rate-sources/catalog')) return { status: 200, body: sceRateCatalog };
   if (pathname.endsWith('/bill-rate-imports')) return { status: 200, body: { extractions: [] } };

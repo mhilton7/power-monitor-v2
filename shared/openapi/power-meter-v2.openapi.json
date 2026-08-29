@@ -2588,7 +2588,7 @@
   },
   "info": {
     "title": "PowerMeter V2 API",
-    "version": "0.1.0-rc.28"
+    "version": "0.1.0-rc.29"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2877,6 +2877,73 @@
         ]
       }
     },
+    "/api/v1/alerts/notifications": {
+      "delete": {
+        "operationId": "dismiss_all_alert_notifications_api_v1_alerts_notifications_delete",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dismiss All Alert Notifications Api V1 Alerts Notifications Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss All Alert Notifications",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
     "/api/v1/alerts/{alert_id}/acknowledge": {
       "post": {
         "operationId": "acknowledge_alert_api_v1_alerts__alert_id__acknowledge_post",
@@ -2948,6 +3015,82 @@
           }
         },
         "summary": "Acknowledge Alert",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/alerts/{alert_id}/notification": {
+      "delete": {
+        "operationId": "dismiss_alert_notification_api_v1_alerts__alert_id__notification_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "alert_id",
+            "required": true,
+            "schema": {
+              "title": "Alert Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "pm_session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pm Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dismiss Alert Notification Api V1 Alerts  Alert Id  Notification Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Alert Notification",
         "tags": [
           "settings"
         ]

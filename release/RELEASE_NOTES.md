@@ -1,14 +1,31 @@
-# PowerMeter V2 v0.1.0-rc.28
+# PowerMeter V2 v0.1.0-rc.29
 
-RC28 carries forward the public RC27 server-owned History, billing presentation,
+RC29 carries forward the public RC28 server-owned History, billing presentation,
 official-rate catalog, responsive chart, and firmware/deployment lifecycle
-work while repairing the live Power History range interaction and the strict
-official-SCE candidate response contract. The
+work while adding per-user notification dismissal. Alert records, lifecycle
+state, and audit evidence remain intact when a user removes a notification. The
 firmware runtime remains stateless; this candidate advances its coordinated
 release binding without reintroducing storage or backlog behavior. It remains
 a release candidate because marked-unit hardware certification is pending.
 
-## RC28 dashboard and SCE source repairs
+## RC29 notification controls
+
+- Each authorized user can remove an individual open or acknowledged alert
+  from their own notification view without deleting the shared alert record.
+- Clear all removes every currently visible notification for that user,
+  including stale acknowledged alerts, while preserving resolution, lifecycle,
+  and audit evidence for operators and other users.
+- Additive migration `20260829_0020` stores only per-user dismissal view state.
+  Existing alerts, acknowledgements, silences, and resolution evidence are not
+  rewritten or deleted.
+- Power History now commits range movement from pointer, mouse, touch, and
+  keyboard input. The selected brush geometry and timestamps remain fixed when
+  a five-second authenticated-reading refresh arrives; only Reset zoom or
+  Resume live returns the brush to the full range.
+- Public server and firmware RC28 artifacts remain immutable and are never
+  relabeled with the new API contract.
+
+## Public RC28 dashboard and SCE source repairs retained
 
 - Power History freezes one local chart-data snapshot while the range traveller
   is being moved. Per-pixel movement stays inside the chart, the selected range
@@ -210,25 +227,25 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
 
 ## Release binding
 
-- Server and frontend version: `0.1.0-rc.28`.
-- Compatible firmware tag: `v0.1.0-rc.28`, build number `31`.
+- Server and frontend version: `0.1.0-rc.29`.
+- Compatible firmware tag: `v0.1.0-rc.29`, build number `32`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
-- Alembic head: `20260821_0019`.
+- Alembic head: `20260829_0020`.
 - Generated contract-document SHA-256:
-  `8f4f6d80f92fdc82b74757a372c9dea7bc1daeff02ed3e6edf93b9f8a68e0273`.
+  `c79ca4fd97b6ad349231e21468524119b86db96466e269f78cb7afeab70a6e09`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned
-`power-monitor-v2-v0.1.0-rc.28.yaml`, release manifest, migration/security/test
+`power-monitor-v2-v0.1.0-rc.29.yaml`, release manifest, migration/security/test
 evidence, and checksums. The firmware prerelease must be published and
 independently verified first, then the server compatibility variable must be
-set to the exact RC28 firmware tag.
+set to the exact RC29 firmware tag.
 
 ## Deployment boundary
 
-Deploy the server RC28 YAML before applying the firmware RC28 update. Existing
-RC21 through RC27 sensors remain protocol-compatible throughout. Automated
+Deploy the server RC29 YAML before applying the firmware RC29 update. Existing
+RC21 through RC28 sensors remain protocol-compatible throughout. Automated
 tests do not install firmware on physical sensors. No card was formatted and no
 NVS namespace was erased while preparing this release.
 

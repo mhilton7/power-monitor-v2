@@ -148,6 +148,8 @@ export const api = {
   deleteCircuit: (id: string) => apiRequest(`/circuits/${encodeURIComponent(id)}`, z.undefined(), { method: 'DELETE' }),
   acknowledgeAlert: (id: string) => apiRequest(`/alerts/${encodeURIComponent(id)}/acknowledge`, z.object({ id: z.string(), state: z.string() }), { method: 'POST', body: '{}' }),
   silenceAlert: (id: string, until: string) => apiRequest(`/alerts/${encodeURIComponent(id)}/silence`, z.object({ id: z.string(), silenced_until: z.string().datetime({ offset: true }) }), { method: 'POST', body: jsonBody({ until }) }),
+  dismissAlertNotification: (id: string) => apiRequest(`/alerts/${encodeURIComponent(id)}/notification`, z.object({ id: z.string(), dismissed_at: z.string().datetime({ offset: true }) }), { method: 'DELETE' }),
+  dismissAllAlertNotifications: () => apiRequest('/alerts/notifications', z.object({ dismissed_count: z.number().int().nonnegative() }), { method: 'DELETE' }),
   command: (deviceId: string, commandType: string, payload: Record<string, unknown> = {}, prepare?: { commandId: string; confirmationToken: string; typedConfirmation: string }) => apiRequest(`/devices/${encodeURIComponent(deviceId)}/commands`, commandSchema, {
     method: 'POST',
     body: jsonBody({ command_type: commandType, idempotency_key: idempotencyKey(), payload, ...(prepare ? { prepare_command_id: prepare.commandId, confirmation_token: prepare.confirmationToken, typed_confirmation: prepare.typedConfirmation } : {}) }),

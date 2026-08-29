@@ -13,16 +13,16 @@ valid signed server `v0.1.0-rc.4` tag
 is historical failed prepublication evidence, not a Release. Hardware execution
 confirmed that firmware rc.1 through rc.5 crash in the main stack before
 provisioning. Public `v0.1.0-rc.16` is installation evidence for the prior
-  durable sensor-backlog architecture. Candidate `v0.1.0-rc.28` retains
+  durable sensor-backlog architecture. Candidate `v0.1.0-rc.29` retains
 `pm-protocol/1.0.0`, adds `pm-telemetry/2.0.0`, and extends the Alembic head to
-`20260821_0019`. It retains PostgreSQL telemetry and History ownership, removes
+`20260829_0020`. It retains PostgreSQL telemetry and History ownership, removes
 active microSD/backlog behavior from new firmware, preserves
 NVS identity/configuration, and adds Main-service History and exact tiered
 Billing. Firmware and server rc.16 remain immutable and must not be relabeled.
 Firmware rc.17 is immutable failed-candidate evidence because its public
 compatibility record omitted the telemetry protocol binding. The exact
-  firmware rc.28 metadata and artifacts must be published and independently
-  verified before the server rc.28 tag is created; server
+  firmware rc.29 metadata and artifacts must be published and independently
+  verified before the server rc.29 tag is created; server
 publication still requires every automated gate to pass.
 Stable publication remains blocked until physical hardware, TLS,
 OTA-install/rollback, and soak certification from the actual marked unit
@@ -92,28 +92,31 @@ failed deterministically because a published bill-derived day-sensitive rate
 required a missing authoritative holiday calendar. Release assembly was
 skipped, so server rc.22 has no GitHub Release or generated YAML.
 
-Candidate rc.28 keeps the server as durable owner of independently accepted
+Candidate rc.29 keeps the server as durable owner of independently accepted
 telemetry and active History. Firmware keeps one in-flight and one newest
 pending sample in RAM, and a missing sample never blocks a later sample. The UI
 removes normal storage/backlog controls; History preserves connection gaps and
 cumulative-energy recovery without inventing a power curve. Billing uses Main
-service with exact Decimal tier and fixed-charge semantics. RC28 retains the
+service with exact Decimal tier and fixed-charge semantics. RC29 retains the
 public RC24 dashboard/OTA corrections and RC23 rate-evaluation hardening, and
 completes the restricted SCE catalog, billing quality, diagnostics, Settings,
-home selector, and chart interaction repairs. RC24 corrected dashboard day totals, the
+home selector, chart interaction repairs, and per-user notification dismissal.
+Removing or clearing notifications preserves shared alert and audit evidence.
+RC24 corrected dashboard day totals, the
 History slider footer, and additive OTA lifecycle response compatibility. RC23 rejects
 unexecutable holiday-sensitive bill-rate publication, isolates any legacy
 unpriceable rate evidence without degrading unrelated worker work, and requires
 post-pricing worker health in deployment smoke. Control remains
 `pm-protocol/1.0.0`, telemetry is `pm-telemetry/2.0.0`, and the Alembic head is
-`20260821_0019`. The generated rc.28 OpenAPI SHA-256 is
-`8f4f6d80f92fdc82b74757a372c9dea7bc1daeff02ed3e6edf93b9f8a68e0273`.
+`20260829_0020`. The generated rc.29 OpenAPI SHA-256 is
+`c79ca4fd97b6ad349231e21468524119b86db96466e269f78cb7afeab70a6e09`.
 The checked-in YAML retains `UNPUBLISHED_*` sentinels until its tagged workflow
-supplies exact registry digests. Rc.28 must pass clean
+supplies exact registry digests. Rc.29 must pass clean
 dependency/backend/PostgreSQL gates, security scans, public package
 verification, first-run plus idempotent initializer smoke, checksums, and
-attestations. Its explicit migration chain extends to `20260821_0019`;
-revision 0019 adds Settings-owned billing calculation configuration and fails
+attestations. Its explicit migration chain extends to `20260829_0020`;
+revision 0020 adds disposable per-user notification view state without deleting
+shared alert evidence; revision 0019 adds Settings-owned billing calculation configuration and fails
 closed rather than discarding customized values on downgrade; revision 0018
 adds catalog/lifecycle evidence and fails closed on unsafe
 downgrade; revision 0017 remains additive and refuses to delete accepted
@@ -160,8 +163,8 @@ Release assets include manifest, digest-pinned YAML, SBOMs/attestations,
 test/security/migration reports, checksums, installation/upgrade/rollback
 guides, the tracked Windows SMB staging helper, the auditable initializer
 source embedded in the API image, and release notes. The GitHub Release
-cross-links the compatible firmware release. Coordinated rc.28 publishes under
-a new immutable tag without rewriting rc.27 or any earlier release.
+cross-links the compatible firmware release. Coordinated rc.29 publishes under
+a new immutable tag without rewriting rc.28 or any earlier release.
 
 ### Release-candidate publication order
 
@@ -182,7 +185,7 @@ Never tag a feature-branch commit. Publish an RC only in this order:
    ```
 
 3. Publish and independently verify the coordinated signed firmware
-   `v0.1.0-rc.28` release first. Set the server repository variable
+   `v0.1.0-rc.29` release first. Set the server repository variable
    `COMPATIBLE_FIRMWARE_TAG` to that exact tag and verify its immutable release
    metadata before creating the server tag.
 4. With the release signing key and local allowed-signers policy configured,
@@ -191,10 +194,10 @@ Never tag a feature-branch commit. Publish an RC only in this order:
 
    ```bash
    release_commit="$(git rev-parse HEAD)"
-   git tag -s -m 'PowerMeter V2 0.1.0-rc.28' v0.1.0-rc.28 "$release_commit"
-   git verify-tag v0.1.0-rc.28
-   test "$(git rev-parse 'v0.1.0-rc.28^{commit}')" = "$release_commit"
-   git push origin refs/tags/v0.1.0-rc.28
+   git tag -s -m 'PowerMeter V2 0.1.0-rc.29' v0.1.0-rc.29 "$release_commit"
+   git verify-tag v0.1.0-rc.29
+   test "$(git rev-parse 'v0.1.0-rc.29^{commit}')" = "$release_commit"
+   git push origin refs/tags/v0.1.0-rc.29
    ```
 
 The tagged workflow independently requires the pushed ref to resolve to an
