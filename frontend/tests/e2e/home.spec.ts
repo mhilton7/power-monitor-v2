@@ -68,6 +68,10 @@ test('Power History slider updates a readable non-overlapping selected range', a
 test('Power History keeps its selected timestamps through a five-second dashboard refresh without a white chart outline', async ({ page }) => {
   let homeRequests = 0;
   await page.addInitScript(() => {
+    // Some browsers and input devices drive the Recharts brush through mouse
+    // events without delivering Pointer Events to React. The mouse fallback
+    // must still commit the user's selection before the next live refresh.
+    window.addEventListener('pointerdown', (event) => event.stopImmediatePropagation(), true);
     class MeasurementEventSource extends EventTarget {
       static readonly CONNECTING = 0;
       static readonly OPEN = 1;
@@ -109,6 +113,10 @@ test('Power History keeps its selected timestamps through a five-second dashboar
   await leftHandle.dragTo(brushSlide, { targetPosition: { x: 150, y: 10 }, force: true });
   await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
   const selected = await rangeLabel.innerText();
+  const selectedBrushBounds = await chart.locator('.recharts-brush-slide').evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { x: bounds.x, width: bounds.width };
+  });
 
   const surface = chart.locator('.recharts-surface');
   await surface.focus();
@@ -117,6 +125,12 @@ test('Power History keeps its selected timestamps through a five-second dashboar
   await expect.poll(() => homeRequests, { timeout: 8_000 }).toBeGreaterThanOrEqual(2);
   await expect(rangeLabel).toHaveText(selected);
   await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
+  const refreshedBrushBounds = await chart.locator('.recharts-brush-slide').evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { x: bounds.x, width: bounds.width };
+  });
+  expect(refreshedBrushBounds.x).toBeCloseTo(selectedBrushBounds.x, 0);
+  expect(refreshedBrushBounds.width).toBeCloseTo(selectedBrushBounds.width, 0);
   await expect(page.getByRole('button', { name: 'Reset zoom' })).toBeVisible();
 });
 
@@ -311,6 +325,16 @@ test('alert acknowledgement and silence retain evidence and call scoped routes',
   const silenceRequest = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/alerts/alert-delivery/silence'));
   await page.getByRole('button', { name: 'Silence 24 hours' }).click();
   await silenceRequest;
+  const dismissRequest = page.waitForRequest((request) => request.method() === 'DELETE' && request.url().endsWith('/alerts/alert-delivery/notification'));
+  await page.getByRole('button', { name: 'Remove sensor delivery delayed notification' }).click();
+  await expect(page.getByText(/only from your account/)).toBeVisible();
+  await page.getByRole('button', { name: 'Remove notification' }).click();
+  await dismissRequest;
+  const clearAllRequest = page.waitForRequest((request) => request.method() === 'DELETE' && request.url().endsWith('/alerts/notifications'));
+  await page.getByRole('button', { name: 'Clear all', exact: true }).click();
+  await expect(page.getByText(/lifecycle history remain recorded/)).toBeVisible();
+  await page.getByRole('button', { name: 'Clear all', exact: true }).click();
+  await clearAllRequest;
 });
 
 test('desktop Home visually matches the normative dashboard hierarchy', async ({ page }) => {

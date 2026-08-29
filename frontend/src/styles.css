@@ -506,6 +506,9 @@ code { max-width: 100%; overflow-wrap: anywhere; color: #a6f0c1; background: #0e
 .control-danger > svg { color: var(--danger); }
 .sensor-admin-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 15px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
 .alert-list { display: grid; }
+.alert-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 0 10px; border-bottom: 1px solid var(--border-soft); }
+.alert-list-toolbar span { color: var(--muted); font-size: .72rem; }
+.alert-list-toolbar .button { min-height: 36px; padding: 7px 12px; }
 .alert-row { display: flex; align-items: center; gap: 12px; min-height: 78px; border-bottom: 1px solid var(--border-soft); padding: 8px 0; }
 .alert-icon { width: 40px; height: 40px; display: grid; place-items: center; flex: none; border-radius: 9px; color: var(--info); background: rgba(108,186,255,.08); }
 .alert-icon svg { width: 20px; }

@@ -12,6 +12,7 @@ from ..db import get_session
 from ..errors import IntegrityConflict, InvalidRequest, NotFound
 from ..models import (
     Alert,
+    AlertDismissal,
     AlertEvent,
     AlertMaintenanceWindow,
     AuditEvent,
@@ -21,6 +22,7 @@ from ..models import (
     Home,
     HomeTelemetrySetting,
     UtilityAccount,
+    aware_utc,
     user_home_scopes,
 )
 from ..schemas.api import (
@@ -994,6 +996,89 @@ async def silence_alert(
     )
     await session.commit()
     return {"id": alert.id, "silenced_until": alert.silenced_until}
+
+
+@router.delete("/alerts/{alert_id}/notification")
+async def dismiss_alert_notification(
+    alert_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("dashboard.view")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    alert = await _scoped_alert(session, user.id, alert_id)
+    dismissal = await session.scalar(
+        select(AlertDismissal).where(
+            AlertDismissal.alert_id == alert.id,
+            AlertDismissal.user_id == user.id,
+        )
+    )
+    if dismissal is None:
+        dismissal = AlertDismissal(alert_id=alert.id, user_id=user.id)
+        session.add(dismissal)
+        await session.flush()
+        session.add(
+            AuditEvent(
+                actor_user_id=user.id,
+                event_code="ALERT_NOTIFICATION_DISMISSED",
+                target_type="alert",
+                target_id=alert.id,
+                correlation_id=request.state.correlation_id,
+                details={"alert_type": alert.alert_type, "alert_evidence_preserved": True},
+            )
+        )
+    await session.commit()
+    return {"id": alert.id, "dismissed_at": aware_utc(dismissal.dismissed_at)}
+
+
+@router.delete("/alerts/notifications")
+async def dismiss_all_alert_notifications(
+    request: Request,
+    user: CurrentUser = Depends(require_permission("dashboard.view")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    homes = await _home_ids(session, user.id)
+    rows = (
+        await session.scalars(
+            select(Alert)
+            .where(Alert.home_id.in_(homes), Alert.state.in_(("open", "acknowledged")))
+            .order_by(Alert.id)
+            .with_for_update()
+        )
+    ).all()
+    alert_ids = [row.id for row in rows]
+    dismissed_ids = (
+        set(
+            (
+                await session.scalars(
+                    select(AlertDismissal.alert_id).where(
+                        AlertDismissal.user_id == user.id,
+                        AlertDismissal.alert_id.in_(alert_ids),
+                    )
+                )
+            ).all()
+        )
+        if alert_ids
+        else set()
+    )
+    pending = [row for row in rows if row.id not in dismissed_ids]
+    dismissed_at = datetime.now(UTC)
+    session.add_all(
+        AlertDismissal(alert_id=row.id, user_id=user.id, dismissed_at=dismissed_at)
+        for row in pending
+    )
+    if pending:
+        session.add(
+            AuditEvent(
+                actor_user_id=user.id,
+                event_code="ALERT_NOTIFICATIONS_DISMISSED",
+                target_type="alert_notification_list",
+                target_id=user.id,
+                correlation_id=request.state.correlation_id,
+                details={"dismissed_count": len(pending), "alert_evidence_preserved": True},
+            )
+        )
+    await session.commit()
+    return {"dismissed_count": len(pending)}
 
 
 @router.get("/alert-maintenance-windows")

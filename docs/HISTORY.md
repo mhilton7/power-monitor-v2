@@ -28,7 +28,9 @@ unresolved until reviewed.
 History interval and retention are server settings. Shortening retention
 requires exact confirmation and deletes only expired derived History for the
 selected home. Immutable samples, cost-linked evidence, rates, audit records,
-and identities remain. A downgrade from revision `20260821_0019` fails closed
-when customized Settings-owned billing configuration cannot be represented;
+and identities remain. Revision `20260829_0020` adds only disposable per-user
+notification dismissal state; its downgrade never deletes shared alerts. A
+downgrade from revision `20260821_0019` fails closed when customized
+Settings-owned billing configuration cannot be represented;
 revision 0018 likewise protects catalog/lifecycle evidence, and revision 0017
 refuses to remove accepted stateless samples or cutover evidence.
