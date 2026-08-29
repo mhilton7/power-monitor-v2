@@ -22,6 +22,7 @@ from backend.app.models import (
 from backend.app.services import rate_sync
 from backend.app.services.rate_sources import SourceFetch, SourceHop
 from backend.app.services.rate_sync import (
+    SCE_CATALOG_SOURCE_NAME,
     SCE_SOURCE_NAME,
     SCE_TOU_URL,
     RateSyncResult,
@@ -244,7 +245,7 @@ async def test_manual_check_now_uses_shared_sync_service(
     owner_client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str | None, str | None]] = []
+    calls: list[tuple[str, str, str | None, str | None]] = []
 
     async def shared_service(
         _session: object,
@@ -255,7 +256,7 @@ async def test_manual_check_now_uses_shared_sync_service(
         actor_user_id: str | None,
         correlation_id: str,
     ) -> RateSyncResult:
-        calls.append((source.https_url or "", home_id, actor_user_id))
+        calls.append((source.name, source.https_url or "", home_id, actor_user_id))
         assert correlation_id
         return RateSyncResult(
             run_id="run-shared",
@@ -281,9 +282,60 @@ async def test_manual_check_now_uses_shared_sync_service(
         "error_code": None,
     }
     assert len(calls) == 1
-    assert calls[0][0] == SCE_TOU_URL
-    assert calls[0][1] is not None
+    assert calls[0][0] == SCE_CATALOG_SOURCE_NAME
+    assert calls[0][1] == SCE_TOU_URL
     assert calls[0][2] is not None
+    assert calls[0][3] is not None
+
+
+@pytest.mark.asyncio
+async def test_check_now_accepts_only_bounded_custom_official_sce_urls(
+    owner_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    custom_url = "https://www.sce.com/regulatory/tariff-books/rates-pricing-choices"
+    calls: list[tuple[str, str]] = []
+
+    async def shared_service(
+        _session: object,
+        _settings: object,
+        source: RateSource,
+        **_kwargs: object,
+    ) -> RateSyncResult:
+        calls.append((source.name, source.https_url or ""))
+        return RateSyncResult(
+            run_id="run-custom",
+            state="unchanged",
+            event_code="RATE_SOURCE_NOT_MODIFIED",
+            revision_id="revision-custom",
+            candidate_id=None,
+            error_code=None,
+        )
+
+    monkeypatch.setattr(
+        "backend.app.routes.billing.sync_official_rate_source",
+        shared_service,
+    )
+    response = await owner_client.post(
+        "/api/v1/rate-sources/check-now",
+        json={"source_url": f" {custom_url}/ "},
+    )
+    assert response.status_code == 202
+    assert calls == [(SCE_SOURCE_NAME, custom_url)]
+
+    for invalid_url in (
+        "http://www.sce.com/regulatory/tariff-books",
+        "https://evil.example/regulatory/tariff-books",
+        "https://www.sce.com/unrelated/content",
+        "https://www.sce.com/regulatory/tariff-books?account=secret",
+        "https://user@www.sce.com/regulatory/tariff-books",
+    ):
+        rejected = await owner_client.post(
+            "/api/v1/rate-sources/check-now",
+            json={"source_url": invalid_url},
+        )
+        assert rejected.status_code == 422
+    assert calls == [(SCE_SOURCE_NAME, custom_url)]
 
 
 @pytest.mark.asyncio
@@ -864,6 +916,6 @@ async def test_weekly_scheduler_checks_only_due_enabled_sources(artifact_dir: Pa
         )
         await session.commit()
 
-        assert not_due == {"checked": 1, "failed": 0, "review_required": 0, "unchanged": 1}
-        assert due == {"checked": 1, "failed": 0, "review_required": 1, "unchanged": 0}
-        assert calls == 3
+        assert not_due == {"checked": 0, "failed": 0, "review_required": 0, "unchanged": 0}
+        assert due == {"checked": 1, "failed": 0, "review_required": 0, "unchanged": 1}
+        assert calls == 2

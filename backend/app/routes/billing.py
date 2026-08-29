@@ -58,12 +58,15 @@ from ..schemas.api import (
     RateCandidateReviewRequest,
     RateCorrectionRequest,
     RatePublishRequest,
+    RateSourceCheckRequest,
 )
 from ..schemas.billing import RatePlanDraft, TierThresholdRuleDraft
 from ..security.auth import CurrentUser, require_permission
 from ..services.cost_engine import season_from_storage
 from ..services.rate_sync import (
     SCE_CATALOG_SOURCE_NAME,
+    SCE_CATALOG_URL,
+    ensure_default_sce_catalog_source,
     ensure_default_sce_source,
     sync_official_rate_source,
 )
@@ -3029,13 +3032,21 @@ async def activate_official_rate_candidate(
 @router.post("/rate-sources/check-now", status_code=202)
 async def check_rate_sources_now(
     request: Request,
+    payload: RateSourceCheckRequest | None = None,
     home_id: str | None = None,
     user: CurrentUser = Depends(require_permission("rates.sync")),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, object]:
     scoped_home_id = await _resolve_user_home(session, user.id, home_id)
-    source = await ensure_default_sce_source(session, str(settings.sce_rate_source_url))
+    source_url = (
+        payload.source_url if payload and payload.source_url else str(settings.sce_rate_source_url)
+    )
+    source = (
+        await ensure_default_sce_catalog_source(session)
+        if source_url.rstrip("/") == SCE_CATALOG_URL
+        else await ensure_default_sce_source(session, source_url)
+    )
     result = await sync_official_rate_source(
         session,
         settings,

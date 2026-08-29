@@ -12,6 +12,7 @@ import { sceRateCatalogKey } from './queryKeys';
 
 const RATE_TIMEZONE = 'America/Los_Angeles';
 const DECIMAL_PATTERN = String.raw`\d{1,3}(?:\.\d{1,8})?`;
+const DEFAULT_SCE_SOURCE_URL = 'https://www.sce.com/save-money/rates-financing/residential-rate-plans/time-of-use-plans';
 
 interface UtilityAccountOption {
   utility_account_id: string;
@@ -72,9 +73,10 @@ function checkResult(result: { state: 'review_required' | 'unchanged' | 'failed'
 
 export function RateSourceStatusCard({ homeId }: { homeId: string }) {
   const queryClient = useQueryClient();
+  const [sourceUrl, setSourceUrl] = useState(DEFAULT_SCE_SOURCE_URL);
   const status = useQuery({ queryKey: rateStatusKey(homeId), queryFn: () => api.rateSourceStatus(homeId), enabled: Boolean(homeId), refetchInterval: 60_000 });
   const check = useMutation({
-    mutationFn: () => api.checkRates(homeId),
+    mutationFn: (requestedUrl: string) => api.checkRates(homeId, requestedUrl),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: rateStatusKey(homeId) });
       void queryClient.invalidateQueries({ queryKey: rateCandidatesKey(homeId) });
@@ -84,7 +86,7 @@ export function RateSourceStatusCard({ homeId }: { homeId: string }) {
 
   return <div className="source-card">
     <div className="source-state"><ShieldCheck aria-hidden="true" /><div><strong>Official SCE rate check</strong>{status.data && <StatusPill state={status.data.last_run?.state ?? status.data.scheduled.state} />}</div></div>
-    <PermissionGate permission="rates.sync"><button type="button" className="button button-secondary" onClick={() => check.mutate()} disabled={check.isPending}><RefreshCw className={check.isPending ? 'spin' : ''} aria-hidden="true" /> {check.isPending ? 'Checking official source…' : 'Check now'}</button></PermissionGate>
+    <PermissionGate permission="rates.sync"><form className="rate-source-check-form" onSubmit={(event) => { event.preventDefault(); check.mutate(sourceUrl.trim()); }}><div className="field"><label htmlFor="official-sce-source-url">Official SCE source URL</label><input id="official-sce-source-url" type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} required maxLength={500} spellCheck={false} /><small>The default scans SCE’s Time-of-Use Plans catalog. You may enter another official SCE rate page for this check.</small></div><button type="submit" className="button button-secondary" disabled={check.isPending}><RefreshCw className={check.isPending ? 'spin' : ''} aria-hidden="true" /> {check.isPending ? 'Checking official source…' : 'Check now'}</button></form></PermissionGate>
     {check.data && checkResult(check.data)}
     {check.isError && <Notice kind="warning"><strong>Check request failed.</strong> {check.error instanceof Error ? check.error.message : 'The source check could not run.'} No success was recorded.</Notice>}
     <details className="technical-details"><summary>Technical details</summary>

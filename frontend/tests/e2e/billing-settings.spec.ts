@@ -21,7 +21,9 @@ test('rate-source Check now and backup/system health evidence work', async ({ pa
   await page.goto('/settings?section=rates');
   const checkRequest = page.waitForRequest((request) => request.url().includes('/rate-sources/check-now?'));
   await page.getByRole('button', { name: 'Check now' }).click();
-  expect(new URL((await checkRequest).url()).searchParams.get('home_id')).toBe(homeScopes[0]!.id);
+  const request = await checkRequest;
+  expect(new URL(request.url()).searchParams.get('home_id')).toBe(homeScopes[0]!.id);
+  expect(request.postDataJSON()).toEqual({ source_url: 'https://www.sce.com/save-money/rates-financing/residential-rate-plans/time-of-use-plans' });
   await expect(page.getByText(/Candidate .* requires explicit review/)).toBeVisible();
   await page.goto('/settings');
   await page.getByRole('button', { name: /Backups & restore/ }).click();

@@ -1,6 +1,6 @@
-# PowerMeter V2 v0.1.0-rc.27
+# PowerMeter V2 v0.1.0-rc.28
 
-RC27 carries forward the public RC26 server-owned History, billing presentation,
+RC28 carries forward the public RC27 server-owned History, billing presentation,
 official-rate catalog, responsive chart, and firmware/deployment lifecycle
 work while repairing the live Power History range interaction and the strict
 official-SCE candidate response contract. The
@@ -8,20 +8,31 @@ firmware runtime remains stateless; this candidate advances its coordinated
 release binding without reintroducing storage or backlog behavior. It remains
 a release candidate because marked-unit hardware certification is pending.
 
-## RC27 dashboard and SCE candidate repairs
+## RC28 dashboard and SCE source repairs
 
 - Power History freezes one local chart-data snapshot while the range traveller
   is being moved. Per-pixel movement stays inside the chart, the selected range
   is committed once on release, and an arriving authenticated reading cannot
   replace the traveller's data midway through a gesture. Reset zoom and Resume
   live explicitly return to current server data.
+- A committed chart range now survives the five-second authenticated-reading
+  refresh instead of jumping back to the full live range. Keyboard focus stays
+  visible on explicit controls, while selecting the chart itself no longer
+  draws a white browser focus border.
+- The scheduled official source now starts at SCE's residential
+  `time-of-use-plans` page rather than the tiered-rate page. Administrators may
+  run a bounded one-time check against a custom official SCE HTTPS URL from
+  Settings; exact-host, approved-path, DNS, redirect, TLS, and SSRF protections
+  remain enforced.
+- The obsolete built-in tiered-page source is disabled without deleting its
+  revisions, catalog entries, sync runs, or audit provenance.
 - The strict browser schema now accepts both states of
   `effective_date_confirmation_required` and preserves the bounded
   `rate_precision` metadata returned by the official SCE parser. The same
   contract applies to current candidate facts and `diff.after`; known TOU
   component, baseline, eligibility, and enrollment evidence is accepted while
   unknown keys remain rejected.
-- RC26 remains an immutable public server and firmware prerelease; its signed
+- RC27 remains an immutable public server and firmware prerelease; its signed
   tags, images, YAML, firmware binary, checksums, and attestations are not moved,
   rewritten, or relabeled.
 
@@ -199,25 +210,25 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
 
 ## Release binding
 
-- Server and frontend version: `0.1.0-rc.27`.
-- Compatible firmware tag: `v0.1.0-rc.27`, build number `30`.
+- Server and frontend version: `0.1.0-rc.28`.
+- Compatible firmware tag: `v0.1.0-rc.28`, build number `31`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
 - Alembic head: `20260821_0019`.
 - Generated contract-document SHA-256:
-  `b730b9e200124b2d45da9f59cedf5cf903e9fcca42b8586d6449c689908d7ff6`.
+  `8f4f6d80f92fdc82b74757a372c9dea7bc1daeff02ed3e6edf93b9f8a68e0273`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned
-`power-monitor-v2-v0.1.0-rc.27.yaml`, release manifest, migration/security/test
+`power-monitor-v2-v0.1.0-rc.28.yaml`, release manifest, migration/security/test
 evidence, and checksums. The firmware prerelease must be published and
 independently verified first, then the server compatibility variable must be
-set to the exact RC27 firmware tag.
+set to the exact RC28 firmware tag.
 
 ## Deployment boundary
 
-Deploy the server RC27 YAML before applying the firmware RC27 update. Existing
-RC21 through RC26 sensors remain protocol-compatible throughout. Automated
+Deploy the server RC28 YAML before applying the firmware RC28 update. Existing
+RC21 through RC27 sensors remain protocol-compatible throughout. Automated
 tests do not install firmware on physical sensors. No card was formatted and no
 NVS namespace was erased while preparing this release.
 
