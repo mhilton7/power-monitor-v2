@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.12
-FROM python:3.13.14-alpine3.23@sha256:9fdbf2e3e82628351513560b121e2ee6ce31cac212be9e070c5a5e2769fb5e76 AS builder
+FROM python:3.14.7-alpine3.23@sha256:6b8f06d04d5305c1d1288435388df9165ab41e681fae6439d6349d8053cc3f83 AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -57,7 +57,7 @@ RUN install -d \
       backend/app/bill_rate_import/sandbox_worker.py \
       /sandbox-runtime/usr/local/lib/python3.13/site-packages/backend/app/bill_rate_import/
 
-FROM python:3.13.14-alpine3.23@sha256:9fdbf2e3e82628351513560b121e2ee6ce31cac212be9e070c5a5e2769fb5e76
+FROM python:3.14.7-alpine3.23@sha256:6b8f06d04d5305c1d1288435388df9165ab41e681fae6439d6349d8053cc3f83
 
 ARG VERSION=0.1.0-rc.30
 ARG REVISION=unknown
