@@ -1,20 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Activity, ArrowRight, CalendarDays, ChevronRight, CircleDollarSign, Clock3, Info, RefreshCw, RotateCcw, Server, UploadCloud, Waves, Zap } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
-import { Area, AreaChart, Bar, BarChart, Brush, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from '../api';
 import type { DeviceDetail, HomeData } from '../api/schemas';
 import { PermissionGate } from '../auth/PermissionGate';
+import { ChartRangeSelector } from '../components/ChartRangeSelector';
 import { SensorDrawer } from '../components/SensorDrawer';
 import { HeartbeatAge } from '../components/HeartbeatAge';
 import { Card, ConfirmDialog, EmptyState, ErrorState, Loading, Notice, StatusPill } from '../components/ui';
 import { useHomeScope } from '../home/useHomeScope';
+import { useChartRangeSelection } from '../hooks/useChartRangeSelection';
 import { chartAxisFormat, dateTime, dateTimeRange, money, numeric, percent, resolveDisplayTimezone, timeAgo } from '../lib/format';
 import { adaptiveTimeTicks, groupDailyEnergy, localCalendarDay as localDayKey } from '../lib/chart';
 import './HomePage.css';
 
 type SensorSummary = HomeData['devices'][number];
-type PowerBrushRange = { key: string; startMs: number; endMs: number };
 
 function previousAnchorData<T>(
   previousData: T | undefined,
@@ -142,14 +143,6 @@ function powerTickLabel(epoch: number, spanHours: number, timezone: string, cros
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: timezone }).format(date);
 }
 
-function closestRangeIndices(points: Array<{ epoch: number }>, start: number, end: number): { startIndex: number; endIndex: number } {
-  if (points.length === 0) return { startIndex: 0, endIndex: 0 };
-  const startIndex = Math.max(0, points.findIndex((point) => point.epoch >= start));
-  const reverseEnd = [...points].reverse().findIndex((point) => point.epoch <= end);
-  const endIndex = reverseEnd < 0 ? points.length - 1 : points.length - 1 - reverseEnd;
-  return { startIndex: Math.min(startIndex, endIndex), endIndex: Math.max(startIndex, endIndex) };
-}
-
 function useMeasuredWidth(initial = 720) {
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(initial);
@@ -239,10 +232,7 @@ function UsageTooltip({ active, payload, timezone, unit = 'kW' }: {
 
 export function HomePage() {
   const [now] = useState(() => new Date());
-  const [powerBrushRange, setPowerBrushRange] = useState<PowerBrushRange | null>(null);
-  const powerBrushDraggingRef = useRef(false);
-  const powerBrushKeyboardInputRef = useRef(false);
-  const pendingPowerBrushRangeRef = useRef<PowerBrushRange | null>(null);
+  const [powerRangeNotice, setPowerRangeNotice] = useState<string | null>(null);
   const { ref: powerChartRef, width: powerChartWidth } = useMeasuredWidth();
   const [selectedDevice, setSelectedDevice] = useState<DeviceDetail>();
   const [rebootOpen, setRebootOpen] = useState(false);
@@ -268,7 +258,7 @@ export function HomePage() {
   const liveScopeName = homeTotalBranch?.name ?? (aggregateCircuitId ? 'Main service' : home.data?.devices.find((sensor) => sensor.id === commandDeviceId)?.friendly_name ?? 'Selected sensor');
   const historyDeviceId = aggregateCircuitId ? '' : commandDeviceId;
   const historyScopeKey = aggregateCircuitId ? `aggregate:${aggregateCircuitId}` : `device:${historyDeviceId}`;
-  const powerBrushKey = `${dashboardDays}:${historyScopeKey}`;
+  const powerBrushKey = `${selectedHomeId}:${dashboardDays}:${historyScopeKey}`;
   const hasServerDailyComparisons = dashboardDays === 1 && home.data?.summaries.yesterday !== undefined;
   const historyAnchorMs = new Date(home.data?.generated_at ?? now).getTime();
   const history24Key = ['history', selectedHomeId, 'home-dashboard', dashboardDays, historyScopeKey, historyAnchorMs] as const;
@@ -284,6 +274,16 @@ export function HomePage() {
     queryFn: () => api.history(historyParams(selectedHomeId, { deviceId: historyDeviceId, aggregateCircuitId }, new Date(historyAnchorMs - dashboardDays * 24 * 60 * 60 * 1000), new Date(historyAnchorMs), 'energy', dashboardDays === 1 ? 300 : 3600)),
     enabled: Boolean(home.data && selectedHomeId && (historyDeviceId || aggregateCircuitId)),
     placeholderData: (previousData, previousQuery) => previousAnchorData(previousData, previousQuery?.queryKey, dailyKey),
+  });
+  const powerOuterDomain = useMemo(() => ({
+    startMs: historyAnchorMs - dashboardDays * 86_400_000,
+    endMs: historyAnchorMs,
+  }), [dashboardDays, historyAnchorMs]);
+  const powerRangeSelection = useChartRangeSelection({
+    identity: powerBrushKey,
+    outerDomain: powerOuterDomain,
+    minimumDurationMs: dashboardDays === 1 ? 300_000 : 3_600_000,
+    onClamp: () => setPowerRangeNotice('The saved data window advanced, so the selected range was moved forward without changing its duration.'),
   });
   const command = useMutation({ mutationFn: () => api.command(commandDeviceId, 'reboot'), onSuccess: () => { setRebootOpen(false); void queryClient.invalidateQueries({ queryKey: ['devices'] }); } });
 
@@ -310,27 +310,6 @@ export function HomePage() {
     }
     return points.sort((left, right) => left.epoch - right.epoch);
   }, [history24.data]);
-  const [powerBrushSnapshot, setPowerBrushSnapshot] = useState<{ key: string; data: typeof chartData } | null>(null);
-  const [powerBrushLocked, setPowerBrushLocked] = useState(false);
-  useEffect(() => {
-    const finishInteraction = () => {
-      if (!powerBrushDraggingRef.current) return;
-      powerBrushDraggingRef.current = false;
-      const pendingRange = pendingPowerBrushRangeRef.current;
-      pendingPowerBrushRangeRef.current = null;
-      if (pendingRange) setPowerBrushRange(pendingRange);
-    };
-    window.addEventListener('pointerup', finishInteraction, true);
-    window.addEventListener('pointercancel', finishInteraction, true);
-    window.addEventListener('mouseup', finishInteraction, true);
-    window.addEventListener('touchend', finishInteraction, true);
-    return () => {
-      window.removeEventListener('pointerup', finishInteraction, true);
-      window.removeEventListener('pointercancel', finishInteraction, true);
-      window.removeEventListener('mouseup', finishInteraction, true);
-      window.removeEventListener('touchend', finishInteraction, true);
-    };
-  }, []);
   const intervalEnergyPoints = useMemo(() => daily.data?.points.map((point) => ({
     ...point,
     epoch: new Date(point.timestamp).getTime(),
@@ -356,68 +335,31 @@ export function HomePage() {
     }
     return intervalEnergyPoints;
   }, [dashboardDays, home.data, intervalEnergyPoints, now]);
-  const activePowerBrushRange = powerBrushRange?.key === powerBrushKey ? powerBrushRange : null;
-  const brushSnapshot = powerBrushSnapshot?.key === powerBrushKey ? powerBrushSnapshot.data : null;
-  const powerChartData = brushSnapshot && powerBrushLocked ? brushSnapshot : chartData;
-  const hasCommittedPower = powerChartData.some((point) => point.valueKw !== null);
+  const hasCommittedPower = chartData.some((point) => point.valueKw !== null);
   const displayTimezone = resolveDisplayTimezone(preferences.data?.display_timezone, home.data?.timezone ?? history24.data?.timezone ?? daily.data?.timezone);
+  const powerRangeStart = powerRangeSelection.selection.startMs;
+  const powerRangeEnd = powerRangeSelection.selection.endMs;
+  const powerChartData = useMemo(() => chartData.filter((point) => point.epoch >= powerRangeStart && point.epoch <= powerRangeEnd), [chartData, powerRangeEnd, powerRangeStart]);
+  const hasVisiblePower = powerChartData.some((point) => point.valueKw !== null);
   const powerAxis = useMemo(() => chartAxisFormat(powerChartData.map((point) => point.valueKw), 'kW', 62), [powerChartData]);
-  const dataAnchorMs = historyAnchorMs;
-  const defaultRangeStart = dataAnchorMs - dashboardDays * 86_400_000;
-  const defaultRangeEnd = dataAnchorMs;
-  const powerRangeStart = activePowerBrushRange?.startMs ?? defaultRangeStart;
-  const powerRangeEnd = activePowerBrushRange?.endMs ?? defaultRangeEnd;
-  const powerRangeIndices = activePowerBrushRange
-    ? closestRangeIndices(powerChartData, powerRangeStart, powerRangeEnd)
-    : { startIndex: 0, endIndex: Math.max(0, powerChartData.length - 1) };
-  const powerRangeStartIndex = powerRangeIndices.startIndex;
-  const powerRangeEndIndex = powerRangeIndices.endIndex;
   const powerTicks = useMemo(() => adaptiveTimeTicks(powerRangeStart, powerRangeEnd, powerChartWidth), [powerChartWidth, powerRangeEnd, powerRangeStart]);
   const selectedStartDay = localDayKey(powerRangeStart, displayTimezone);
   const selectedEndDay = localDayKey(powerRangeEnd, displayTimezone);
-  const beginPowerBrushInteraction = (event: { target: EventTarget | null }) => {
-    if (!(event.target instanceof Element) || !event.target.closest('.recharts-brush')) return;
-    if (powerBrushDraggingRef.current) return;
-    powerBrushDraggingRef.current = true;
-    pendingPowerBrushRangeRef.current = null;
-    setPowerBrushSnapshot({ key: powerBrushKey, data: chartData });
-    setPowerBrushLocked(true);
-  };
-  const beginPowerBrushKeyboardInteraction = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (!(event.target instanceof Element) || !event.target.closest('.recharts-brush')) return;
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return;
-    powerBrushKeyboardInputRef.current = true;
-  };
-  const finishPowerBrushKeyboardInteraction = () => { powerBrushKeyboardInputRef.current = false; };
-  const updatePowerBrushRange = (range: { startIndex?: number; endIndex?: number }) => {
-    if (typeof range.startIndex !== 'number' || typeof range.endIndex !== 'number') return;
-    const startMs = powerChartData[range.startIndex]?.epoch;
-    const endMs = powerChartData[range.endIndex]?.epoch;
-    if (startMs === undefined || endMs === undefined) return;
-    const nextRange = { key: powerBrushKey, startMs, endMs };
-    if (powerBrushDraggingRef.current) {
-      pendingPowerBrushRangeRef.current = nextRange;
-      return;
-    }
-    // Recharts can emit a full-range change when its parent refreshes even though
-    // the user did not touch the brush. Only a captured pointer or keyboard
-    // interaction is allowed to replace the timestamp-owned selection.
-    if (!powerBrushKeyboardInputRef.current) return;
-    setPowerBrushSnapshot({ key: powerBrushKey, data: chartData });
-    setPowerBrushLocked(true);
-    setPowerBrushRange(nextRange);
-  };
   const resetPowerBrush = () => {
-    powerBrushDraggingRef.current = false;
-    powerBrushKeyboardInputRef.current = false;
-    pendingPowerBrushRangeRef.current = null;
-    setPowerBrushSnapshot(null);
-    setPowerBrushLocked(false);
-    setPowerBrushRange(null);
+    setPowerRangeNotice(null);
+    powerRangeSelection.reset();
   };
   const resumeLivePower = () => {
     resetPowerBrush();
     void history24.refetch();
+  };
+  const beginManualPowerRange = (selection: { startMs: number; endMs: number }) => {
+    setPowerRangeNotice(null);
+    powerRangeSelection.beginManual(selection);
+  };
+  const commitManualPowerRange = (selection: { startMs: number; endMs: number }) => {
+    setPowerRangeNotice(null);
+    powerRangeSelection.commitManual(selection);
   };
   const intervalDailyAvailable = daily.data?.points.some((point) => point.value !== null) ?? false;
   const billingCycleForEnergy = billing.data?.accounts[0]?.current_billing_cycle;
@@ -520,10 +462,16 @@ export function HomePage() {
     <SensorHealthPanel data={data} details={devices.data?.devices ?? []} onSelect={setSelectedDevice} />
 
     <section className="dashboard-content" aria-label="Saved usage, commands, and alerts">
-      {(visibleCards.has('live_power') || visibleCards.has('completeness')) && <Card title={`Power History – ${dashboardRangeLabel}`} eyebrow="Saved sensor readings" action={<div className="chart-actions"><span className="select-chip">kW</span>{activePowerBrushRange && <><button type="button" className="text-button" onClick={resetPowerBrush}>Reset zoom</button><button type="button" className="text-button" onClick={resumeLivePower}>Resume live</button></>}</div>} className="dashboard-chart-card dashboard-power-history">
+      {(visibleCards.has('live_power') || visibleCards.has('completeness')) && <Card title={`Power History – ${dashboardRangeLabel}`} eyebrow="Saved sensor readings" action={<div className="chart-actions"><span className="select-chip">kW</span>{powerRangeSelection.mode === 'manual' && <><button type="button" className="text-button" onClick={resetPowerBrush}>Reset zoom</button><button type="button" className="text-button" onClick={resumeLivePower}>Resume live</button></>}</div>} className="dashboard-chart-card dashboard-power-history">
         <p id="power-history-summary" className="sr-only">Saved sensor power in {displayTimezone}. Missing readings are unshaded breaks. Use the range selector to zoom; Reset zoom or Resume live returns to the full range.</p>
-        {history24.isLoading ? <Loading label="Loading saved readings" /> : history24.isError ? <ErrorState error={history24.error} /> : history24.data && powerChartData.length > 0 && hasCommittedPower ? <div ref={powerChartRef} className="chart-wrap" role="group" aria-label="Saved power over time" aria-describedby="power-history-summary" data-testid="usage-chart" data-missing-gap-style="unshaded" data-missing-range-count={history24.data.missing_ranges.length} data-user-selected-range={activePowerBrushRange ? 'true' : 'false'} onPointerDownCapture={beginPowerBrushInteraction} onMouseDownCapture={beginPowerBrushInteraction} onTouchStartCapture={beginPowerBrushInteraction} onKeyDownCapture={beginPowerBrushKeyboardInteraction} onKeyUpCapture={finishPowerBrushKeyboardInteraction} onBlurCapture={finishPowerBrushKeyboardInteraction}><ResponsiveContainer width="100%" height="100%"><AreaChart accessibilityLayer data={powerChartData} margin={{ top: 16, right: 12, bottom: 8, left: 8 }}><defs><linearGradient id="powerFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#65e692" stopOpacity={0.48} /><stop offset="100%" stopColor="#65e692" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={['dataMin', 'dataMax']} scale="time" ticks={powerTicks} minTickGap={12} interval="preserveStartEnd" tickFormatter={(value: number) => powerTickLabel(value, Math.max(1, (powerRangeEnd - powerRangeStart) / 3_600_000), displayTimezone, selectedStartDay !== selectedEndDay)} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} tickFormatter={powerAxis.tick} axisLine={false} tickLine={false} width={powerAxis.width} /><Tooltip content={<UsageTooltip timezone={displayTimezone} />} wrapperStyle={{ outline: 'none' }} /><Area name="Power" type="monotone" dataKey="valueKw" stroke="#65e692" strokeWidth={2} fill="url(#powerFill)" connectNulls={false} isAnimationActive={false} /><Brush ariaLabel="Zoom saved power History" dataKey="epoch" height={28} travellerWidth={24} stroke="#65e692" fill="#151d1a" tickFormatter={() => ''} startIndex={powerRangeStartIndex} endIndex={powerRangeEndIndex} onChange={updatePowerBrushRange} /></AreaChart></ResponsiveContainer></div> : <EmptyState title="No readings were received during this time." detail="Choose another time range or check the sensor connection." />}
-        <div className="chart-footer"><Clock3 aria-hidden="true" /><span className="chart-footer-range" data-testid="power-selected-range">{dateTimeRange(new Date(powerRangeStart).toISOString(), new Date(powerRangeEnd).toISOString(), displayTimezone)}</span>{history24.data && <span className="chart-footer-coverage">{percent(history24.data.completeness === null ? null : Number(history24.data.completeness))} reading coverage · {history24.data.missing_ranges.length} gap{history24.data.missing_ranges.length === 1 ? '' : 's'}</span>}</div>
+        {history24.isLoading ? <Loading label="Loading saved readings" /> : history24.isError ? <ErrorState error={history24.error} /> : history24.data && chartData.length > 0 && hasCommittedPower ? <div ref={powerChartRef} className="chart-wrap" role="group" aria-label="Saved power over time" aria-describedby="power-history-summary" data-testid="usage-chart" data-missing-gap-style="unshaded" data-missing-range-count={history24.data.missing_ranges.length} data-user-selected-range={powerRangeSelection.mode === 'manual' ? 'true' : 'false'} data-range-mode={powerRangeSelection.mode}>
+          <div className="chart-range-layout">
+            <div className="chart-range-plot">{hasVisiblePower ? <ResponsiveContainer width="100%" height="100%"><AreaChart accessibilityLayer data={powerChartData} margin={{ top: 16, right: 12, bottom: 8, left: 8 }}><defs><linearGradient id="powerFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#65e692" stopOpacity={0.48} /><stop offset="100%" stopColor="#65e692" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid stroke="#33413c" strokeDasharray="3 4" vertical={false} /><XAxis dataKey="epoch" type="number" domain={[powerRangeStart, powerRangeEnd]} allowDataOverflow scale="time" ticks={powerTicks} minTickGap={12} interval="preserveStartEnd" tickFormatter={(value: number) => powerTickLabel(value, Math.max(1, (powerRangeEnd - powerRangeStart) / 3_600_000), displayTimezone, selectedStartDay !== selectedEndDay)} tick={{ fill: '#9ca9a4', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: '#9ca9a4', fontSize: 11 }} tickFormatter={powerAxis.tick} axisLine={false} tickLine={false} width={powerAxis.width} /><Tooltip content={<UsageTooltip timezone={displayTimezone} />} wrapperStyle={{ outline: 'none' }} /><Area name="Power" type="monotone" dataKey="valueKw" stroke="#65e692" strokeWidth={2} fill="url(#powerFill)" connectNulls={false} isAnimationActive={false} /></AreaChart></ResponsiveContainer> : <EmptyState title="No readings in the selected range" detail="Move or resize the range to view saved readings." />}</div>
+            <ChartRangeSelector key={powerBrushKey} label="Saved power History range" outerDomain={powerOuterDomain} selection={powerRangeSelection.selection} mode={powerRangeSelection.mode} minimumDurationMs={dashboardDays === 1 ? 300_000 : 3_600_000} formatValue={(value) => dateTime(new Date(value).toISOString(), displayTimezone)} onManualStart={beginManualPowerRange} onCommit={commitManualPowerRange} testId="power-range" />
+          </div>
+        </div> : <EmptyState title="No readings were received during this time." detail="Choose another time range or check the sensor connection." />}
+        {powerRangeNotice && <p className="chart-range-notice" role="status">{powerRangeNotice}</p>}
+        <div className="chart-footer"><Clock3 aria-hidden="true" /><span className="chart-footer-range" data-testid="power-selected-range" data-start-ms={powerRangeStart} data-end-ms={powerRangeEnd}>{dateTimeRange(new Date(powerRangeStart).toISOString(), new Date(powerRangeEnd).toISOString(), displayTimezone)}</span>{history24.data && <span className="chart-footer-coverage">{percent(history24.data.completeness === null ? null : Number(history24.data.completeness))} reading coverage · {history24.data.missing_ranges.length} gap{history24.data.missing_ranges.length === 1 ? '' : 's'}</span>}</div>
       </Card>}
       {visibleCards.has('energy') && <Card title="Daily Energy" eyebrow="Energy by local calendar day" action={<div className="chart-actions"><span className="select-chip">{dashboardRangeLabel}</span><span className="select-chip">kWh</span></div>} className="dashboard-chart-card dashboard-daily-energy">
         {selectedStartDay !== selectedEndDay && dashboardDays === 1 && <p className="chart-helper">The selected 24-hour range spans two calendar days.</p>}

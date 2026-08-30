@@ -1,0 +1,172 @@
+.chart-range-selector {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.35rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.chart-range-selector__heading,
+.chart-range-selector__values {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #aab5b1;
+  font-size: 0.75rem;
+  min-width: 0;
+}
+
+.chart-range-selector__values {
+  overflow: hidden;
+  width: 100%;
+}
+
+.chart-range-selector__heading > :first-child {
+  color: #eaf2ef;
+  font-weight: 700;
+}
+
+.chart-range-selector__values > span {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart-range-selector__values > span:last-child {
+  text-align: right;
+}
+
+.chart-range-selector__track {
+  position: relative;
+  width: calc(100% - 88px);
+  min-width: 0;
+  height: 44px;
+  margin-inline: 44px;
+  touch-action: none;
+  user-select: none;
+}
+
+.chart-range-selector__rail,
+.chart-range-selector__fill {
+  position: absolute;
+  top: 50%;
+  height: 8px;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.chart-range-selector__rail {
+  inset-inline: 0;
+  border: 1px solid #456159;
+  background: #151d1a;
+}
+
+.chart-range-selector__fill {
+  left: var(--range-start);
+  width: var(--range-width);
+  border: 1px solid #65e692;
+  background: rgb(101 230 146 / 30%);
+}
+
+.chart-range-selector button {
+  margin: 0;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  appearance: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.chart-range-selector__window {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: var(--range-center);
+  width: max(44px, var(--range-width));
+  height: 44px;
+  cursor: grab;
+  background: transparent;
+  transform: translateX(-50%);
+}
+
+.chart-range-selector__window:active {
+  cursor: grabbing;
+}
+
+.chart-range-selector__thumb {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  width: 44px;
+  height: 44px;
+  cursor: ew-resize;
+  background: transparent;
+}
+
+.chart-range-selector__thumb--start {
+  left: var(--range-start);
+  transform: translateX(-100%);
+}
+
+.chart-range-selector__thumb--end {
+  left: var(--range-end);
+}
+
+.chart-range-selector__thumb > span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 28px;
+  border: 2px solid #eaf2ef;
+  border-radius: 5px;
+  background: #65e692;
+  box-shadow: 0 1px 6px rgb(0 0 0 / 45%);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.chart-range-selector__thumb--start > span {
+  left: 100%;
+}
+
+.chart-range-selector__thumb--end > span {
+  left: 0;
+}
+
+.chart-range-selector__window:focus-visible,
+.chart-range-selector__thumb:focus-visible {
+  border-radius: 7px;
+  outline: 3px solid #8df5b2;
+  outline-offset: -3px;
+}
+
+.chart-range-selector__status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+@media (max-width: 480px) {
+  .chart-range-selector__heading,
+  .chart-range-selector__values {
+    font-size: 0.7rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-range-selector * {
+    scroll-behavior: auto;
+  }
+}

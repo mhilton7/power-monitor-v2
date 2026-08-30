@@ -1015,11 +1015,11 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     assert "prepare-host.sh" not in installation
     assert "pm-protocol/1.0.0" in installation
     assert "authenticated PZEM-004T readings" in installation
-    assert "$Tag = 'v0.1.0-rc.29'" in installation
+    assert "$Tag = 'v0.1.0-rc.30'" in installation
     assert "$env:TEMP" in installation
     assert "[guid]::NewGuid().ToString('N')" in installation
     assert "Join-Path $HOME" not in installation
-    assert "signed v0.1.0-rc.29 release" in normalized_installation
+    assert "signed v0.1.0-rc.30 release" in normalized_installation
     assert "Stage-PowerMeterTrueNAS.ps1" in installation
     assert "power-monitor.home.arpa -> 192.168.0.175" in installation
     assert "Direct-IP HTTPS is not supported" in installation
@@ -1074,11 +1074,11 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
 def test_candidate_notes_describe_workflow_output_without_claiming_source_publication() -> None:
     notes = (ROOT / "release/RELEASE_NOTES.md").read_text(encoding="utf-8")
     normalized = " ".join(notes.split())
-    assert "power-monitor-v2-v0.1.0-rc.29.yaml" in normalized
+    assert "power-monitor-v2-v0.1.0-rc.30.yaml" in normalized
     assert "Alembic head: `20260829_0020`" in normalized
-    assert "firmware tag: `v0.1.0-rc.29`, build number `32`" in normalized
+    assert "firmware tag: `v0.1.0-rc.30`, build number `33`" in normalized
     assert "pm-telemetry/2.0.0" in normalized
-    assert "c79ca4fd97b6ad349231e21468524119b86db96466e269f78cb7afeab70a6e09" in normalized
+    assert "eddc0679e6778f07c0702f166ae5bf0f62017ce03e68c9dc3fc31e67f81d2d12" in normalized
     assert "original bytes/full OCR text are never persisted" in normalized
     assert "Automated tests do not install firmware on physical sensors" in normalized
     assert "actual marked-unit" in normalized
@@ -1093,9 +1093,9 @@ def test_release_process_requires_merge_then_verified_signed_annotated_tag() -> 
     merge = "Merge the approved pull request through the protected `main` branch"
     update = "git pull --ff-only origin main"
     firmware = "Publish and independently verify the coordinated signed firmware"
-    create = "git tag -s -m 'PowerMeter V2 0.1.0-rc.29'"
-    verify = "git verify-tag v0.1.0-rc.29"
-    push = "git push origin refs/tags/v0.1.0-rc.29"
+    create = "git tag -s -m 'PowerMeter V2 0.1.0-rc.30'"
+    verify = "git verify-tag v0.1.0-rc.30"
+    push = "git push origin refs/tags/v0.1.0-rc.30"
 
     assert normalized.index(merge) < normalized.index(update)
     assert normalized.index(update) < normalized.index(firmware)

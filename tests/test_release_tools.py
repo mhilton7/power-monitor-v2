@@ -44,7 +44,7 @@ DIGEST_D = "sha256:" + "4" * 64
 COMMIT = "a" * 40
 IMAGE = "b" * 64
 FIRMWARE_BUILD_ID = "c" * 64
-VERSION = "0.1.0-rc.29"
+VERSION = "0.1.0-rc.30"
 
 
 @pytest.fixture
@@ -91,11 +91,11 @@ def _candidate_release_bundle(directory: Path) -> tuple[Path, dict[str, object]]
             "build_time": "2026-08-17T00:00:00Z",
         },
         "firmware_release_url": (
-            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.29"
+            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.30"
         ),
         "firmware": {
             "repository": "https://github.com/mhilton7/power-monitor-sensor-headless",
-            "tag": "v0.1.0-rc.29",
+            "tag": "v0.1.0-rc.30",
             "revision": COMMIT,
             "build_number": 31,
             "firmware_build_id": FIRMWARE_BUILD_ID,
@@ -768,7 +768,7 @@ def test_release_renderer_separates_firmware_build_number_and_exact_build_id(
     evidence_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    output = evidence_dir / "power-monitor-v2-v0.1.0-rc.29.yaml"
+    output = evidence_dir / "power-monitor-v2-v0.1.0-rc.30.yaml"
     manifest_path = evidence_dir / "release-manifest.json"
     monkeypatch.setattr(
         sys,
@@ -798,9 +798,9 @@ def test_release_renderer_separates_firmware_build_number_and_exact_build_id(
             "--frontend-asset-id",
             f"{VERSION}-{COMMIT[:16]}",
             "--firmware-release-url",
-            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.29",
+            "https://github.com/mhilton7/power-monitor-sensor-headless/releases/tag/v0.1.0-rc.30",
             "--firmware-tag",
-            "v0.1.0-rc.29",
+            "v0.1.0-rc.30",
             "--firmware-revision",
             COMMIT,
             "--firmware-image-sha256",

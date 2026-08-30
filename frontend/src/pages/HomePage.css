@@ -371,6 +371,7 @@
 
 .dashboard-chart-card .chart-wrap { height: 228px; }
 .dashboard-chart-card .empty-state { min-height: 228px; }
+.dashboard-chart-card .chart-range-plot .empty-state { height: 100%; min-height: 0; }
 .dashboard-chart-card .chart-actions { display: flex; align-items: center; gap: 10px; }
 .dashboard-chart-card .chart-actions .text-button { padding: 6px 2px; white-space: nowrap; }
 .dashboard-chart-card .chart-helper { margin: -8px 0 4px; font-size: .68rem; }
@@ -380,19 +381,9 @@
 .dashboard-power-history .recharts-wrapper:focus,
 .dashboard-power-history .recharts-wrapper:focus-visible,
 .dashboard-power-history .recharts-surface:focus,
-.dashboard-power-history .recharts-surface:focus-visible,
-.dashboard-power-history .recharts-brush-traveller:focus,
-.dashboard-power-history .recharts-brush-traveller:focus-visible {
+.dashboard-power-history .recharts-surface:focus-visible {
   outline: none;
   box-shadow: none;
-}
-
-.dashboard-power-history .recharts-surface:focus .recharts-brush-slide,
-.dashboard-power-history .recharts-surface:focus-visible .recharts-brush-slide,
-.dashboard-power-history .recharts-brush-traveller:focus rect,
-.dashboard-power-history .recharts-brush-traveller:focus-visible rect {
-  stroke: var(--accent-bright);
-  stroke-width: 2px;
 }
 
 .dashboard-power-history .chart-footer {

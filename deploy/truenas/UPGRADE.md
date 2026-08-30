@@ -1,7 +1,7 @@
 # Upgrade PowerMeter V2 on TrueNAS
 
-> This UI-only flow is prepared for the complete signed v0.1.0-rc.29 release
-> asset set. Public rc.28 and earlier releases retain their attached
+> This UI-only flow is prepared for the complete signed v0.1.0-rc.30 release
+> asset set. Public rc.29 and earlier releases retain their attached
 > procedures. Never mix release asset sets.
 
 Upgrade by replacing the complete verified YAML in the TrueNAS app editor.
@@ -23,7 +23,7 @@ Never edit one image tag/digest, accept a generic image-update suggestion, use
    `Apps/PowerMeterV2` named with the old version and UTC time. A snapshot
    supplements rather than replaces the verified logical backup.
 
-The coordinated rc.29 release extends the migration chain to Alembic head
+The coordinated rc.30 release retains the migration chain at Alembic head
 `20260829_0020`. Revision 0020 adds per-user alert-notification dismissal view
 state without deleting shared alert evidence. Revision 0019 adds Settings-owned utility and billing-estimate
 configuration without changing accepted telemetry, immutable History, or rate

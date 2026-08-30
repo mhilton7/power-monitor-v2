@@ -1,9 +1,21 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 import { device, home } from '../fixtures';
 import { mockApi } from './mocks';
 
 test.beforeEach(async ({ page }) => { await mockApi(page); });
+
+async function dragRangePartToFraction(part: Locator, track: Locator, fraction: number) {
+  const trackBox = await track.boundingBox();
+  expect(trackBox).not.toBeNull();
+  await part.dragTo(track, {
+    targetPosition: {
+      x: Math.round(Math.max(1, Math.min(trackBox!.width - 1, trackBox!.width * fraction))),
+      y: Math.round(trackBox!.height / 2),
+    },
+    force: true,
+  });
+}
 
 test('Home shows live readings, a compact billing-cycle summary, and sensor evidence', async ({ page }) => {
   await page.goto('/');
@@ -30,7 +42,8 @@ test('Home shows live readings, a compact billing-cycle summary, and sensor evid
   await expect(page.getByTestId('daily-chart')).toHaveAttribute('data-unallocated-gap-count', '0');
   await expect(page.getByText('18.42 kWh')).toBeVisible();
   const usagePath = await page.locator('[data-testid="usage-chart"] .recharts-area-area').getAttribute('d');
-  expect(usagePath?.match(/M/g)?.length).toBeGreaterThanOrEqual(2);
+  expect(usagePath?.match(/M/g)?.length).toBeGreaterThanOrEqual(1);
+  await expect(page.getByTestId('usage-chart')).toHaveAttribute('data-missing-range-count', '1');
   await expect(page.getByRole('button', { name: /Main Panel Sensor/ })).toBeVisible();
 });
 
@@ -40,9 +53,9 @@ test('Power History slider updates a readable non-overlapping selected range', a
   const chart = page.getByTestId('usage-chart');
   const rangeLabel = page.getByTestId('power-selected-range');
   const original = await rangeLabel.innerText();
-  const leftHandle = chart.locator('.recharts-brush-traveller').first();
-  const brushSlide = chart.locator('.recharts-brush-slide');
-  await leftHandle.dragTo(brushSlide, { targetPosition: { x: 150, y: 10 }, force: true });
+  const startHandle = page.getByTestId('power-range-start');
+  const rangeTrack = page.getByTestId('power-range-track');
+  await dragRangePartToFraction(startHandle, rangeTrack, 0.3);
   await expect.poll(() => rangeLabel.innerText()).not.toBe(original);
   const selected = await rangeLabel.innerText();
   await page.waitForTimeout(1_100);
@@ -68,10 +81,6 @@ test('Power History slider updates a readable non-overlapping selected range', a
 test('Power History keeps its selected timestamps through a five-second dashboard refresh without a white chart outline', async ({ page }) => {
   let homeRequests = 0;
   await page.addInitScript(() => {
-    // Some browsers and input devices drive the Recharts brush through mouse
-    // events without delivering Pointer Events to React. The mouse fallback
-    // must still commit the user's selection before the next live refresh.
-    window.addEventListener('pointerdown', (event) => event.stopImmediatePropagation(), true);
     class MeasurementEventSource extends EventTarget {
       static readonly CONNECTING = 0;
       static readonly OPEN = 1;
@@ -108,12 +117,13 @@ test('Power History keeps its selected timestamps through a five-second dashboar
 
   const chart = page.getByTestId('usage-chart');
   const rangeLabel = page.getByTestId('power-selected-range');
-  const leftHandle = chart.locator('.recharts-brush-traveller').first();
-  const brushSlide = chart.locator('.recharts-brush-slide');
-  await leftHandle.dragTo(brushSlide, { targetPosition: { x: 150, y: 10 }, force: true });
+  const startHandle = page.getByTestId('power-range-start');
+  const rangeTrack = page.getByTestId('power-range-track');
+  const selectedWindow = page.getByTestId('power-range-window');
+  await dragRangePartToFraction(startHandle, rangeTrack, 0.3);
   await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
   const selected = await rangeLabel.innerText();
-  const selectedBrushBounds = await chart.locator('.recharts-brush-slide').evaluate((element) => {
+  const selectedWindowBounds = await selectedWindow.evaluate((element) => {
     const bounds = element.getBoundingClientRect();
     return { x: bounds.x, width: bounds.width };
   });
@@ -125,12 +135,12 @@ test('Power History keeps its selected timestamps through a five-second dashboar
   await expect.poll(() => homeRequests, { timeout: 8_000 }).toBeGreaterThanOrEqual(2);
   await expect(rangeLabel).toHaveText(selected);
   await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
-  const refreshedBrushBounds = await chart.locator('.recharts-brush-slide').evaluate((element) => {
+  const refreshedWindowBounds = await selectedWindow.evaluate((element) => {
     const bounds = element.getBoundingClientRect();
     return { x: bounds.x, width: bounds.width };
   });
-  expect(refreshedBrushBounds.x).toBeCloseTo(selectedBrushBounds.x, 0);
-  expect(refreshedBrushBounds.width).toBeCloseTo(selectedBrushBounds.width, 0);
+  expect(refreshedWindowBounds.x).toBeCloseTo(selectedWindowBounds.x, 0);
+  expect(refreshedWindowBounds.width).toBeCloseTo(selectedWindowBounds.width, 0);
   await expect(page.getByRole('button', { name: 'Reset zoom' })).toBeVisible();
 });
 
@@ -143,18 +153,18 @@ test('Power History five-second range interaction stays local and avoids disrupt
   await page.goto('/');
   const chart = page.getByTestId('usage-chart');
   await expect(chart).toBeVisible();
-  const leftHandle = chart.locator('.recharts-brush-traveller').first();
-  const brushSlide = chart.locator('.recharts-brush-slide');
+  const startHandle = page.getByTestId('power-range-start');
+  const rangeTrack = page.getByTestId('power-range-track');
   const requestsBeforeDrag = historyRequests;
   const longTaskCountBefore = await page.evaluate(() => performance.getEntriesByType('longtask').length);
   const layoutShiftBefore = await page.evaluate(() => performance.getEntriesByType('layout-shift')
     .filter((entry) => !(entry as PerformanceEntry & { hadRecentInput?: boolean }).hadRecentInput)
     .reduce((total, entry) => total + Number((entry as PerformanceEntry & { value?: number }).value ?? 0), 0));
-  await leftHandle.dragTo(brushSlide, { targetPosition: { x: 150, y: 10 }, force: true });
+  await dragRangePartToFraction(startHandle, rangeTrack, 0.3);
   await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
   const dragStarted = performance.now();
   for (let step = 1; step <= 50; step += 1) {
-    await leftHandle.press(step % 2 === 0 ? 'ArrowRight' : 'ArrowLeft');
+    await startHandle.press(step % 2 === 0 ? 'ArrowRight' : 'ArrowLeft');
     await page.waitForTimeout(100);
   }
   const dragDurationMs = performance.now() - dragStarted;
@@ -176,23 +186,24 @@ test('Power History slider remains responsive through repeated drag adjustments'
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
   const chart = page.getByTestId('usage-chart');
-  const leftHandle = chart.locator('.recharts-brush-traveller').first();
-  await expect(leftHandle).toBeVisible();
-  const initial = await leftHandle.boundingBox();
-  const chartBox = await chart.boundingBox();
+  const startHandle = page.getByTestId('power-range-start');
+  const rangeTrack = page.getByTestId('power-range-track');
+  await expect(startHandle).toBeVisible();
+  const initial = await startHandle.boundingBox();
+  const trackBox = await rangeTrack.boundingBox();
   expect(initial).not.toBeNull();
-  expect(chartBox).not.toBeNull();
+  expect(trackBox).not.toBeNull();
 
   const positions: number[] = [];
-  for (const targetX of [180, 280, 380]) {
-    await leftHandle.dragTo(chart, { targetPosition: { x: targetX, y: chartBox!.height - 14 }, force: true });
-    const moved = await leftHandle.boundingBox();
+  for (const fraction of [0.2, 0.45, 0.7]) {
+    await dragRangePartToFraction(startHandle, rangeTrack, fraction);
+    const moved = await startHandle.boundingBox();
     expect(moved).not.toBeNull();
     positions.push(moved!.x);
   }
 
   expect(positions.every((position, index) => index === 0 || position > positions[index - 1]!)).toBe(true);
-  expect(positions.at(-1)! - initial!.x).toBeGreaterThan(200);
+  expect(positions.at(-1)! - initial!.x).toBeGreaterThan(trackBox!.width * 0.55);
   await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
   await expect(page.getByRole('button', { name: 'Reset zoom' })).toBeVisible();
 });

@@ -54,6 +54,45 @@ describe('History', () => {
     expect(screen.getByRole('button', { name: '7 days' })).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('keeps a keyboard-selected 24-hour range until Reset zoom, including an active-preset click', async () => {
+    installFetchMock((path) => {
+      if (path.endsWith('/auth/preferences')) return { status: 200, body: { preferences: { dashboard_range: 'today', history_range: 'day', refresh_seconds: 60, power_unit: 'auto', energy_unit: 'auto', date_format: 'us', time_format: '12h', decimal_precision: 2, density: 'comfortable', dashboard_cards: ['live_power'] } } };
+      if (path.includes('/devices?')) return { status: 200, body: { devices: [device] } };
+      if (path.includes('/circuits?')) return { status: 200, body: { circuits: [] } };
+      if (path.includes('/history')) return { status: 200, body: history };
+      return { status: 404, body: {} };
+    });
+    renderWithProviders(<HistoryPage />);
+    const chart = await screen.findByTestId('history-chart');
+    const selectedRange = screen.getByTestId('history-selected-range');
+    const initialStart = Number(selectedRange.dataset.startMs);
+    const initialEnd = Number(selectedRange.dataset.endMs);
+    const start = screen.getByTestId('history-range-start');
+    const end = screen.getByTestId('history-range-end');
+
+    start.focus();
+    await userEvent.keyboard('{ArrowRight}');
+    end.focus();
+    await userEvent.keyboard('{ArrowLeft}');
+
+    await waitFor(() => expect(chart).toHaveAttribute('data-range-mode', 'manual'));
+    const manualStart = Number(selectedRange.dataset.startMs);
+    const manualEnd = Number(selectedRange.dataset.endMs);
+    expect(manualStart).toBeGreaterThan(initialStart);
+    expect(manualEnd).toBeLessThan(initialEnd);
+    expect(screen.getByRole('button', { name: 'Reset zoom' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '24 hours' }));
+    expect(selectedRange).toHaveAttribute('data-start-ms', String(manualStart));
+    expect(selectedRange).toHaveAttribute('data-end-ms', String(manualEnd));
+    expect(chart).toHaveAttribute('data-range-mode', 'manual');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reset zoom' }));
+    await waitFor(() => expect(chart).toHaveAttribute('data-range-mode', 'auto'));
+    expect(selectedRange).toHaveAttribute('data-start-ms', String(initialStart));
+    expect(selectedRange).toHaveAttribute('data-end-ms', String(initialEnd));
+  });
+
   it('shows the exact no-readings state without sensor storage wording', async () => {
     installFetchMock((path) => {
       if (path.includes('/devices?')) return { status: 200, body: { devices: [{ ...device, backlog: 199 }] } };
@@ -125,7 +164,7 @@ describe('History', () => {
       if (path.endsWith('/auth/preferences')) return { status: 200, body: { preferences: { dashboard_range: 'today', history_range: 'day', refresh_seconds: 15, power_unit: 'auto', energy_unit: 'auto', date_format: 'us', time_format: '12h', decimal_precision: 2, density: 'comfortable', dashboard_cards: ['live_power'] } } };
       if (path.includes('/devices?')) return { status: 200, body: { devices: [device] } };
       if (path.includes('/circuits?')) return { status: 200, body: { circuits: [] } };
-      if (path.includes('/history')) { historyRequests += 1; return { status: 200, body: history }; }
+      if (path.includes('/history')) { historyRequests += 1; return { status: 200, body: { ...history, resolution_seconds: 60 } }; }
       return { status: 404, body: {} };
     });
     renderWithProviders(<HistoryPage />);
@@ -138,6 +177,26 @@ describe('History', () => {
     await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 1_100)); });
     expect(Number(screen.getByTestId('live-timeline-status').dataset.viewEnd)).toBeGreaterThan(firstEnd);
     expect(historyRequests).toBe(firstRequestCount);
+    const liveStart = screen.getByTestId('history-range-start');
+    liveStart.focus();
+    await userEvent.keyboard('{ArrowRight}');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume live' })).toBeInTheDocument());
+    expect(screen.getByTestId('history-chart')).toHaveAttribute('data-range-mode', 'manual');
+    const manualRange = screen.getByTestId('history-selected-range');
+    const manualStart = manualRange.dataset.startMs;
+    const manualEnd = manualRange.dataset.endMs;
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 1_100)); });
+    expect(manualRange).toHaveAttribute('data-start-ms', manualStart);
+    expect(manualRange).toHaveAttribute('data-end-ms', manualEnd);
+    const frozenRequestCount = historyRequests;
+    act(() => { window.dispatchEvent(new Event('powermeter:measurement')); });
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 50)); });
+    expect(historyRequests).toBe(frozenRequestCount);
+    expect(manualRange).toHaveAttribute('data-start-ms', manualStart);
+    expect(manualRange).toHaveAttribute('data-end-ms', manualEnd);
+    await userEvent.click(screen.getByRole('button', { name: 'Resume live' }));
+    await waitFor(() => expect(screen.getByTestId('history-chart')).toHaveAttribute('data-range-mode', 'auto'));
+    expect(screen.queryByRole('button', { name: 'Resume live' })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '24 hours' }));
     await waitFor(() => expect(screen.getByRole('button', { name: '24 hours' })).toHaveAttribute('aria-pressed', 'true'));
     const staticRequestCount = historyRequests;
