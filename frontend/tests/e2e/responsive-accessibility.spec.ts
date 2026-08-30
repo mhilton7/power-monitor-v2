@@ -16,8 +16,22 @@ const viewports = [
 ] as const;
 
 async function expectNoHorizontalOverflow(page: Page) {
-  const dimensions = await page.evaluate(() => ({ client: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth }));
-  expect(dimensions.scroll).toBeLessThanOrEqual(dimensions.client + 1);
+  const dimensions = await page.evaluate(() => {
+    const client = document.documentElement.clientWidth;
+    const offenders = [...document.querySelectorAll<HTMLElement>('body *')]
+      .map((element) => ({ element, bounds: element.getBoundingClientRect() }))
+      .filter(({ bounds }) => bounds.width > 0 && (bounds.left < -1 || bounds.right > client + 1))
+      .slice(0, 8)
+      .map(({ element, bounds }) => ({
+        tag: element.tagName.toLowerCase(),
+        className: element.className?.toString().slice(0, 120) ?? '',
+        testId: element.dataset.testid ?? '',
+        left: Math.round(bounds.left),
+        right: Math.round(bounds.right),
+      }));
+    return { client, scroll: document.documentElement.scrollWidth, offenders };
+  });
+  expect(dimensions.scroll, JSON.stringify(dimensions.offenders)).toBeLessThanOrEqual(dimensions.client + 1);
 }
 
 async function expectUniqueIds(page: Page) {
@@ -59,12 +73,21 @@ for (const viewport of viewports) {
     await expectTicksDoNotOverlap(page.locator('[data-testid="daily-chart"] .recharts-xAxis-tick-labels text'));
     await expectYAxisContained(page.getByTestId('usage-chart'));
     await expectYAxisContained(page.getByTestId('daily-chart'));
-    const brushHandles = page.locator('[data-testid="usage-chart"] .recharts-brush-traveller');
-    await expect(brushHandles).toHaveCount(2);
-    for (const handle of await brushHandles.all()) {
-      const box = await handle.boundingBox();
-      expect(box?.width).toBeGreaterThanOrEqual(24);
-      expect(box?.height).toBeGreaterThanOrEqual(24);
+    const rangeTrack = page.getByTestId('power-range-track');
+    const rangeParts = [
+      page.getByTestId('power-range-start'),
+      page.getByTestId('power-range-end'),
+      page.getByTestId('power-range-window'),
+    ];
+    const trackBox = await rangeTrack.boundingBox();
+    expect(trackBox).not.toBeNull();
+    expect(trackBox?.height).toBeGreaterThanOrEqual(44);
+    for (const part of rangeParts) {
+      await expect(part).toHaveAttribute('role', 'slider');
+      await expect(part).toHaveAttribute('aria-valuetext', /.+/);
+      const box = await part.boundingBox();
+      expect(box?.width).toBeGreaterThanOrEqual(44);
+      expect(box?.height).toBeGreaterThanOrEqual(44);
     }
     if (viewport.width <= 720) await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
     const homeSelector = page.getByLabel('Active home');

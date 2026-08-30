@@ -17,6 +17,10 @@ export default defineConfig({
   },
   projects: [
     { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } } },
+    ...(process.env.PW_RANGE_CROSS_BROWSER === '1' ? [
+      { name: 'range-firefox', testMatch: /range-rebound\.spec\.ts/, use: { ...devices['Desktop Firefox'], viewport: { width: 1440, height: 1000 } } },
+      { name: 'range-webkit', testMatch: /range-rebound\.spec\.ts/, use: { ...devices['Desktop Safari'], viewport: { width: 1440, height: 1000 } } },
+    ] : []),
   ],
   webServer: {
     command: 'npm run serve:e2e',

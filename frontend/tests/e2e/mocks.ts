@@ -93,7 +93,10 @@ export async function mockApi(page: Page, options: MockOptions = {}) {
           { timestamp: '2026-08-12T20:00:00Z', value: 8, cost: '1.20', quality: 1 },
           { timestamp: '2026-08-13T12:00:00Z', value: 10, cost: '1.50', quality: 1 },
         ], energy_kwh: 18, resolution_seconds: Number(url.searchParams.get('resolution_seconds') ?? 300) });
-      } else await json(route, history);
+      } else await json(route, {
+        ...history,
+        resolution_seconds: Number(url.searchParams.get('resolution_seconds') ?? history.resolution_seconds),
+      });
       return;
     }
     if (path.endsWith('/billing')) { await json(route, options.billingById?.[homeId] ?? billing); return; }

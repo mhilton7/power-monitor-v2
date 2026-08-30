@@ -1,14 +1,33 @@
-# PowerMeter V2 v0.1.0-rc.29
+# PowerMeter V2 v0.1.0-rc.30
 
-RC29 carries forward the public RC28 server-owned History, billing presentation,
-official-rate catalog, responsive chart, and firmware/deployment lifecycle
-work while adding per-user notification dismissal. Alert records, lifecycle
-state, and audit evidence remain intact when a user removes a notification. The
-firmware runtime remains stateless; this candidate advances its coordinated
-release binding without reintroducing storage or backlog behavior. It remains
-a release candidate because marked-unit hardware certification is pending.
+RC30 carries forward the public RC29 server-owned History, billing presentation,
+official-rate catalog, notification controls, and firmware/deployment lifecycle
+work while replacing the chart library's transient brush state with an
+accessible timestamp-based range selector. User-selected Dashboard and History
+ranges now remain stable across five-second reading refreshes, live ticker
+updates, refetches, resize, and tooltip interaction. The firmware runtime
+remains stateless and byte-identical to RC29; this candidate advances only its
+coordinated release metadata. Marked-unit hardware certification remains pending.
 
-## RC29 notification controls
+## RC30 permanent chart-range repair
+
+- Dashboard and History range selection is represented by timestamps rather
+  than array indexes, so appended authenticated readings cannot reset a user's
+  selected window or shift it to unrelated samples.
+- Manual mode begins on the first effective pointer, touch, mouse, or keyboard
+  movement. Only Reset zoom or Resume live returns to the full live range.
+- History Live freezes both its selector domain and query interval while a
+  manual range is active, avoiding per-pixel requests and moving query bounds.
+- New data is clamped against a manual selection without changing its duration;
+  an entirely empty selected window remains visible with an explicit empty state.
+- Chart selection no longer draws a white browser focus border. The selector's
+  handles and explicit controls retain a visible green keyboard focus indicator.
+- The responsive control is covered from 320 through 1920 CSS pixels and keeps
+  labels, handles, selected timestamps, and coverage text from overlapping.
+- Public server and firmware RC29 artifacts remain immutable and are never
+  moved, rewritten, or relabeled as RC30.
+
+## Public RC29 notification controls retained
 
 - Each authorized user can remove an individual open or acknowledged alert
   from their own notification view without deleting the shared alert record.
@@ -23,7 +42,7 @@ a release candidate because marked-unit hardware certification is pending.
   a five-second authenticated-reading refresh arrives; only Reset zoom or
   Resume live returns the brush to the full range.
 - Public server and firmware RC28 artifacts remain immutable and are never
-  relabeled with the new API contract.
+  relabeled with the RC29 API contract.
 
 ## Public RC28 dashboard and SCE source repairs retained
 
@@ -227,25 +246,25 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
 
 ## Release binding
 
-- Server and frontend version: `0.1.0-rc.29`.
-- Compatible firmware tag: `v0.1.0-rc.29`, build number `32`.
+- Server and frontend version: `0.1.0-rc.30`.
+- Compatible firmware tag: `v0.1.0-rc.30`, build number `33`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
 - Alembic head: `20260829_0020`.
 - Generated contract-document SHA-256:
-  `c79ca4fd97b6ad349231e21468524119b86db96466e269f78cb7afeab70a6e09`.
+  `eddc0679e6778f07c0702f166ae5bf0f62017ce03e68c9dc3fc31e67f81d2d12`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned
-`power-monitor-v2-v0.1.0-rc.29.yaml`, release manifest, migration/security/test
+`power-monitor-v2-v0.1.0-rc.30.yaml`, release manifest, migration/security/test
 evidence, and checksums. The firmware prerelease must be published and
 independently verified first, then the server compatibility variable must be
-set to the exact RC29 firmware tag.
+set to the exact RC30 firmware tag.
 
 ## Deployment boundary
 
-Deploy the server RC29 YAML before applying the firmware RC29 update. Existing
-RC21 through RC28 sensors remain protocol-compatible throughout. Automated
+Deploy the server RC30 YAML before applying the firmware RC30 update. Existing
+RC21 through RC29 sensors remain protocol-compatible throughout. Automated
 tests do not install firmware on physical sensors. No card was formatted and no
 NVS namespace was erased while preparing this release.
 

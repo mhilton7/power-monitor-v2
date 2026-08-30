@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 PRODUCT_NAME = "PowerMeter V2"
-VERSION = "0.1.0-rc.29"
+VERSION = "0.1.0-rc.30"
 PROTOCOL_ID = "pm-protocol/1.0.0"
 TELEMETRY_PROTOCOL_ID = "pm-telemetry/2.0.0"
 DEFAULT_TIMEZONE = "America/Los_Angeles"
