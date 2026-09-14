@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM node:22.22.2-alpine3.23@sha256:8ea2348b068a9544dae7317b4f3aafcdc032df1647bb7d768a05a5cad1a7683f AS build
+FROM node:26.8-alpine3.23@sha256:a3024faf41c40992531ecfb00604384665be870a44626afaf181c6d583f89296 AS build
 ARG VERSION=0.1.0-rc.30
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
