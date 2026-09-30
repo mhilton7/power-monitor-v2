@@ -1,4 +1,4 @@
-FROM golang:1.26.6-alpine3.23@sha256:5978cc992ad5ef96a7469713c8af849c1433824761ce3be2c56381403cd8d9a3 AS builder
+FROM golang:1.27.1-alpine3.23@sha256:0908ac9b9319e09d7c238aabe914e0395c51d63c4e3d0ae8c554fda9158a5769 AS builder
 
 ENV GOTOOLCHAIN=local \
     GOPROXY=https://proxy.golang.org \
