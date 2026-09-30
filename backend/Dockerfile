@@ -35,7 +35,7 @@ RUN python -m pip install \
       pillow==12.3.0 \
       pydantic==2.11.7 \
       pydantic-core==2.33.2 \
-      pypdf==6.16.0 \
+      pypdf==6.16.1 \
       pypdfium2==5.13.0 \
       pytesseract==0.3.13 \
       typing-extensions==4.16.0 \
@@ -59,7 +59,7 @@ RUN install -d \
 
 FROM python:3.13.14-alpine3.23@sha256:9fdbf2e3e82628351513560b121e2ee6ce31cac212be9e070c5a5e2769fb5e76
 
-ARG VERSION=0.1.0-rc.30
+ARG VERSION=0.1.0-rc.31
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
 LABEL org.opencontainers.image.title="PowerMeter V2 API and worker" \
@@ -79,6 +79,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 RUN /sbin/apk add --no-cache \
        acl=2.3.2-r1 \
+       libuuid=2.41.6-r1 \
        openssl=3.5.8-r0 \
        sqlite-libs=3.53.4-r0 \
        tesseract-ocr=5.5.1-r0 \

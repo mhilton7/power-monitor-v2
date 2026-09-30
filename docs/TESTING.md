@@ -676,3 +676,60 @@ are the unapproved visual baselines, above-50 ms SVG commit work, modest observe
 heap drift, absent deployed-build access, unavailable container/PostgreSQL gates,
 and unperformed physical-phone testing. Nothing was committed, pushed,
 published, or deployed.
+
+## RC31 publication preparation — 2026-09-29 (America/Los_Angeles)
+
+The preceding repair report is the pre-publication snapshot, not the current
+publication state. The user subsequently approved upload/publication, the
+reviewed native screenshot baselines, necessary pinned security/build repairs,
+and coordinated metadata-only firmware RC31. This section supersedes the
+earlier outstanding-baseline and no-publication statements without relabeling
+the original benchmark measurements.
+
+Server/frontend identity is 0.1.0-rc.31; firmware is v0.1.0-rc.31 build 34.
+Generated OpenAPI SHA-256 is
+c7d2ef230f4e3f183251cd010731a122875cddf24cce829da69dfd8ffb0c3c74.
+Control/telemetry protocols, migration head 20260829_0020, production service
+layout, volumes, secrets, sensor runtime sources, and deployment gates remain
+unchanged. No actual TrueNAS deployment or physical sensor update is performed.
+
+| RC31 preparation check | Actual outcome |
+| --- | --- |
+| Frontend npm run check | Lint/typecheck/build passed; 134 unit tests in 18 files passed in 25.21 seconds. |
+| PW_RANGE_CROSS_BROWSER=1; npm run test:e2e -- --workers=2 | 72 passed, 12 intentional opt-in/engine skips, zero failures in 3.9 minutes. All executed screenshot comparisons are strict. |
+| Clock-only price transition | Chromium 337 ms, Firefox 464 ms, WebKit 449 ms; zero History requests at each boundary. Synthetic intercepted connection, not production-network evidence. |
+| npm audit --audit-level=high | Exit 0 after undici 8.10.2; two moderate development-only Vitest dependency entries remain. No audit threshold changed. |
+| Python release/dependency/tools suite | 73 passed, four environment skips in 5.22 seconds: three Linux jq cases and one Windows symlink privilege case. |
+| PDF regression suite on pypdf 6.16.1 | 25 passed in 26.66 seconds. |
+| New RC31 dependency regressions | Three failed before the pinned repairs; all three passed afterward. |
+| Exact Python runtime-lock audit | 47 packages, zero known vulnerabilities. |
+| Gateway Go 1.26.6 checks | Module verification and tidy-diff passed; Linux AMD64 and ARM64 cross-builds passed; repeated AMD64 build was byte-identical. |
+| Ruff check / format | Passed; 122 files already formatted. |
+| Static release/deployment validator | Passed; unchanged eight-service production template remains fail-closed pending real registry digests. |
+| Firmware cross-repository validator | Passed against the exact RC31 OpenAPI and existing device schema/vector bytes. |
+| Firmware host/security preparation | 115/115 host tests, 36/36 fault cases, 120-day simulation (10,368,000 samples), 11 PowerShell UX tests, AST/source-policy gates, and live OSV audit (three subjects, zero findings) passed. |
+
+Four native Windows baselines and five native Linux baselines were visually
+reviewed and updated for the intended pricing/status changes. Linux actual
+images came from PR run 36657927862 and matched byte-for-byte across its first
+attempt and both retries; Windows images were regenerated natively. The extra
+Linux mobile Home image shows the same approved pricing area. No comparison
+tolerance, assertion, permission boundary, or runtime UI behavior was weakened.
+
+Security/build changes are limited to pypdf 6.16.1, undici 8.10.2, gRPC 1.83.2
+and its necessary transitive closure, API/backup libuuid 2.41.6-r1, frontend
+libexpat 2.8.5-r0 and libuuid 2.42.3-r1, gateway curl/libcurl 8.22.0-r0, and
+backup jq 1.8.2-r0/tzdata 2026d-r0. Existing base-image digests, Go/Caddy versions,
+frameworks, and security scan policies are unchanged. These address confirmed
+PR build/security failures; they are not speculative dependency modernization.
+
+Local logs are under .test-runtime/rc31-frontend-check.log,
+.test-runtime/rc31-frontend-browser-acceptance.log,
+.test-runtime/rc31-frontend-audit-high.log, and
+.test-runtime/rc31-python-lock-audit.json. Fresh Linux/PostgreSQL/container
+CI and signed-tag release jobs remain authoritative for publication. Local
+Docker is unavailable; no local container pass is claimed. Above-50 ms SVG
+commit work, modest observed heap drift, physical-phone testing, target-TrueNAS
+recovery, and marked-unit certification remain limitations from the repair
+report. The existing verified-asset upgrade and restored-rollback procedures
+remain mandatory; no database reset or app-only rollback is authorized.

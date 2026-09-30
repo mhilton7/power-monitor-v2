@@ -31,7 +31,7 @@ pydantic==2.11.7
 pydantic-settings==2.10.1
 pydantic-core==2.33.2
 pyotp==2.9.0
-pypdf==6.16.0
+pypdf==6.16.1
 pypdfium2==5.13.0
 pytesseract==0.3.13
 python-dotenv==1.2.2

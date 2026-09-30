@@ -18,7 +18,7 @@ RUN set -eux; \
     grep -Fx 'golang.org/x/mod v0.40.0' /out/modules.txt; \
     grep -Fx 'golang.org/x/net v0.58.0' /out/modules.txt; \
     grep -Fx 'golang.org/x/text v0.41.0' /out/modules.txt; \
-    grep -Fx 'google.golang.org/grpc v1.82.1' /out/modules.txt; \
+    grep -Fx 'google.golang.org/grpc v1.83.2' /out/modules.txt; \
     ldflags='-s -w -buildid= -X github.com/caddyserver/caddy/v2.CustomVersion=v2.11.4-pmv2.1'; \
     CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false \
       -tags=nobadger,nomysql,nopgx \
@@ -34,14 +34,14 @@ RUN set -eux; \
     grep -Eq 'dep[[:space:]]+github.com/caddyserver/caddy/v2[[:space:]]+v2\.11\.4[[:space:]]+h1:XKxkMTgNSizEvKG6QHue6cAsFOteU2qA61w2tKkCWi0=' /out/caddy-buildinfo.txt; \
     grep -Eq 'dep[[:space:]]+golang.org/x/net[[:space:]]+v0\.58\.0[[:space:]]' /out/caddy-buildinfo.txt; \
     grep -Eq 'dep[[:space:]]+golang.org/x/text[[:space:]]+v0\.41\.0[[:space:]]' /out/caddy-buildinfo.txt; \
-    grep -Eq 'dep[[:space:]]+google.golang.org/grpc[[:space:]]+v1\.82\.1[[:space:]]' /out/caddy-buildinfo.txt; \
+    grep -Eq 'dep[[:space:]]+google.golang.org/grpc[[:space:]]+v1\.83\.2[[:space:]]' /out/caddy-buildinfo.txt; \
     cp /go/pkg/mod/github.com/caddyserver/caddy/v2@v2.11.4/LICENSE \
       /out/licenses/CADDY-LICENSE.txt; \
     cp /go/pkg/mod/golang.org/x/net@v0.58.0/LICENSE \
       /out/licenses/X-NET-LICENSE.txt; \
     cp /go/pkg/mod/golang.org/x/text@v0.41.0/LICENSE \
       /out/licenses/X-TEXT-LICENSE.txt; \
-    cp /go/pkg/mod/google.golang.org/grpc@v1.82.1/LICENSE \
+    cp /go/pkg/mod/google.golang.org/grpc@v1.83.2/LICENSE \
       /out/licenses/GRPC-LICENSE.txt; \
     cp /usr/local/go/LICENSE /out/licenses/GO-STDLIB-LICENSE.txt; \
     cp /src/POWER-METER-V2-LICENSE.txt \
@@ -49,7 +49,7 @@ RUN set -eux; \
 
 FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
 
-ARG VERSION=0.1.0-rc.30
+ARG VERSION=0.1.0-rc.31
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
 LABEL org.opencontainers.image.title="PowerMeter V2 gateway" \
@@ -73,11 +73,11 @@ COPY --from=builder /out/licenses/ /usr/share/licenses/powermeter-gateway/
 RUN set -eux; \
     /sbin/apk add --no-cache --upgrade \
       c-ares=1.34.8-r0 \
-      curl=8.20.0-r0 \
-      libcurl=8.20.0-r0; \
+      curl=8.22.0-r0 \
+      libcurl=8.22.0-r0; \
     apk info --exists 'c-ares=1.34.8-r0'; \
-    apk info --exists 'curl=8.20.0-r0'; \
-    apk info --exists 'libcurl=8.20.0-r0'; \
+    apk info --exists 'curl=8.22.0-r0'; \
+    apk info --exists 'libcurl=8.22.0-r0'; \
     chmod 0755 /usr/bin/caddy; \
     chmod 0644 /usr/share/powermeter-gateway/* \
       /usr/share/licenses/powermeter-gateway/*; \
