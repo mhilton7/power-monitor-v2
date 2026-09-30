@@ -26,6 +26,27 @@ describe('History', () => {
     expect(screen.getByText(/0.42 kWh recovered/)).toBeInTheDocument();
   });
 
+  it('aborts an obsolete filter request and never paints its result over the newer scope', async () => {
+    const pending: { signal: AbortSignal; resolve: (response: Response) => void }[] = [];
+    const fetchMock = installFetchMock((path) => path.includes('/devices?') ? { status: 200, body: { devices: [device] } }
+      : path.includes('/circuits?') ? { status: 200, body: { circuits: [] } } : { status: 404, body: {} });
+    const settledFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input, init) => (typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url).includes('/history?')
+      ? new Promise<Response>((resolve) => { pending.push({ signal: init!.signal as AbortSignal, resolve }); })
+      : settledFetch(input, init));
+    renderWithProviders(<HistoryPage />);
+    await waitFor(() => expect(pending).toHaveLength(1));
+    await userEvent.selectOptions(screen.getByLabelText('Metric'), 'voltage');
+    await waitFor(() => expect(pending).toHaveLength(2));
+    expect(pending[0]!.signal.aborted).toBe(true);
+    expect(screen.queryByTestId('history-chart')).not.toBeInTheDocument();
+    await act(async () => { pending[1]!.resolve(new Response(JSON.stringify({ ...history, energy_kwh: '2' }), { headers: { 'Content-Type': 'application/json' } })); await Promise.resolve(); });
+    expect(await screen.findByText('2 kWh')).toBeInTheDocument();
+    await act(async () => { pending[0]!.resolve(new Response(JSON.stringify({ ...history, energy_kwh: '999' }), { headers: { 'Content-Type': 'application/json' } })); await Promise.resolve(); });
+    expect(screen.queryByText('999 kWh')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Voltage over time' })).toBeInTheDocument();
+  });
+
   it('queries only an explicitly verified aggregate when that scope is selected', async () => {
     const requested: string[] = [];
     installFetchMock((path) => {

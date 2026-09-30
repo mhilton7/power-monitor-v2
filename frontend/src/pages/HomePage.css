@@ -159,6 +159,19 @@
 
 .dashboard-summary-card > .card-header + .dashboard-summary-metric { border-left: 0; }
 
+.dashboard-live-pricing {
+  grid-column: 1 / -1;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-soft);
+  min-width: 0;
+}
+.dashboard-pricing-heading, .dashboard-pricing-values { display: flex; gap: 16px; justify-content: space-between; flex-wrap: wrap; }
+.dashboard-pricing-values { margin-top: 10px; }
+.dashboard-pricing-values > div { display: flex; flex-direction: column; gap: 4px; flex: 1 1 190px; }
+.dashboard-pricing-values strong { font-size: 1.15rem; }
+.dashboard-live-pricing p { margin: 8px 0; font-size: .73rem; }
+.dashboard-live-pricing small, .dashboard-pricing-values span { color: var(--muted); font-size: .7rem; }
+
 .dashboard-billing-warning {
   grid-column: 1 / -1;
   margin: 0;

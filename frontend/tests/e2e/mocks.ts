@@ -16,6 +16,7 @@ type MockRateCandidate = Omit<typeof rateCandidate, 'workflow' | 'source' | 'nor
 };
 
 interface MockOptions {
+  fixedTime?: boolean;
   sessionExpired?: boolean;
   forbiddenCommands?: boolean;
   homeOverride?: Record<string, unknown>;
@@ -36,7 +37,7 @@ interface MockOptions {
 }
 
 export async function mockApi(page: Page, options: MockOptions = {}) {
-  await page.clock.setFixedTime(new Date('2026-08-13T17:32:15Z'));
+  if (options.fixedTime !== false) await page.clock.setFixedTime(new Date('2026-08-13T17:32:15Z'));
   const commandTypes: string[] = [];
   const candidateStore = new Map<string, MockRateCandidate[]>();
   let rejectAttempts = 0;
@@ -73,6 +74,7 @@ export async function mockApi(page: Page, options: MockOptions = {}) {
     }
     if (path.endsWith('/settings/telemetry')) { await json(route, { config_version: 1, telemetry_interval_seconds: 5, history_interval_seconds: 60, retention_days: 365 }); return; }
     if (path.endsWith('/home')) { await json(route, options.homeById?.[homeId] ?? options.homeOverride ?? home); return; }
+    if (path.endsWith('/home/pricing')) { const response = apiResponse(url.toString()); await json(route, response.body); return; }
     if (path.endsWith('/enrollment-tokens') && method === 'POST') { await json(route, { token: 'single-use-enrollment-token-value-000000000000', expires_at: '2026-08-13T17:47:00Z' }, 201); return; }
     if (path.endsWith('/credentials/rotate') && path.includes('/devices/') && method === 'POST') { await json(route, { rotation: { rotation_id: '00000000-0000-0000-0000-000000000050', credential_fingerprint: 'b'.repeat(64), state: 'pending', overlap_expires_at: '2026-08-13T17:42:10Z', prepare_command_id: '00000000-0000-0000-0000-000000000051', commit_command_id: null, cancel_command_id: null } }, 202); return; }
     if (path.endsWith('/cancel') && path.includes('/credentials/rotations/') && method === 'POST') { await json(route, { rotation: { rotation_id: '00000000-0000-0000-0000-000000000050', credential_fingerprint: 'b'.repeat(64), state: 'pending', overlap_expires_at: '2026-08-13T17:42:10Z', prepare_command_id: '00000000-0000-0000-0000-000000000051', commit_command_id: null, cancel_command_id: '00000000-0000-0000-0000-000000000052' } }, 202); return; }

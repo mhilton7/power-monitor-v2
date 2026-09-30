@@ -264,3 +264,415 @@ certification.
 - No marked-unit PZEM/ESP32-S3/SD identity, electrical, TLS/HMAC, OTA rollback,
   physical-cycle, USB-recovery, or continuous 72-hour soak evidence exists.
   Simulation cannot satisfy those gates, so stable promotion remains blocked.
+
+## 2026-09-29 local live-pricing and chart repair
+
+### Baseline and scope
+
+The authoritative checkout was `E:\Documents\ChatGPT\PowerMonitorV2`, remote
+`https://github.com/mhilton7/power-monitor-v2.git`, initially clean on `main` at
+`ed829f4fda95981e489a88db3cfdc7dd9c7b8446` (the RC30 range-slider merge). Work is
+local on `codex/repair-live-pricing-chart-performance`. The application version
+remains `0.1.0-rc.30`; this repair has not created a new release identity. Local
+tools are Node.js `v26.0.0`, Python `3.13.14`, and the existing Recharts `3.10.1`
+frontend dependencies. No dependency upgrade was needed.
+
+The supplied review instead described `mhilton7/power-monitor` at
+`df581522266227b0258c3303b551a7f6ec2e5362`. Its Chart.js/Canvas architecture,
+adapters, paginated History loader, and trailing 750 ms event handler do not
+describe this checkout. Findings were revalidated against this application's
+Recharts pages, API schemas, server tariff engine, and existing range-selection
+regressions; no application code or architecture was transplanted. No deployed
+TrueNAS build was inspected or changed by this repair.
+
+### Confirmed causes and targeted changes
+
+| Area | Reproduced issue and repair |
+| --- | --- |
+| Current pricing | Home did not present the applicable server-backed marginal price and scheduled transition. The previous dashboard calculation could use the selected sensor's usage as the account tier basis. Current pricing now resolves the selected home's unique account, effective published assignment, account billing cycle, and explicitly verified billing-source evidence through the existing decimal rate engine. |
+| Live estimate | A stale measurement could retain a cost/hour estimate. Pricing now requires fresh authenticated load from every expected selected aggregate member; stale, missing, revoked, incomplete, denied, and failed states do not become zero-valued live estimates. Known flat/TOU prices remain available without fresh load. |
+| Tariff boundaries | Regressions cover exact marginal tier boundaries, clock-only TOU changes, scheduled assignment changes, DST, cycle rollover, equivalent adjacent TOU segments, and seasonal/calendar transitions beyond a weekly look-ahead. A seasonal reproduction returned October 15 instead of the actual October 1 change before repair. Usage-dependent future tier crossings are not assigned invented clock times or guaranteed future prices. |
+| Usage uncertainty | Estimated usage spanning a baseline-credit boundary could resolve the same tariff period but different effective prices. Both bounded effective prices must now agree. Mutable daily settings cannot replace unresolved immutable account-tier evidence. Incomplete hybrid usage retains a determinable TOU label without guessing its tier or price. |
+| Request amplification | The server emits a generic `refresh` every five seconds. The old handler invalidated History and Billing on every such message, while Home's changing `generated_at` created additional History keys. Live-number refreshes are now separate from bounded History recovery; one semantic cache key retains each Home snapshot and its exact fetched window. |
+| Scheduling and recovery | Measurement bursts previously issued immediate repeated invalidations, and an SSE error permanently closed the stream. The scheduler coalesces bursts with a three-second maximum wait, preserves a dirty follow-up during slow requests, avoids cancelling valid in-flight refreshes, retains native SSE reconnection, and recovers on foreground/online events. A thirty-second recovery timer, plus the coalescing delay, refreshes History without relying on measurement payloads the current server does not emit. |
+| Plot lifecycle | Home and History did not consume request AbortSignals. Obsolete selections are now cancelled, late results cannot overwrite a newer selection, and valid same-scope plots remain mounted during refreshes and failures. Refresh/stale notices reserve their layout footprint. Hidden optional Home charts do not fetch their unused History series. |
+
+The event stream supplies no trustworthy dirty-range/revision payload. Accepted
+measurement notifications therefore conservatively dirty all active History
+queries, including backfilled/older intervals; the implementation does not discard
+an event merely because its timestamp is older. It does not claim a new delta API
+or incremental database cache. Existing bucket resolutions, complete source
+results, gap breaks, totals, exports, and the timestamp-based range controller
+remain intact. Animations were already disabled. No point decimation, curve
+replacement, chart-library change, or speculative resize-owner rewrite was made.
+The original brief's pagination-chain and duplicate Chart.js resize hypotheses
+were not applicable to this server/frontend pair.
+
+### Implementation traceability
+
+| Files | Purpose |
+| --- | --- |
+| `backend/app/services/live_pricing.py`, `billing_usage.py`; `backend/app/routes/dashboard.py` | Consistent account-aware pricing, bounded calendar evaluation, aggregate usage SQL, freshness enforcement, and additive `/api/v1/home/pricing` response independent of expensive historical summaries. |
+| `backend/app/services/cost_engine.py`; `backend/app/routes/billing.py` | Expose the existing engine's incremental marginal-period/tier-bound semantics and share the existing short-gap estimator. Historical interval pricing is not replaced with current-price multiplication; the extracted estimator retains its prior rules and no-History-write boundary. |
+| `frontend/src/components/LivePricing.tsx`; `frontend/src/api/index.ts`, `schemas.ts`; `frontend/src/pages/HomePage.tsx`, `HomePage.css` | Parse and display one pricing response with both tier/TOU context, exact server-calculated money, account-local transition times, explicit availability states, and independent deadline refreshes. Home selection is checked against the response identity. |
+| `frontend/src/hooks/useLiveUpdates.ts`, `frontend/src/lib/refreshScheduler.ts`; `frontend/src/pages/HomePage.tsx`, `HistoryPage.tsx` | Separate live/history scheduling, cancellation, stable scoped snapshots, retained plots, hidden-card gating, and snapshot-consistent History export/time labels. |
+| `backend/tests/test_live_pricing.py`, `test_live_pricing_review.py`, `test_live_pricing_work.py`, `test_home_selection.py`; frontend pricing, scheduler, Home, History, and live-update tests | Synthetic tariff/API arithmetic, permissions/authority, null-versus-zero, freshness, effective dates, uncertainty, request counts, slow responses, cancellation, backfill, recovery, and range preservation. |
+| `frontend/tests/e2e/live-pricing.spec.ts`, `home.spec.ts`, `chart-performance.spec.ts`, `chart-performance-server.ts`, `chart-performance.config.ts`; `frontend/playwright.config.ts`, `tests/e2e/mocks.ts`, `tests/fixtures.ts`, `tests/fixtures/live-pricing-api.json` | Production-build browser scenarios, controlled normal-route fixtures, clock-only transition checks, repeatable performance capture, and cross-browser pricing coverage alongside existing range tests. The local-drag test uses a connected stream; a separate native reconnect test verifies recovery without changing the selected timestamps. |
+| `shared/openapi/power-meter-v2.openapi.json`; `tests/test_dependency_lock.py` | Regenerated additive server endpoint contract and its exact SHA-256 assertion (`7559ac0e4418af2c64f5e7d560ea53424f4b5fa4e66f8c0a4603a62036aacda6`). The shared protocol remains `pm-protocol/1.0.0`; the checksum check was updated, not removed. |
+
+### Pricing evidence and focused verification checkpoints
+
+The checked-in [sanitized API fixture](../frontend/tests/fixtures/live-pricing-api.json)
+is verified against actual `/api/v1/home/pricing` serialization, with synthetic
+identifiers and tariffs. It identifies the account, assignment, immutable version,
+UTC evaluation time, `America/Los_Angeles` billing cycle, verified usage source,
+and load freshness deadline. It contains no customer bill, account identity, or
+production readings. Frontend tests validate and render that response, rather
+than testing only independently fabricated UI values.
+
+The synthetic tariff's Tier 1 ends at 10 kWh at $0.20/kWh; Tier 2 is $0.30/kWh.
+Starting at 9.5 kWh, a new 1 kWh interval costs exactly
+`0.5 × $0.20 + 0.5 × $0.30 = $0.25`. The resulting 10.5 kWh cycle usage has a
+$0.30/kWh marginal price, and fresh 2,000 W load yields `$0.60/hour`. Coverage
+percentage is not tier progress. Fixed charges/taxes remain separate from this
+marginal estimate; historical costs remain chronological engine calculations.
+At an inclusive threshold, the existing Billing Cycle summary can classify the
+completed usage as Tier 1 while the new current marginal pricing correctly
+identifies the next increment as Tier 2. These are distinct billing quantities,
+not a retroactive repricing of the completed Tier 1 energy.
+
+These are intermediate local checkpoints, not a claim that every release gate
+or target environment passed:
+
+| Check | Observed result and evidence |
+| --- | --- |
+| Existing pricing baseline | 30 passed, 0 failures; `.test-runtime/pricing-baseline.xml`. |
+| New initial pricing reproductions | 3 failures before repair, then 3 passed; `.test-runtime/pricing-reproductions-before.xml` and `pricing-reproductions-after.xml`. |
+| New chart scheduling reproductions | The initial live-update run reproduced 3 failures: heartbeat History/Billing invalidation, twenty immediate History invalidations from a twenty-event burst, and permanent SSE closure. |
+| Focused frontend repair suite | `npm.cmd test -- tests/live-updates.test.tsx tests/refresh-scheduler.test.ts tests/history.test.tsx tests/home.test.tsx`: 4 files, 33 tests passed in 10.02 seconds. |
+| Frontend static checks | `npm.cmd run lint` and `npm.cmd run typecheck` passed. These checks alone do not establish chart smoothness. |
+| Focused backend and existing engine/selection/quality regressions | 67 passed, 0 failures/errors in 72.239 seconds; `.test-runtime/pricing-verified-final.xml`. |
+| Independent pricing review regressions | 5 passed, 0 failures/errors in 6.731 seconds; `.test-runtime/pricing-review-final.xml`. The seasonal next-change test was first observed failing with the incorrect October 15 date. |
+| Sparse future event boundary | The intraday event-calendar reproduction failed before repair; the subsequent six-test review run passed, `.test-runtime/pricing-event-before.xml` and `pricing-event-after.xml`. |
+| Real-route work check | `test_live_pricing_work.py` exercises 1, 8, and 32 sensors with 288 accepted five-minute intervals per sensor, three warmed requests per route. Its assertions bound assignment queries and prohibit interval-cost queries/full interval materialization in the pricing-only endpoint. Three cases passed; `.test-runtime/pricing-real-route-final-work.xml`. SQLite timings are not production PostgreSQL latency evidence. |
+
+The focused review was also exercised with this isolated-database command;
+the JUnit files above record subsequent verification checkpoints:
+
+```powershell
+$env:PM_DATABASE_URL = 'sqlite+aiosqlite:///.test-runtime/live-pricing-review-tests.sqlite3'
+.\.venv\Scripts\python.exe -m pytest backend/tests/test_live_pricing_review.py -q
+.\.venv\Scripts\python.exe -m ruff check backend/tests/test_live_pricing_review.py
+.\.venv\Scripts\python.exe -m ruff format --check backend/tests/test_live_pricing_review.py
+```
+
+All database fixtures are disposable and explicitly separate from deployment
+data. Browser fixture timings use normal application routes but synthetic local
+responses; they cannot prove production network/database latency or physical
+phone behavior. A server-relative pricing deadline is still subject to response
+transit time, browser suspension, and failed connections. A physical iPhone/Safari
+or Android session and the deployed TrueNAS application are not certified by
+local browser emulation, tests, or screenshots.
+
+### Preserved boundaries and rollback
+
+No migration, database reset, production configuration change, dependency
+upgrade, firmware change, push, publication, or deployment is part of this
+repair. Existing navigation, authenticated sensor communications, raw readings,
+ingestion/backfill, rate-source and bill-import workflows, permissions, session
+controls, backups, exports, and TrueNAS ports/volumes/secrets are retained. Bill
+documents remain rate-source evidence only. No retrospective cost rewrite or
+physical hardware certification is claimed.
+
+Rollback requires no schema or data conversion. First preserve the reviewed
+tracked-file patch and the new/untracked repair files separately, together with
+any later user changes. Build and verify baseline `ed829f4` in a separate checkout
+without altering this working tree, or apply a reviewed reverse patch containing
+only this repair's hunks and new files. Do not discard unrelated work or reset a
+database. If a later, separately authorized release is deployed, use the existing
+release-specific, digest-pinned deployment/rollback workflow with its matching
+data-compatibility checks; keep TrueNAS datasets, secrets, and network bindings
+unchanged. This local repair has not performed that deployment or rollback.
+
+### Native production-build chart performance evidence
+
+The final measurements used the preserved regular production baseline build from
+`ed829f4` and the repaired regular production build, not a development or React
+profiling build. Environment: Windows `10.0.26200`, 32 logical AMD processors,
+Node `26.0.0`, Chromium `151.0.7922.34`, one Playwright worker, fresh browser
+contexts, disabled browser HTTP cache, and an 80 ms synthetic History-response
+delay. Desktop was 1440×1000 at 1× CPU; the mobile test profile was a 390×844
+responsive viewport at 4× CPU with synthetic touch PointerEvents. This is not a
+physical phone, mobile GPU, mobile browser user agent, or field INP measurement.
+
+Only `Date` was shifted to an advancing synthetic August 13 calendar. Native
+timers, `performance`, animation frames, and long-task observation were left
+unchanged. Preliminary runs using the existing mock helper's Playwright fixed
+clock were explicitly rejected as native-frame timing evidence, because that
+clock also wraps timing APIs. Only `baseline-native` and `after-native` results
+below are authoritative for this comparison.
+
+Fixtures exercised the normal Home and History routes with 1, 8, and 32 sensors,
+an explicitly configured non-overlapping service branch, measured zeros, peaks,
+and null gaps. Home fetched 288 five-minute points per series; History exercised
+Today, 7 days, 30 days, and Billing cycle (up to 720 hourly points). Each primary
+scenario sent three heartbeats, four generic refresh events five seconds apart,
+and an accepted-reading event; moved the existing slider; and checked that a
+manual selection survived refresh and viewport rotation. These are synthetic
+HTTP response fixtures, not production database/network or sensor evidence.
+
+| Sensors / profile | Home first-curve ready, ms before → after | Slider feedback p95, ms before → after | History requests before → after | History JSON kB before → after | Home-phase long tasks before → after |
+| --- | --- | --- | --- | --- | --- |
+| 1 / desktop | 952 → 945 | 34.2 → 34.3 | 39 → 10 | 1103.9 → 303.4 | 0 → 0 |
+| 8 / desktop | 900 → 901 | 34.7 → 34.5 | 40 → 9 | 1134.1 → 288.1 | 1 → 1 |
+| 32 / desktop | 919 → 927 | 34.7 → 34.1 | 39 → 9 | 1118.1 → 290.7 | 1 → 1 |
+| 1 / mobile 4× | 1212 → 1538 | 35.1 → 41.4 | 39 → 10 | 1063.8 → 314.5 | 20 → 13 |
+| 8 / mobile 4× | 1405 → 1402 | 34.6 → 34.4 | 39 → 10 | 1066.8 → 315.3 | 22 → 13 |
+| 32 / mobile 4× | 2032 → 2005 | 51.0 → 47.1 | 39 → 9 | 1077.9 → 290.7 | 22 → 14 |
+
+Request/byte columns cover History throughout each primary scenario, including
+the subsequent History presets. Bytes are uncompressed fulfilled JSON bodies,
+not compressed wire traffic. Input timing is a local proxy from a pointer event
+through changed slider DOM and two native animation frames, approximately forty
+samples per scenario. It does not turn every filter request into a sub-200 ms
+operation. Long-task columns include initial Home rendering, live refreshes,
+range interactions, screenshots, and rotation; they are not drag-only counts.
+
+All six profiles reduced heartbeat-induced History calls from 12 to zero and
+the four routine five-second refresh events' History calls from 16 to zero.
+Home requests remained 10 in every primary scenario: live-number updating was
+not disabled. Mobile SVG mutation counts fell from 570/574/570 to 354/350/350
+for 1/8/32 sensors. Observed resize callbacks remained eight on mobile, providing
+no evidence for a resize storm. The 32-sensor mobile frame trace retained a
+16.8 ms frame-interval p95; intervals over 50 ms fell from 26 to 18, while the
+worst interval remained approximately 400 ms. Initial readiness was not uniformly
+faster, and the one-sensor mobile result regressed by 326 ms in this single run.
+The established improvement is less redundant retrieval/rendering, not a claim
+that already-responsive slider feedback became dramatically faster.
+
+Separate bounded-custom tests used 32 sensors and 2,880 five-minute points over
+ten days, preserved real gap breaks, changed sensor and all seven supported
+metrics, and committed an actual slider movement. Desktop readiness was
+216.8 → 220.8 ms; mobile readiness was 894.5 → 698.5 ms. Three observed committed
+range-to-frame samples were 24.7/34.8/30.8 → 24.6/19.8/20.1 ms on desktop and
+104.5/92.4/119.4 → 74.9/72.0/90.7 ms on mobile. These three samples are not a
+statistically broad p95 claim. Uncached mobile selector round trips still took
+approximately 283–349 ms after repair, including the 80 ms fixture delay; cached
+power selection took 166 ms. The actual API has a bounded full-result response,
+not the other repository's continuation-pagination contract.
+
+The remaining main-thread limitation is explicit: the 32-sensor mobile Home
+trace contains 150 ms and 133 ms tasks at keyboard range commits, plus startup,
+refresh, and rotation work. The History interaction contains a 54 ms task.
+The above-50 ms task target is therefore not fully met. Necessary SVG redraws
+remain; no speculative point reduction or styling rewrite was introduced to
+hide them. Physical-phone testing, individual React component render counts,
+React profiler durations, real network latency, and production PostgreSQL
+execution plans are not established by this browser benchmark.
+
+#### Separate React attribution and ten-minute resources
+
+A separate experiment installed the supported hook used by the installed
+production React renderer to observe actual `onCommitFiberRoot` notifications.
+It did not modify the application or reuse its instrumented run as latency
+evidence. For 32 sensors, desktop 1× CPU, and four generic refreshes over twenty
+seconds, React `19.2.8` root commits fell from **52 to 35**. All API requests in
+that phase fell from **36 to 16**; Home stayed at four, History fell from sixteen
+to zero, and the new pricing response was fetched four times. These are root
+commit notifications including clock/fetch updates, not individual component
+render invocations or profiler durations. Evidence is `react-root-commits.json`
+in each native result directory.
+
+The repaired build completed a **600.386-second** foreground soak with 32
+sensors and 21 forced-GC samples, alternating internal Home/History navigation
+every thirty seconds while emitting live refreshes. Internal navigation retained
+the QueryClient; page reloads were not used to hide retained resources. Every
+sample had one document and one EventSource, with two charts on Home and one on
+History. From five minutes onward the sampled resources were stable: Home had
+3,160 DOM nodes and 1,623 listeners; History had 702 nodes and 900 listeners.
+
+Heap did not become perfectly flat: History used 13.61 MiB at startup,
+17.39 MiB at five minutes, and 18.06 MiB at ten minutes; Home used 19.18 MiB at
+5.5 minutes and 19.78 MiB at 9.5 minutes. Those measurements include the growing,
+bounded frame-capture buffer and normal warm-up/cache retention. The result
+supports stable observed DOM/listener/chart resources, not an unlimited-session
+heap ceiling or a directly measured QueryClient cache-entry count. A longer
+uninstrumented session would be needed to establish a long-term memory plateau.
+Other functional browser tests ran in separate processes on the same OS host
+during this resource soak; no interaction-latency claim is taken from the soak.
+
+#### Repeatable commands and local artifacts
+
+From `frontend`, the valid primary after run was:
+
+```powershell
+$env:PM_CHART_BENCHMARK = 'after-native'
+$env:PM_BENCH_DIST = '../.test-runtime/chart-performance/final-native-dist'
+npx.cmd playwright test --config tests/e2e/chart-performance.config.ts --grep 'chart production benchmark'
+```
+
+The corresponding before run used `PM_CHART_BENCHMARK='baseline-native'` and
+`PM_BENCH_DIST='../.test-runtime/chart-performance/baseline-dist'`. It ran the
+same config without a grep filter: six primary cases passed and the opt-in soak
+was skipped. The final after matrix passed six cases in 3.7 minutes. Both
+preserved builds were made with `npm.cmd run build`; source changes were frozen
+before the final after build. The repaired preserved bundle includes
+`HomePage-Ca3_becG.js` and `index-IXCs9zwi.js`.
+
+Additional commands, using those same two run/build environment pairs:
+
+```powershell
+# Matched custom range, metrics, and sensor tests: 2 passed before, 2 after.
+$env:PM_BENCH_EXTRA = '1'
+npx.cmd playwright test --config tests/e2e/chart-performance.config.ts --grep 'bounded custom'
+Remove-Item Env:PM_BENCH_EXTRA
+
+# Repaired build only: 1 passed, 10.1 minutes.
+$env:PM_BENCH_SOAK = '1'
+npx.cmd playwright test --config tests/e2e/chart-performance.config.ts --grep 'ten-minute'
+Remove-Item Env:PM_BENCH_SOAK
+
+# Separate attribution: 1 passed before, 1 after, approximately 25 seconds each.
+$env:PM_BENCH_REACT = '1'
+npx.cmd playwright test --config tests/e2e/chart-performance.config.ts --grep 'separate React'
+Remove-Item Env:PM_BENCH_REACT
+
+npx.cmd eslint tests/e2e/chart-performance.spec.ts tests/e2e/chart-performance.config.ts tests/e2e/chart-performance-server.ts tests/e2e/mocks.ts
+```
+
+The focused lint command passed. The preserved baseline and final production
+builds, JSON results, PNG screenshots, and Playwright traces remain local under
+the ignored `.test-runtime/chart-performance/` directory. They were not committed
+or published. Native result files are `baseline-native/{1,8,32}-{desktop,mobile}.json`
+and their `after-native` counterparts; custom reports are `custom-desktop.json`
+and `custom-mobile.json`. The final resource record is
+`after-native/ten-minute-soak.json`. Traces are under the phase-specific
+`playwright*` subdirectories. Clean chart/pricing locator captures are
+`after-native/pricing-{desktop,mobile}.png`,
+`after-native/dashboard-chart-{desktop,mobile}.png`, and
+`after-native/custom-chart-{desktop,mobile}.png`. Full-page images also exist;
+sticky navigation can overlap a scrolled full-page capture. The mobile pricing
+crop shows the requested values but its last disclosure line overlaps the
+sticky bottom navigation in the capture. These images contain synthetic test
+fixtures only.
+
+### Final verification and remaining approval
+
+This local implementation is not a release-gate or production-certification
+claim. Final frontend production code matches the measured preserved build.
+A later backend-only review reproduced another calendar edge case: a season
+starting Saturday July 1 incorrectly predicted August 1 rather than the first
+weekday peak on Monday July 3. The schedule now evaluates a deduplicated weekly
+window after each explicit calendar boundary. The reproduction failed before
+repair; seven calendar/review tests passed afterward. Evidence:
+pricing-season-week-before.xml and pricing-season-week-after.xml under
+.test-runtime. Final executable backend change: September 29, 18:36:09 PDT.
+
+The final source subsequently passed 66 pricing, Home-selection, cost-engine,
+and Billing tests, plus three route-work tests. The larger portable run below
+preceded this narrow refinement; it is not represented as a single all-green
+run of the final source.
+
+| Check | Exact outcome |
+| --- | --- |
+| npm.cmd run check, in frontend | Lint, typecheck, 18 Vitest files / 134 tests, and regular production build passed; Vitest duration 32.90 seconds. Log: .test-runtime/live-pricing-chart-frontend-final.log. |
+| Final npm.cmd run lint; npm.cmd run typecheck | Both passed again after the final browser evidence tests were added. |
+| python -m pytest -q --basetemp=.test-runtime/pytest-live-pricing-chart-20260929-final --junitxml=.test-runtime/live-pricing-chart-python-acceptance.xml | 490 collected: 452 passed, 23 skipped, zero assertion failures, 15 temporary-directory setup errors; JUnit duration 406.232 seconds. Windows sandbox denied pytest-created directories and cleanup, even under the workspace. Exit 1, not a clean pass. |
+| Elevated python -m pytest tests/test_full_audit_runner.py tests/test_dependency_lock.py -q --basetemp=.test-runtime/pytest-live-pricing-chart-elevated-20260929 --junitxml=.test-runtime/live-pricing-chart-runner-elevated.xml | 24 passed in 22.70 seconds, including all 15 previously blocked cases; exit 0. Only disposable local test files were used. |
+| Final-source focused Python tests | 66 passed in 74.38 seconds, .test-runtime/pricing-final-week-focused.xml; three work checks passed in 8.07 seconds, pricing-final-week-work.xml. |
+| Combined Python coverage | 468 distinct test cases passed and 23 were skipped across the broad run and targeted reruns. This is deduplicated cross-run coverage, not a fabricated single-run result. |
+| python -m ruff check backend/app backend/tests worker tests scripts deploy/truenas/initialize_host.py | Passed. |
+| python -m ruff format --check backend/app backend/tests worker tests scripts deploy/truenas/initialize_host.py | 121 files already formatted; the final nine changed backend files also passed after the calendar refinement. An exploratory broader check flagged three unchanged legacy Alembic files; they were not reformatted. |
+| python -m mypy backend worker; python -m mypy --platform linux deploy/truenas/initialize_host.py | Passed: 104 source files and one Linux-host initialization file respectively. |
+| python scripts/generate_contracts.py; python scripts/validate_contracts.py | Contract regenerated; eight JSON schema/vector files plus pm-protocol/1.0.0 validated. Only the additive OpenAPI contract changed. |
+| python scripts/validate_release.py; docker compose -f deploy/truenas/power-monitor-v2.yaml config --quiet --no-interpolate | Both static checks passed. These do not start containers, verify image execution, or deploy anything. |
+| git diff --check | Passed. Dependency manifests/locks, deployment YAML, release workflows, firmware, and migrations remain unchanged. |
+| $env:PW_RANGE_CROSS_BROWSER='1'; npm.cmd run test:e2e -- --workers=2 | 68 passed, four visual-baseline failures, 12 intentional skips in 3.9 minutes; exit 1. Log: .test-runtime/live-pricing-chart-playwright-acceptance.log. All executed behavioral checks passed. |
+
+The focused final Python command targeted backend/tests/test_live_pricing.py,
+test_live_pricing_review.py, test_home_selection.py, test_cost_engine.py,
+test_billing_quality.py, and test_billing_cycle_summary.py. The separate work
+command targeted test_live_pricing_work.py. Python commands used the repository
+.venv interpreter, PM_REQUIRE_POSTGRES_TESTS=0, and a disposable SQLite URL under
+.test-runtime, never the deployment database.
+
+An earlier full run had one stale OpenAPI checksum assertion plus the same
+15 sandbox errors: 451 passed, 23 skipped, one failure and 15 errors. The checksum
+was updated to the reviewed generated bytes; the assertion remains strict.
+Interrupted preliminary Python runs and fixed-clock timing trials are not
+counted as acceptance passes.
+
+Browser engines were Playwright 1.62.1's Chromium 151.0.7922.34, Firefox 153.0,
+and WebKit 26.5 on Windows. Scheduled-price transitions appeared 331 ms, 560 ms,
+and 396 ms after the synthetic boundary respectively, with zero History requests
+at that boundary. This meets the two-second foreground target on the intercepted
+local API connection, not a server/network latency guarantee.
+
+The first full browser run had 66 passes, five failures and 11 skips. Four were
+the visual differences below. The fifth was a test-fixture mismatch: its finite
+SSE body closed every three seconds, so restored native reconnection correctly
+triggered recovery during a test intended to isolate local dragging. The revised
+connected-stream case retains exact zero-History-request, long-task, layout-shift,
+and selected-range assertions. A separate native reconnection case verifies
+exactly two recovery History requests with unchanged selected timestamps. Both
+focused tests passed in 27.4 seconds and passed again in the final suite.
+Application behavior was not disabled to satisfy that test.
+
+Four screenshot baselines remain unchanged and failing:
+
+| Reviewed screenshot | Difference | Disposition |
+| --- | --- | --- |
+| History, 412×915 | 5,558 pixels / 2%; loaded-query wording and reserved refresh-status space | Awaiting permission to replace baseline |
+| Multi-sensor Home, 1280×720 | 37,044 pixels / 5%; added pricing area | Awaiting permission to replace baseline |
+| Desktop Home, 1440×900 | 71,555 pixels / 6%; added pricing area | Awaiting permission to replace baseline |
+| Tablet Home, 768×1024 | 27,976 pixels / 4%; added pricing area | Awaiting permission to replace baseline |
+
+Actual and expected images were visually inspected. Existing header-selector
+width drift was also visible; this repair does not modify that header. The
+permission guard rejected --update-snapshots as possible regression-test
+weakening without direct authorization. The user was asked to authorize only
+these four reviewed replacements. No replacement or threshold relaxation was
+performed. These four failures remain outstanding, not hidden or called passing.
+The 12 skips are ten opt-in performance experiments (executed separately above)
+and two existing Chromium-only performance cases on Firefox/WebKit. Local
+WebKit teardown also logged one refused request to the absent backend after
+interception ended; its behavioral test passed.
+
+Final warmed route-work medians, with 288 intervals per sensor and three samples
+per route on disposable SQLite:
+
+| Sensors / intervals | Full Home, ms | Pricing-only, ms | SELECTs: Home / pricing |
+| --- | --- | --- | --- |
+| 1 / 288 | 51.81 | 22.31 | 50 / 24 |
+| 8 / 2,304 | 189.13 | 31.52 | 71 / 38 |
+| 32 / 9,216 | 798.50 | 75.58 | 143 / 86 |
+
+Assignment SELECTs remain two at every size. Pricing performs no historical
+interval-cost query or full interval-row materialization. Current-cycle energy
+still requires a database aggregate scan. These concurrent-host timings compare
+two final routes, not before/after production PostgreSQL performance.
+
+The 23 Python skips require unavailable Linux sandbox behavior, PostgreSQL
+triggers/concurrency or a live API, opt-in live SCE access, Linux-runner jq, or
+symlink privileges. Docker's Linux engine was unavailable, so container/image,
+live PostgreSQL, and TrueNAS runtime checks were not run. No migration was
+introduced. A future separately authorized release must ship matching backend
+and frontend builds for the new endpoint using the existing digest-pinned
+deployment workflow. No new service, port, volume, secret, or deployment
+configuration is required.
+
+Useful local visual evidence:
+
+- [Desktop pricing](../.test-runtime/chart-performance/after-native/pricing-desktop.png)
+- [Mobile pricing](../.test-runtime/chart-performance/after-native/pricing-mobile.png)
+- [Desktop dashboard chart](../.test-runtime/chart-performance/after-native/dashboard-chart-desktop.png)
+- [Mobile dashboard chart](../.test-runtime/chart-performance/after-native/dashboard-chart-mobile.png)
+- [Mobile custom History chart](../.test-runtime/chart-performance/after-native/custom-chart-mobile.png)
+- [Final browser report and screenshot differences](../frontend/playwright-report/index.html)
+
+The browser report also includes centered pricing-detail attachments at 1440 px
+and 390 px. All visual evidence uses synthetic fixtures. Remaining limitations
+are the unapproved visual baselines, above-50 ms SVG commit work, modest observed
+heap drift, absent deployed-build access, unavailable container/PostgreSQL gates,
+and unperformed physical-phone testing. Nothing was committed, pushed,
+published, or deployed.

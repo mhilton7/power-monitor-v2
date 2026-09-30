@@ -591,10 +591,25 @@ def resolve_price_period(
     instant_utc: datetime,
     cumulative_kwh: Decimal,
     context: CostContext | None = None,
+    *,
+    incremental_energy: bool = False,
 ) -> PricePeriod:
     """Resolve one exact local schedule period or fail closed on ambiguity."""
 
-    return _period_for(rate, _ensure_utc(instant_utc), cumulative_kwh, context or CostContext())
+    return _period_for(
+        rate,
+        _ensure_utc(instant_utc),
+        cumulative_kwh,
+        context or CostContext(),
+        incremental_energy=incremental_energy,
+    )
+
+
+def effective_tier_bounds(
+    rate: RateVersion, period: PricePeriod, context: CostContext
+) -> tuple[Decimal, Decimal | None]:
+    """Expose the engine's exact tier basis to live presentation, not a second calculator."""
+    return _effective_tier_bounds(rate, period, context)
 
 
 def _minute_boundaries(start: datetime, end: datetime) -> list[datetime]:

@@ -47,6 +47,22 @@ export const device = {
 
 export const homeScopes = [{ id: '00000000-0000-0000-0000-000000000010', name: 'Home' }];
 
+// Synthetic prices and sensor evidence for local tests only.
+export const livePricing = {
+  home_id: homeScopes[0]!.id, generated_at: home.generated_at, timezone: home.timezone,
+  current_rate_state: 'available', next_pricing_refresh_at: '2026-08-14T00:00:00Z',
+  current_rate: {
+    ...home.current_rate, pricing_state: 'available', account_id: 'account-main', assignment_id: 'assignment-main',
+    evaluated_at: home.generated_at, timezone: home.timezone, pricing_model: 'tou', tou_period: 'Off-Peak', current_tier: null,
+    cycle_usage_kwh: null, remaining_tier_kwh: null, tier_progress_percent: null,
+    next_change_at: '2026-08-14T00:00:00Z', next_price_per_kwh: '0.30', next_period: 'Peak',
+    cycle_start: '2026-08-01T07:00:00Z', cycle_end: '2026-09-01T07:00:00Z',
+    usage_scope: 'verified_billing_source', usage_device_ids: ['device-main'],
+    estimated_cost_per_hour: '0.42656', load_state: 'live', load_measured_at: '2026-08-13T17:32:10Z',
+    load_fresh_until: '2026-08-13T17:32:40Z',
+  },
+};
+
 export const homeUtility = {
   home: { id: '00000000-0000-0000-0000-000000000010', name: 'Home', timezone: 'America/Los_Angeles' },
   utility: { id: '00000000-0000-0000-0000-000000000020', utility_name: 'Southern California Edison', timezone: 'America/Los_Angeles', billing_day: 12, cost_scope: 'energy_only', baseline_allocation_kwh: null, cca_provider: null },
@@ -292,6 +308,7 @@ export function apiResponse(path: string, method = 'GET'): { status: number; bod
   if (pathname.endsWith('/settings/home-utility')) return { status: 200, body: homeUtility };
   if (pathname.endsWith('/settings/telemetry')) return { status: 200, body: { config_version: 1, telemetry_interval_seconds: 5, history_interval_seconds: 60, retention_days: 365 } };
   if (pathname.endsWith('/home')) return { status: 200, body: home };
+  if (pathname.endsWith('/home/pricing')) return { status: 200, body: livePricing };
   if (path.includes('/history/export')) return { status: 200, body: 'timestamp,value\n2026-08-13T10:00:00Z,0\n', contentType: 'text/csv' };
   if (path.includes('/history')) return { status: 200, body: path.includes('resolution_seconds=86400') ? dailyHistory : history };
   if (path.includes('/devices') && path.endsWith('/commands') && method === 'POST') return { status: 202, body: { command: { id: 'cmd-new', type: 'sync_now', state: 'queued' }, confirmation_token: null } };

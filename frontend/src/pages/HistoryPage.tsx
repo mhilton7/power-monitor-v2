@@ -100,9 +100,20 @@ export function HistoryPage() {
     return query;
   }, [circuitId, deviceId, metric, queryRange.aggregation, queryRange.from, queryRange.to, selectedHomeId]);
   const history = useQuery({
-    queryKey: ['history', params.toString()],
-    queryFn: () => api.history(params),
+    queryKey: ['history', selectedHomeId, 'history-page', scopeValue, metric, preset, preset === 'Live' && !manualLiveDomain ? 'following' : params.toString()],
+    queryFn: async ({ signal }) => {
+      const snapshot = new URLSearchParams(params);
+      if (preset === 'Live' && !manualLiveDomain) {
+        const current = rangeFor('Live', new Date());
+        snapshot.set('from', current.from.toISOString());
+        snapshot.set('to', current.to.toISOString());
+      }
+      return { ...await api.history(snapshot, signal), windowStart: snapshot.get('from')!, windowEnd: snapshot.get('to')! };
+    },
     enabled: Boolean(selectedHomeId && (deviceId || circuitId)) && queryRange.to > queryRange.from,
+    placeholderData: (previousData, previousQuery) => preset === 'Live'
+      && previousQuery?.queryKey.slice(0, 6).every((value, index) => value === ['history', selectedHomeId, 'history-page', scopeValue, metric, preset][index])
+      ? previousData : undefined,
   });
   const baseOuterDomain = useMemo(() => ({
     startMs: displayRange.from.getTime(),
@@ -138,15 +149,15 @@ export function HistoryPage() {
       gapBoundary: false,
     }));
     for (const gap of history.data.missing_ranges) {
-      const start = Math.max(outerDomain.startMs, new Date(gap.start).getTime());
-      const end = Math.min(outerDomain.endMs, new Date(gap.end).getTime());
+      const start = Math.max(new Date(history.data.windowStart).getTime(), new Date(gap.start).getTime());
+      const end = Math.min(new Date(history.data.windowEnd).getTime(), new Date(gap.end).getTime());
       if (Number.isFinite(start) && Number.isFinite(end) && end - start > 2) {
         points.push({ timestamp: new Date(start + 1).toISOString(), value: null, cost: null, quality: null, epoch: start + 1, plottedValue: null, gapBoundary: true });
         points.push({ timestamp: new Date(end - 1).toISOString(), value: null, cost: null, quality: null, epoch: end - 1, plottedValue: null, gapBoundary: true });
       }
     }
     return points.sort((left, right) => left.epoch - right.epoch);
-  }, [history.data, metric, outerDomain.endMs, outerDomain.startMs]);
+  }, [history.data, metric]);
   const visibleChartData = useMemo(() => chartData.filter((point) => point.epoch >= selectedRange.startMs && point.epoch <= selectedRange.endMs), [chartData, selectedRange.endMs, selectedRange.startMs]);
   const historyAxis = useMemo(() => chartAxisFormat(visibleChartData.map((point) => point.plottedValue), metricDefinition.unit, metric === 'cost' ? 62 : 58), [metric, metricDefinition.unit, visibleChartData]);
   const hasCommittedPoint = chartData.some((point) => point.plottedValue !== null);
@@ -167,15 +178,6 @@ export function HistoryPage() {
     setRangeAnchor(Date.now());
     setPreset(preferred[preferences.data.history_range]);
   }, [preferences.data]);
-
-  useEffect(() => {
-    if (preset !== 'Live') return;
-    const refresh = () => setLiveQueryNow(Date.now());
-    refresh();
-    const timer = window.setInterval(refresh, (preferences.data?.refresh_seconds ?? 15) * 1000);
-    window.addEventListener('powermeter:measurement', refresh);
-    return () => { window.clearInterval(timer); window.removeEventListener('powermeter:measurement', refresh); };
-  }, [preferences.data?.refresh_seconds, preset]);
 
   function applyCustom(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -212,8 +214,13 @@ export function HistoryPage() {
   }
 
   async function exportCsv() {
-    const blob = await api.exportHistory(params);
-    download(blob, `powermeter-history-${queryRange.from.toISOString().slice(0, 10)}-${queryRange.to.toISOString().slice(0, 10)}.csv`);
+    const snapshot = new URLSearchParams(params);
+    if (history.data) {
+      snapshot.set('from', history.data.windowStart);
+      snapshot.set('to', history.data.windowEnd);
+    }
+    const blob = await api.exportHistory(snapshot);
+    download(blob, `powermeter-history-${snapshot.get('from')!.slice(0, 10)}-${snapshot.get('to')!.slice(0, 10)}.csv`);
   }
 
   function chooseScope(next: string) {
@@ -255,8 +262,9 @@ export function HistoryPage() {
 
     {history.isLoading && <Loading label="Loading saved readings" />}
     {history.isError && <ErrorState error={history.error} retry={() => void history.refetch()} />}
+    <p role="status" className="disclosure" style={{ visibility: history.data && history.isFetching ? 'visible' : 'hidden' }}>Refreshing saved readings; the last completed plot remains visible.</p>
     {history.data && <>
-      <div className="history-summary-grid"><Card eyebrow="Loaded query" title="Energy"><strong className="stat-value">{numeric(history.data.energy_kwh === null ? null : Number(history.data.energy_kwh), 'kWh')}</strong><small>{dateTime(queryRange.from.toISOString(), timezone)} – {dateTime(queryRange.to.toISOString(), timezone)}</small></Card><Card eyebrow="Connection gaps" title="Recovered energy"><strong className="stat-value">{numeric(recoveredGapEnergy, 'kWh')}</strong><small>{recoveredGapEnergy && recoveredGapEnergy > 0 ? 'Recovered from the meter total' : 'No recovered gap energy reported'}</small></Card><Card eyebrow="Reading coverage" title="Accepted readings"><strong className="stat-value">{percent(history.data.completeness === null ? null : Number(history.data.completeness))}</strong><small>{history.data.missing_ranges.length > 0 ? 'Some readings are missing.' : 'No known gaps in this range'}</small></Card></div>
+      <div className="history-summary-grid"><Card eyebrow="Loaded query" title="Energy"><strong className="stat-value">{numeric(history.data.energy_kwh === null ? null : Number(history.data.energy_kwh), 'kWh')}</strong><small>{dateTime(history.data.windowStart, timezone)} – {dateTime(history.data.windowEnd, timezone)}</small></Card><Card eyebrow="Connection gaps" title="Recovered energy"><strong className="stat-value">{numeric(recoveredGapEnergy, 'kWh')}</strong><small>{recoveredGapEnergy && recoveredGapEnergy > 0 ? 'Recovered from the meter total' : 'No recovered gap energy reported'}</small></Card><Card eyebrow="Reading coverage" title="Accepted readings"><strong className="stat-value">{percent(history.data.completeness === null ? null : Number(history.data.completeness))}</strong><small>{history.data.missing_ranges.length > 0 ? 'Some readings are missing.' : 'No known gaps in this range'}</small></Card></div>
       <Notice>Showing readings for {deviceId ? devices.data?.devices.find((device) => device.id === deviceId)?.friendly_name ?? 'the selected sensor' : circuits.data?.circuits.find((circuit) => circuit.id === circuitId)?.name ?? 'the selected service branch'}. Sensors that measure the same electricity are never added together.</Notice>
       {recoveredGapEnergy !== null && recoveredGapEnergy > 0 && <Notice kind="info">Energy was recovered from the meter total, but the exact power pattern during the connection gap is unavailable.</Notice>}
       <Card title={`${metricDefinition.label} over time`} eyebrow={`${history.data.resolution_seconds}s aggregation · display ${timezone}`} action={<div className="history-chart-actions"><span className="chart-instruction"><ZoomIn aria-hidden="true" /> Drag either handle or the selected window</span>{rangeSelection.mode === 'manual' && <button type="button" className="text-button" onClick={resetHistoryRange}>Reset zoom</button>}{preset === 'Live' && rangeSelection.mode === 'manual' && <button type="button" className="text-button" onClick={resumeLiveHistory}>Resume live</button>}</div>} className="history-chart-card">

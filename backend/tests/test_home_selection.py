@@ -698,7 +698,10 @@ async def test_dashboard_rate_timezone_and_card_cost_are_bound_to_selected_home(
         expected_next_change = (
             local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         ).astimezone(UTC)
-        actual_next_change = datetime.fromisoformat(
-            body["current_rate"]["next_change_at"].replace("Z", "+00:00")
+        actual_next_refresh = datetime.fromisoformat(
+            body["next_pricing_refresh_at"].replace("Z", "+00:00")
         )
-        assert actual_next_change == expected_next_change
+        assert actual_next_refresh == expected_next_change
+        # An all-day flat schedule has no midnight price change. Re-evaluation
+        # still occurs at account-local midnight without inventing a transition.
+        assert body["current_rate"]["next_change_at"] is None

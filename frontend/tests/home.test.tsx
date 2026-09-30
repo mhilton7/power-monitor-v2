@@ -6,7 +6,7 @@ import { apiResponse, billing, device, history, home, homeScopes } from './fixtu
 import { installFetchMock, renderWithProviders } from './render';
 
 describe('Home', () => {
-  it('keeps power and energy charts mounted while a new reading anchor is loading', async () => {
+  it('does not refetch history on a live-number anchor and keeps both charts mounted during a scheduled history refresh', async () => {
     const requestUrl = (input: RequestInfo | URL) => typeof input === 'string'
       ? input
       : input instanceof URL
@@ -33,7 +33,9 @@ describe('Home', () => {
       });
     });
 
-    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => requestUrl(input).includes('/history')).length).toBeGreaterThan(initialHistoryRequests));
+    expect(fetchMock.mock.calls.filter(([input]) => requestUrl(input).includes('/history'))).toHaveLength(initialHistoryRequests);
+    act(() => { void queryClient.invalidateQueries({ queryKey: ['history'] }, { cancelRefetch: false }); });
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => requestUrl(input).includes('/history')).length).toBe(initialHistoryRequests + 2));
     expect(screen.getByTestId('usage-chart')).toBeVisible();
     expect(screen.getByTestId('daily-chart')).toBeVisible();
     expect(screen.queryByText('Loading saved readings')).not.toBeInTheDocument();
@@ -46,6 +48,22 @@ describe('Home', () => {
     expect(adaptiveTimeTicks(start, end, 390)).toHaveLength(4);
     expect(adaptiveTimeTicks(start, end, 1440).length).toBeLessThanOrEqual(8);
     expect(adaptiveTimeTicks(start, end, 390)).toEqual(expect.arrayContaining([start, end]));
+  });
+
+  it('retains the exact plot elements and marks stale snapshots after a failed background refresh', async () => {
+    let failHistory = false;
+    installFetchMock((path, method) => path.includes('/history')
+      ? failHistory ? { status: 503, body: { title: 'Temporarily unavailable' } } : { status: 200, body: history }
+      : apiResponse(path, method));
+    const { queryClient } = renderWithProviders(<HomePage />);
+    const power = await screen.findByTestId('usage-chart');
+    const energy = await screen.findByTestId('daily-chart');
+    failHistory = true;
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ['history'] }, { cancelRefetch: false }); });
+    expect(await screen.findByText('Saved power refresh failed; showing the last successful snapshot.')).toBeInTheDocument();
+    expect(screen.getByText('Daily energy refresh failed; showing the last successful snapshot.')).toBeInTheDocument();
+    expect(screen.getByTestId('usage-chart')).toBe(power);
+    expect(screen.getByTestId('daily-chart')).toBe(energy);
   });
 
   it('groups selected energy by Pacific calendar day and assigns only matched fully-contained gap evidence', () => {
