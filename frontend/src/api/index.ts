@@ -16,6 +16,7 @@ import {
   homeScopesSchema,
   homeUtilitySchema,
   homeSchema,
+  livePricingSchema,
   manualRateCandidateResponseSchema,
   rateActivationResponseSchema,
   rateCandidatesSchema,
@@ -106,7 +107,8 @@ export const api = {
   logout: () => apiRequest('/auth/logout', z.undefined(), { method: 'POST' }),
   homeScopes: () => apiRequest('/home-scopes', homeScopesSchema),
   home: (homeId: string) => apiRequest(homePath('/home', homeId), homeSchema),
-  history: (query: URLSearchParams) => apiRequest(`/history?${query.toString()}`, historySchema),
+  livePricing: async (homeId: string, signal?: AbortSignal) => exactHome(homeId, await apiRequest(homePath('/home/pricing', homeId), livePricingSchema, signal ? { signal } : {})),
+  history: (query: URLSearchParams, signal?: AbortSignal) => apiRequest(`/history?${query.toString()}`, historySchema, signal ? { signal } : {}),
   exportHistory: async (query: URLSearchParams) => {
     const exportQuery = new URLSearchParams();
     const from = query.get('from'); const to = query.get('to'); const homeId = query.get('home_id');

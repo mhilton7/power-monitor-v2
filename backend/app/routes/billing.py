@@ -62,6 +62,7 @@ from ..schemas.api import (
 )
 from ..schemas.billing import RatePlanDraft, TierThresholdRuleDraft
 from ..security.auth import CurrentUser, require_permission
+from ..services.billing_usage import estimate_short_gap_energy
 from ..services.cost_engine import season_from_storage
 from ..services.rate_sync import (
     SCE_CATALOG_SOURCE_NAME,
@@ -95,156 +96,10 @@ from ..services.tiered_billing import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["billing"])
+_estimate_short_gap_energy = estimate_short_gap_energy
 # Compatibility seam for existing API tests that replace the parser with a sanitized
 # fixture. It is reached only under PM_ENV=test; production always calls the sandbox.
 extract_rate_plan_from_pdf = extract_rate_plan_portable_for_tests
-
-
-async def _estimate_short_gap_energy(
-    session: AsyncSession,
-    *,
-    events: list[TelemetryEnergyEvent],
-    cycle_start: datetime,
-    scope_end: datetime,
-    reading_coverage: Decimal,
-    minimum_coverage: Decimal,
-    maximum_gap_seconds: int,
-    unresolved_counter_resets: int,
-) -> dict[str, object]:
-    """Estimate billing-only energy without creating or changing History rows."""
-
-    estimated_mwh = Decimal("0")
-    lower_mwh = Decimal("0")
-    upper_mwh = Decimal("0")
-    estimated_seconds = 0
-    unknown_seconds = 0
-    unknown_count = 0
-    methods: set[str] = set()
-    details: list[dict[str, object]] = []
-    for event in events:
-        gap_start = aware_utc(event.gap_start_utc) if event.gap_start_utc else None
-        gap_end = aware_utc(event.gap_end_utc) if event.gap_end_utc else None
-        duration_seconds = (
-            max(0, int((gap_end - gap_start).total_seconds()))
-            if gap_start is not None and gap_end is not None and gap_end > gap_start
-            else 0
-        )
-        blocked_reason: str | None = None
-        if gap_start is None or gap_end is None or duration_seconds <= 0:
-            blocked_reason = "gap_bounds_unavailable"
-        elif (
-            gap_start < cycle_start
-            or gap_end > scope_end
-            or bool(event.evidence.get("crosses_billing_cycle") is True)
-        ):
-            blocked_reason = "gap_crosses_billing_cycle_boundary"
-        elif unresolved_counter_resets:
-            blocked_reason = "unresolved_counter_reset"
-        elif reading_coverage < minimum_coverage:
-            blocked_reason = "reading_coverage_below_minimum_threshold"
-        elif duration_seconds > maximum_gap_seconds:
-            blocked_reason = "gap_exceeds_maximum_estimatable_duration"
-
-        before: NormalizedInterval | None = None
-        after: NormalizedInterval | None = None
-        if blocked_reason is None:
-            assert gap_start is not None and gap_end is not None
-            before = (
-                await session.scalars(
-                    select(NormalizedInterval)
-                    .where(
-                        NormalizedInterval.device_id == event.device_id,
-                        NormalizedInterval.source_authenticated.is_(True),
-                        NormalizedInterval.energy_mwh.is_not(None),
-                        NormalizedInterval.end_utc <= gap_start,
-                        NormalizedInterval.end_utc
-                        >= gap_start - timedelta(seconds=maximum_gap_seconds),
-                    )
-                    .order_by(NormalizedInterval.end_utc.desc())
-                    .limit(1)
-                )
-            ).first()
-            after = (
-                await session.scalars(
-                    select(NormalizedInterval)
-                    .where(
-                        NormalizedInterval.device_id == event.device_id,
-                        NormalizedInterval.source_authenticated.is_(True),
-                        NormalizedInterval.energy_mwh.is_not(None),
-                        NormalizedInterval.start_utc >= gap_end,
-                        NormalizedInterval.start_utc
-                        <= gap_end + timedelta(seconds=maximum_gap_seconds),
-                    )
-                    .order_by(NormalizedInterval.start_utc)
-                    .limit(1)
-                )
-            ).first()
-            if before is None or after is None:
-                blocked_reason = "neighboring_intervals_unavailable"
-
-        if blocked_reason is not None:
-            unknown_count += 1
-            unknown_seconds += duration_seconds
-            details.append(
-                {
-                    "event_id": event.id,
-                    "status": "unknown",
-                    "duration_seconds": duration_seconds,
-                    "reason": blocked_reason,
-                }
-            )
-            continue
-
-        assert before is not None and after is not None
-        before_seconds = Decimal(str((before.end_utc - before.start_utc).total_seconds()))
-        after_seconds = Decimal(str((after.end_utc - after.start_utc).total_seconds()))
-        if before_seconds <= 0 or after_seconds <= 0:
-            unknown_count += 1
-            unknown_seconds += duration_seconds
-            details.append(
-                {
-                    "event_id": event.id,
-                    "status": "unknown",
-                    "duration_seconds": duration_seconds,
-                    "reason": "neighboring_interval_duration_invalid",
-                }
-            )
-            continue
-        before_rate = Decimal(before.energy_mwh or 0) / before_seconds
-        after_rate = Decimal(after.energy_mwh or 0) / after_seconds
-        gap_seconds = Decimal(duration_seconds)
-        estimate = (((before_rate + after_rate) / Decimal(2)) * gap_seconds).quantize(
-            Decimal("0.000001")
-        )
-        lower = (min(before_rate, after_rate) * gap_seconds).quantize(Decimal("0.000001"))
-        upper = (max(before_rate, after_rate) * gap_seconds).quantize(Decimal("0.000001"))
-        estimated_mwh += estimate
-        lower_mwh += lower
-        upper_mwh += upper
-        estimated_seconds += duration_seconds
-        methods.add("short_gap_neighbor_interpolation")
-        details.append(
-            {
-                "event_id": event.id,
-                "status": "estimated",
-                "duration_seconds": duration_seconds,
-                "method": "short_gap_neighbor_interpolation",
-                "energy_kwh": estimate / Decimal(1_000_000),
-                "lower_kwh": lower / Decimal(1_000_000),
-                "upper_kwh": upper / Decimal(1_000_000),
-            }
-        )
-    return {
-        "estimated_mwh": estimated_mwh,
-        "lower_mwh": lower_mwh,
-        "upper_mwh": upper_mwh,
-        "estimated_seconds": estimated_seconds,
-        "unknown_seconds": unknown_seconds,
-        "unknown_count": unknown_count,
-        "methods": tuple(sorted(methods)),
-        "details": details,
-        "raw_history_modified": False,
-    }
 
 
 async def _user_homes(session: AsyncSession, user_id: str) -> tuple[str, ...]:

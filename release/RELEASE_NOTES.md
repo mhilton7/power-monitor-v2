@@ -1,15 +1,35 @@
-# PowerMeter V2 v0.1.0-rc.30
+# PowerMeter V2 v0.1.0-rc.31
 
-RC30 carries forward the public RC29 server-owned History, billing presentation,
-official-rate catalog, notification controls, and firmware/deployment lifecycle
-work while replacing the chart library's transient brush state with an
-accessible timestamp-based range selector. User-selected Dashboard and History
-ranges now remain stable across five-second reading refreshes, live ticker
-updates, refetches, resize, and tooltip interaction. The firmware runtime
-remains stateless and byte-identical to RC29; this candidate advances only its
-coordinated release metadata. Marked-unit hardware certification remains pending.
+RC31 repairs the existing application's current usage-aware pricing and
+live chart request scheduling. It preserves the public RC30 features,
+sensor runtime behavior, protocol identifiers, and migration head.
+Coordinated firmware RC31 advances only the release identity and compatibility
+metadata to build 34; it is rebuilt and attested, not an identical binary.
+Marked-unit hardware certification remains pending.
 
-## RC30 permanent chart-range repair
+## RC31 live pricing and chart scheduling
+
+- One server-backed Home pricing result resolves the canonical Main service,
+  effective assignment, account cycle usage, tariff timezone, marginal tier
+  and TOU period, remaining tier allowance, and next determinable price change.
+- Exact Decimal arithmetic provides estimated cost per hour only with a fresh
+  measured load. Missing, stale, incomplete, denied, and failed states stay
+  explicit; measured zero remains zero. Historical costs are not repriced
+  using today's marginal rate.
+- Clock-only tariff transitions refresh pricing independently of History.
+  Stable logical chart query keys, cancellation, bounded dirty-range batching,
+  and reconnect recovery reduce redundant History requests without disabling
+  live updates or resetting timestamp-based manual ranges.
+- Repeatable native browser measurements and limitations are recorded in
+  docs/TESTING.md; physical-phone and target-TrueNAS validation remain pending.
+- Reviewed native Windows/Linux visual baselines cover the intended pricing
+  and status changes. No screenshot tolerance or assertion is weakened.
+- Release-blocking security/build fixes pin pypdf 6.16.1, undici 8.10.2,
+  gRPC 1.83.2 and its required closure, plus repaired Alpine packages in the
+  existing images. Frameworks, Go/Caddy versions, and deployment layout remain.
+- Public RC30 tags, images, firmware, checksums, and YAML remain immutable.
+
+## Public RC30 permanent chart-range repair retained
 
 - Dashboard and History range selection is represented by timestamps rather
   than array indexes, so appended authenticated readings cannot reset a user's
@@ -246,25 +266,25 @@ or generated YAML. Its tag, run, images, and logs are not relabeled as RC23.
 
 ## Release binding
 
-- Server and frontend version: `0.1.0-rc.30`.
-- Compatible firmware tag: `v0.1.0-rc.30`, build number `33`.
+- Server and frontend version: `0.1.0-rc.31`.
+- Compatible firmware tag: `v0.1.0-rc.31`, build number `34`.
 - Control protocol: `pm-protocol/1.0.0`.
 - Stateless telemetry protocol: `pm-telemetry/2.0.0`.
 - Alembic head: `20260829_0020`.
 - Generated contract-document SHA-256:
-  `eddc0679e6778f07c0702f166ae5bf0f62017ce03e68c9dc3fc31e67f81d2d12`.
+  `c7d2ef230f4e3f183251cd010731a122875cddf24cce829da69dfd8ffb0c3c74`.
 
 The tagged server workflow must publish four multi-architecture GHCR indexes,
 their registry digests/SBOMs/attestations/scans, the digest-pinned
-`power-monitor-v2-v0.1.0-rc.30.yaml`, release manifest, migration/security/test
+`power-monitor-v2-v0.1.0-rc.31.yaml`, release manifest, migration/security/test
 evidence, and checksums. The firmware prerelease must be published and
 independently verified first, then the server compatibility variable must be
-set to the exact RC30 firmware tag.
+set to the exact RC31 firmware tag.
 
 ## Deployment boundary
 
-Deploy the server RC30 YAML before applying the firmware RC30 update. Existing
-RC21 through RC29 sensors remain protocol-compatible throughout. Automated
+Deploy the server RC31 YAML before applying the firmware RC31 update. Existing
+RC21 through RC30 sensors remain protocol-compatible throughout. Automated
 tests do not install firmware on physical sensors. No card was formatted and no
 NVS namespace was erased while preparing this release.
 

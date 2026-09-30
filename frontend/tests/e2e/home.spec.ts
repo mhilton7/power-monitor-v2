@@ -145,6 +145,18 @@ test('Power History keeps its selected timestamps through a five-second dashboar
 });
 
 test('Power History five-second range interaction stays local and avoids disruptive long tasks', async ({ page }, testInfo) => {
+  // Keep this interaction-only case connected. The default finite SSE fixture
+  // closes its response and causes legitimate reconnect recovery every 3s.
+  await page.addInitScript(() => {
+    class ConnectedEventSource extends EventTarget {
+      readonly readyState = 1;
+      onerror = null;
+      onmessage = null;
+      onopen = null;
+      close() { /* This case has no transport interruption. */ }
+    }
+    window.EventSource = ConnectedEventSource as unknown as typeof EventSource;
+  });
   let historyRequests = 0;
   page.on('request', (request) => {
     if (new URL(request.url()).pathname.endsWith('/history')) historyRequests += 1;
@@ -180,6 +192,38 @@ test('Power History five-second range interaction stays local and avoids disrupt
   expect(layoutShiftAfter - layoutShiftBefore).toBeLessThan(0.01);
   await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
   await expect(page.getByRole('button', { name: 'Reset zoom' })).toBeVisible();
+});
+
+test('a native SSE reconnect recovers History without changing the selected range', async ({ page }) => {
+  let historyRequests = 0;
+  let eventConnections = 0;
+  let allowReconnect: (() => void) | undefined;
+  const reconnectReady = new Promise<void>((resolve) => { allowReconnect = resolve; });
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.endsWith('/history')) historyRequests += 1;
+  });
+  await page.route('**/api/v1/events', async (route) => {
+    eventConnections += 1;
+    if (eventConnections > 1) await reconnectReady;
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      headers: { 'Cache-Control': 'no-cache' },
+      body: `retry: ${eventConnections === 1 ? 2000 : 60000}\n: keepalive\n\n`,
+    });
+  });
+  await page.goto('/');
+  const chart = page.getByTestId('usage-chart');
+  await expect(chart).toBeVisible();
+  await expect(page.getByTestId('daily-chart')).toBeVisible();
+  await dragRangePartToFraction(page.getByTestId('power-range-start'), page.getByTestId('power-range-track'), 0.3);
+  const selectedRange = await page.getByTestId('power-selected-range').innerText();
+  const initialHistoryRequests = historyRequests;
+  allowReconnect?.();
+  await expect.poll(() => eventConnections, { timeout: 6000 }).toBe(2);
+  await expect.poll(() => historyRequests, { timeout: 3000 }).toBe(initialHistoryRequests + 2);
+  await expect(page.getByTestId('power-selected-range')).toHaveText(selectedRange);
+  await expect(chart).toHaveAttribute('data-user-selected-range', 'true');
 });
 
 test('Power History slider remains responsive through repeated drag adjustments', async ({ page }) => {

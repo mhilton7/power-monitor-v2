@@ -13,16 +13,16 @@ valid signed server `v0.1.0-rc.4` tag
 is historical failed prepublication evidence, not a Release. Hardware execution
 confirmed that firmware rc.1 through rc.5 crash in the main stack before
 provisioning. Public `v0.1.0-rc.16` is installation evidence for the prior
-  durable sensor-backlog architecture. Candidate `v0.1.0-rc.30` retains
-`pm-protocol/1.0.0`, adds `pm-telemetry/2.0.0`, and extends the Alembic head to
+  durable sensor-backlog architecture. Candidate `v0.1.0-rc.31` retains
+`pm-protocol/1.0.0`, retains `pm-telemetry/2.0.0`, and retains the Alembic head at
 `20260829_0020`. It retains PostgreSQL telemetry and History ownership, removes
 active microSD/backlog behavior from new firmware, preserves
 NVS identity/configuration, and adds Main-service History and exact tiered
 Billing. Firmware and server rc.16 remain immutable and must not be relabeled.
 Firmware rc.17 is immutable failed-candidate evidence because its public
 compatibility record omitted the telemetry protocol binding. The exact
-  firmware rc.30 metadata and artifacts must be published and independently
-  verified before the server rc.30 tag is created; server
+  firmware rc.31 metadata and artifacts must be published and independently
+  verified before the server rc.31 tag is created; server
 publication still requires every automated gate to pass.
 Stable publication remains blocked until physical hardware, TLS,
 OTA-install/rollback, and soak certification from the actual marked unit
@@ -92,7 +92,9 @@ failed deterministically because a published bill-derived day-sensitive rate
 required a missing authoritative holiday calendar. Release assembly was
 skipped, so server rc.22 has no GitHub Release or generated YAML.
 
-Candidate rc.30 keeps the server as durable owner of independently accepted
+Candidate rc.31 repairs current account/time-aware pricing and bounded live
+chart scheduling while preserving RC30's timestamp-based manual ranges (see
+docs/TESTING.md for the measured repair evidence). It keeps the server as durable owner of independently accepted
 telemetry and active History. Firmware keeps one in-flight and one newest
 pending sample in RAM, and a missing sample never blocks a later sample. The UI
 removes normal storage/backlog controls; History preserves connection gaps and
@@ -109,10 +111,10 @@ unexecutable holiday-sensitive bill-rate publication, isolates any legacy
 unpriceable rate evidence without degrading unrelated worker work, and requires
 post-pricing worker health in deployment smoke. Control remains
 `pm-protocol/1.0.0`, telemetry is `pm-telemetry/2.0.0`, and the Alembic head is
-`20260829_0020`. The generated rc.30 OpenAPI SHA-256 is
-`eddc0679e6778f07c0702f166ae5bf0f62017ce03e68c9dc3fc31e67f81d2d12`.
+`20260829_0020`. The generated rc.31 OpenAPI SHA-256 is
+`c7d2ef230f4e3f183251cd010731a122875cddf24cce829da69dfd8ffb0c3c74`.
 The checked-in YAML retains `UNPUBLISHED_*` sentinels until its tagged workflow
-supplies exact registry digests. Rc.30 must pass clean
+supplies exact registry digests. Rc.31 must pass clean
 dependency/backend/PostgreSQL gates, security scans, public package
 verification, first-run plus idempotent initializer smoke, checksums, and
 attestations. Its explicit migration chain extends to `20260829_0020`;
@@ -164,8 +166,8 @@ Release assets include manifest, digest-pinned YAML, SBOMs/attestations,
 test/security/migration reports, checksums, installation/upgrade/rollback
 guides, the tracked Windows SMB staging helper, the auditable initializer
 source embedded in the API image, and release notes. The GitHub Release
-cross-links the compatible firmware release. Coordinated rc.30 publishes under
-a new immutable tag without rewriting rc.29 or any earlier release.
+cross-links the compatible firmware release. Coordinated rc.31 publishes under
+a new immutable tag without rewriting rc.30 or any earlier release.
 
 ### Release-candidate publication order
 
@@ -186,7 +188,7 @@ Never tag a feature-branch commit. Publish an RC only in this order:
    ```
 
 3. Publish and independently verify the coordinated signed firmware
-   `v0.1.0-rc.30` release first. Set the server repository variable
+   `v0.1.0-rc.31` release first. Set the server repository variable
    `COMPATIBLE_FIRMWARE_TAG` to that exact tag and verify its immutable release
    metadata before creating the server tag.
 4. With the release signing key and local allowed-signers policy configured,
@@ -195,10 +197,10 @@ Never tag a feature-branch commit. Publish an RC only in this order:
 
    ```bash
    release_commit="$(git rev-parse HEAD)"
-   git tag -s -m 'PowerMeter V2 0.1.0-rc.30' v0.1.0-rc.30 "$release_commit"
-   git verify-tag v0.1.0-rc.30
-   test "$(git rev-parse 'v0.1.0-rc.30^{commit}')" = "$release_commit"
-   git push origin refs/tags/v0.1.0-rc.30
+   git tag -s -m 'PowerMeter V2 0.1.0-rc.31' v0.1.0-rc.31 "$release_commit"
+   git verify-tag v0.1.0-rc.31
+   test "$(git rev-parse 'v0.1.0-rc.31^{commit}')" = "$release_commit"
+   git push origin refs/tags/v0.1.0-rc.31
    ```
 
 The tagged workflow independently requires the pushed ref to resolve to an

@@ -673,13 +673,13 @@ def test_gateway_image_removes_unneeded_file_capability_and_is_release_owned() -
         "golang.org/x/mod v0.40.0",
         "golang.org/x/net v0.58.0",
         "golang.org/x/text v0.41.0",
-        "google.golang.org/grpc v1.82.1",
+        "google.golang.org/grpc v1.83.2",
     ):
         assert module in go_mod
         assert module in dockerfile
     assert go_mod.startswith("module github.com/mhilton7/power-monitor-v2/gateway\n\ngo 1.26.6\n")
     assert '_ "time/tzdata"' in main_go
-    for package in ("c-ares=1.34.8-r0", "curl=8.20.0-r0", "libcurl=8.20.0-r0"):
+    for package in ("c-ares=1.34.8-r0", "curl=8.22.0-r0", "libcurl=8.22.0-r0"):
         assert package in dockerfile
     for license_file in (
         "CADDY-LICENSE.txt",
@@ -1015,11 +1015,11 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
     assert "prepare-host.sh" not in installation
     assert "pm-protocol/1.0.0" in installation
     assert "authenticated PZEM-004T readings" in installation
-    assert "$Tag = 'v0.1.0-rc.30'" in installation
+    assert "$Tag = 'v0.1.0-rc.31'" in installation
     assert "$env:TEMP" in installation
     assert "[guid]::NewGuid().ToString('N')" in installation
     assert "Join-Path $HOME" not in installation
-    assert "signed v0.1.0-rc.30 release" in normalized_installation
+    assert "signed v0.1.0-rc.31 release" in normalized_installation
     assert "Stage-PowerMeterTrueNAS.ps1" in installation
     assert "power-monitor.home.arpa -> 192.168.0.175" in installation
     assert "Direct-IP HTTPS is not supported" in installation
@@ -1074,11 +1074,11 @@ def test_truenas_operator_bundle_is_fail_closed_and_complete() -> None:
 def test_candidate_notes_describe_workflow_output_without_claiming_source_publication() -> None:
     notes = (ROOT / "release/RELEASE_NOTES.md").read_text(encoding="utf-8")
     normalized = " ".join(notes.split())
-    assert "power-monitor-v2-v0.1.0-rc.30.yaml" in normalized
+    assert "power-monitor-v2-v0.1.0-rc.31.yaml" in normalized
     assert "Alembic head: `20260829_0020`" in normalized
-    assert "firmware tag: `v0.1.0-rc.30`, build number `33`" in normalized
+    assert "firmware tag: `v0.1.0-rc.31`, build number `34`" in normalized
     assert "pm-telemetry/2.0.0" in normalized
-    assert "eddc0679e6778f07c0702f166ae5bf0f62017ce03e68c9dc3fc31e67f81d2d12" in normalized
+    assert "c7d2ef230f4e3f183251cd010731a122875cddf24cce829da69dfd8ffb0c3c74" in normalized
     assert "original bytes/full OCR text are never persisted" in normalized
     assert "Automated tests do not install firmware on physical sensors" in normalized
     assert "actual marked-unit" in normalized
@@ -1093,9 +1093,9 @@ def test_release_process_requires_merge_then_verified_signed_annotated_tag() -> 
     merge = "Merge the approved pull request through the protected `main` branch"
     update = "git pull --ff-only origin main"
     firmware = "Publish and independently verify the coordinated signed firmware"
-    create = "git tag -s -m 'PowerMeter V2 0.1.0-rc.30'"
-    verify = "git verify-tag v0.1.0-rc.30"
-    push = "git push origin refs/tags/v0.1.0-rc.30"
+    create = "git tag -s -m 'PowerMeter V2 0.1.0-rc.31'"
+    verify = "git verify-tag v0.1.0-rc.31"
+    push = "git push origin refs/tags/v0.1.0-rc.31"
 
     assert normalized.index(merge) < normalized.index(update)
     assert normalized.index(update) < normalized.index(firmware)

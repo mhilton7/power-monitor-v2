@@ -7,9 +7,9 @@ import io
 import math
 from collections import defaultdict
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -34,12 +34,6 @@ from ..models import (
     IntervalCost,
     IntervalCostSelection,
     NormalizedInterval,
-    RateAssignment,
-    RateDatedPrice,
-    RateHoliday,
-    RatePeriod,
-    RatePlan,
-    RatePlanVersion,
     RawReading,
     StatelessTelemetrySample,
     TelemetryEnergyEvent,
@@ -57,18 +51,9 @@ from ..services.commands import (
     validate_commit_token,
 )
 from ..services.cost_engine import (
-    CostContext,
-    DatedPrice,
-    PricePeriod,
-    RateVersion,
     current_cost_per_hour_microdollars,
-    event_calendar_from_evidence,
-    holiday_calendar_from_evidence,
-    resolve_price_period,
-    season_definitions_from_storage,
-    season_from_storage,
 )
-from ..services.rate_workflow import resolve_assigned_utility_account_cycle_tier_threshold
+from ..services.live_pricing import current_pricing
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 
@@ -309,357 +294,30 @@ async def _summary(
     }
 
 
-async def _current_rate(
-    session: AsyncSession,
-    home_id: str,
-    now: datetime,
-    device_ids: tuple[str, ...],
-    cycle_start: datetime,
-) -> dict[str, object] | None:
-    rows = (
-        await session.execute(
-            select(RateAssignment, RatePlanVersion, RatePlan, UtilityAccount)
-            .join(RateAssignment, RateAssignment.rate_plan_version_id == RatePlanVersion.id)
-            .join(UtilityAccount, UtilityAccount.id == RateAssignment.utility_account_id)
-            .join(RatePlan, RatePlan.id == RatePlanVersion.rate_plan_id)
-            .where(
-                UtilityAccount.home_id == home_id,
-                RateAssignment.effective_start <= now,
-                (RateAssignment.effective_end.is_(None) | (RateAssignment.effective_end > now)),
-                RatePlanVersion.state == "published",
-                RatePlanVersion.effective_start <= now,
-                (RatePlanVersion.effective_end.is_(None) | (RatePlanVersion.effective_end > now)),
-            )
-            .order_by(RateAssignment.effective_start.desc())
-            .limit(2)
-        )
-    ).all()
-    if len(rows) != 1:
-        return None
-    assignment, version, plan, account = rows[0]
-    scope_end = now.replace(second=0, microsecond=0)
-    local = now.astimezone(ZoneInfo(version.timezone))
-    season = season_from_storage(version.season_definitions, local)
-    holidays = frozenset(
-        (
-            await session.scalars(
-                select(RateHoliday.local_date).where(RateHoliday.rate_plan_version_id == version.id)
-            )
-        ).all()
-    )
-    period_rows = (
-        await session.scalars(
-            select(RatePeriod).where(RatePeriod.rate_plan_version_id == version.id)
-        )
-    ).all()
-    dated_price_rows = (
-        await session.scalars(
-            select(RateDatedPrice)
-            .where(RateDatedPrice.rate_plan_version_id == version.id)
-            .order_by(RateDatedPrice.start_utc)
-        )
-    ).all()
-    cumulative_mwh = int(
-        await session.scalar(
-            select(func.sum(NormalizedInterval.energy_mwh))
-            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
-            .join(Device, Device.id == NormalizedInterval.device_id)
-            .where(
-                NormalizedInterval.device_id.in_(device_ids),
-                or_(
-                    NormalizedInterval.source_kind == "stateless_v2",
-                    RawReading.reset_generation == Device.reset_generation,
-                ),
-                NormalizedInterval.start_utc >= cycle_start,
-                NormalizedInterval.end_utc <= scope_end,
-                NormalizedInterval.source_authenticated.is_(True),
-            )
-        )
-        or 0
-    )
-    cycle_summary = await _summary(session, device_ids, cycle_start, scope_end)
-    recovered_gap_kwh = Decimal(str(cycle_summary["recovered_gap_energy_kwh"]))
-    cumulative_kwh = Decimal(cumulative_mwh) / Decimal(1_000_000) + recovered_gap_kwh
-    effective_tier_threshold: Decimal | None = None
-    cycle_local = cycle_start.astimezone(ZoneInfo(account.timezone))
-    next_year = cycle_local.year + (1 if cycle_local.month == 12 else 0)
-    next_month = 1 if cycle_local.month == 12 else cycle_local.month + 1
-    billing_cycle_days = (
-        date(next_year, next_month, account.billing_day) - cycle_local.date()
-    ).days
-    cycle_end = datetime(
-        next_year,
-        next_month,
-        account.billing_day,
-        tzinfo=ZoneInfo(account.timezone),
-    ).astimezone(UTC)
-    one_version_for_cycle = (
-        aware_utc(assignment.effective_start) <= cycle_start
-        and (assignment.effective_end is None or aware_utc(assignment.effective_end) >= cycle_end)
-        and aware_utc(version.effective_start) <= cycle_start
-        and (version.effective_end is None or aware_utc(version.effective_end) >= cycle_end)
-    )
-    account_threshold = await resolve_assigned_utility_account_cycle_tier_threshold(
-        session,
-        utility_account_id=account.id,
-        timezone=account.timezone,
-        cycle_start=cycle_start,
-        cycle_end=cycle_end,
-    )
-    if account_threshold is not None:
-        effective_tier_threshold = account_threshold.total_kwh
-    elif (
-        account.summer_baseline_kwh_per_day
-        if season == "summer"
-        else account.winter_baseline_kwh_per_day
-    ) is not None:
-        configured_daily_baseline = (
-            account.summer_baseline_kwh_per_day
-            if season == "summer"
-            else account.winter_baseline_kwh_per_day
-        )
-        assert configured_daily_baseline is not None
-        effective_tier_threshold = configured_daily_baseline * billing_cycle_days
-    elif (
-        one_version_for_cycle
-        and version.tier_threshold_kwh_per_day is not None
-        and version.tier_threshold_season in (season, "all")
+def _measurement(item: dict[str, object]) -> dict[str, Any]:
+    value = item.get("measurement")
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
+def _dashboard_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _fresh_load_deadline(item: dict[str, object], now: datetime) -> datetime | None:
+    measurement = _measurement(item)
+    received = measurement.get("server_received_at") or item.get("heartbeat_at")
+    if (
+        item.get("state") != "live"
+        or measurement.get("active_power_w") is None
+        or not isinstance(received, datetime)
     ):
-        # Backward compatibility for immutable versions published before the
-        # account-scoped threshold table existed.
-        effective_tier_threshold = version.tier_threshold_kwh_per_day * billing_cycle_days
-    tier_requires_usage = version.pricing_model in ("tiered", "seasonal_tiered") or any(
-        period.tier_start_kwh > 0 or period.tier_end_kwh is not None for period in period_rows
-    )
-    tier_requires_account_threshold = any(
-        period.threshold_basis == "account_daily_baseline" for period in period_rows
-    )
-    reading_coverage = Decimal(str(cycle_summary["completeness"]))
-    recovered_events = list(
-        (
-            await session.scalars(
-                select(TelemetryEnergyEvent).where(
-                    TelemetryEnergyEvent.device_id.in_(device_ids),
-                    TelemetryEnergyEvent.billing_status == "included",
-                    TelemetryEnergyEvent.gap_end_utc > cycle_start,
-                    TelemetryEnergyEvent.gap_end_utc <= scope_end,
-                )
-            )
-        ).all()
-    )
-    recovered_gap_seconds = sum(
-        max(
-            0,
-            int((aware_utc(item.gap_end_utc) - aware_utc(item.gap_start_utc)).total_seconds()),
-        )
-        for item in recovered_events
-        if item.gap_start_utc is not None and item.gap_end_utc is not None
-    )
-    expected_member_seconds = Decimal(str((scope_end - cycle_start).total_seconds())) * Decimal(
-        len(device_ids)
-    )
-    missing_member_seconds = int(
-        expected_member_seconds * max(Decimal("0"), Decimal("1") - reading_coverage)
-    )
-    unresolved_gap_count = int(str(cycle_summary["unresolved_connection_gap_count"]))
-    unresolved_counter_reset_count = int(
-        await session.scalar(
-            select(func.count(Alert.id)).where(
-                Alert.device_id.in_(device_ids),
-                Alert.alert_type == "pzem_energy_counter_reset",
-                Alert.state == "open",
-                Alert.opened_at >= cycle_start,
-                Alert.opened_at < scope_end,
-            )
-        )
-        or 0
-    )
-    cycle_energy_resolved = bool(
-        reading_coverage >= Decimal("1")
-        or (
-            unresolved_gap_count == 0
-            and unresolved_counter_reset_count == 0
-            and recovered_gap_seconds >= missing_member_seconds
-        )
-    )
-    tier_confirmed = (not tier_requires_usage or cycle_energy_resolved) and (
-        not tier_requires_account_threshold or effective_tier_threshold is not None
-    )
-    period = None
-    if tier_confirmed:
-        try:
-            holiday_calendar = holiday_calendar_from_evidence(version.eligibility_evidence)
-            if holiday_calendar is not None and holiday_calendar.local_dates != holidays:
-                raise ValueError(
-                    "stored holiday calendar does not match its persisted holiday rows"
-                )
-            domain_rate = RateVersion(
-                id=version.id,
-                rate_plan_id=version.rate_plan_id,
-                timezone=version.timezone,
-                effective_start=aware_utc(version.effective_start),
-                effective_end=aware_utc(version.effective_end) if version.effective_end else None,
-                periods=tuple(
-                    PricePeriod(
-                        season=item.season,
-                        day_type=item.day_type,
-                        name=item.period_name,
-                        start_minute=item.start_minute,
-                        end_minute=item.end_minute,
-                        price_per_kwh=item.price_per_kwh,
-                        tier_start_kwh=item.tier_start_kwh,
-                        tier_end_kwh=item.tier_end_kwh,
-                        boundary_inclusive=item.boundary_inclusive,
-                        threshold_basis=item.threshold_basis,
-                    )
-                    for item in period_rows
-                ),
-                dated_prices=tuple(
-                    DatedPrice(
-                        start_utc=aware_utc(item.start_utc),
-                        end_utc=aware_utc(item.end_utc),
-                        name=item.source_label,
-                        price_per_kwh=item.price_per_kwh,
-                    )
-                    for item in dated_price_rows
-                ),
-                season_definitions=season_definitions_from_storage(version.season_definitions),
-                holiday_treatment=version.holiday_treatment,
-                holiday_calendar=holiday_calendar,
-                event_calendar=event_calendar_from_evidence(version.eligibility_evidence),
-                tier_threshold_kwh_per_day=version.tier_threshold_kwh_per_day,
-                tier_threshold_season=version.tier_threshold_season,
-                tier_threshold_source_kwh=version.tier_threshold_source_kwh,
-                tier1_boundary_inclusive=version.tier1_boundary_inclusive,
-            )
-            period = resolve_price_period(
-                domain_rate,
-                now,
-                cumulative_kwh,
-                CostContext(
-                    cumulative_cycle_kwh_before=cumulative_kwh,
-                    billing_cycle_days=billing_cycle_days,
-                    tier_threshold_cycle_kwh=(
-                        account_threshold.total_kwh if account_threshold else None
-                    ),
-                    tier_threshold_season=season if account_threshold else None,
-                    tier1_boundary_inclusive=(
-                        account_threshold.tier1_boundary_inclusive if account_threshold else True
-                    ),
-                    holidays=holidays,
-                ),
-            )
-        except ValueError:
-            period = None
-    effective_price = None
-    next_change_at = None
-    if period is not None and tier_confirmed:
-        effective_price = period.price_per_kwh + version.cca_adjustment_per_kwh
-        effective_price += effective_price * version.surcharge_percent / Decimal(100)
-        baseline_applies = (
-            account.cost_scope == "full_account"
-            and account.baseline_allocation_kwh is not None
-            and cumulative_kwh < account.baseline_allocation_kwh
-        )
-        if baseline_applies:
-            effective_price -= version.baseline_credit_per_kwh
-        effective_price = max(Decimal("0"), effective_price)
-        matching_dated_price = next(
-            (
-                item
-                for item in dated_price_rows
-                if aware_utc(item.start_utc) <= now < aware_utc(item.end_utc)
-            ),
-            None,
-        )
-        if matching_dated_price is not None:
-            next_change_at = aware_utc(matching_dated_price.end_utc)
-        else:
-            local_midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
-            next_local = local_midnight + timedelta(minutes=period.end_minute)
-            if next_local <= local:
-                next_local += timedelta(days=1)
-            next_change_at = next_local.astimezone(UTC)
-    return {
-        "plan_name": plan.name,
-        "version_id": version.id,
-        "effective_start": version.effective_start,
-        "period": period.name if period and tier_confirmed else None,
-        "tier_state": (
-            period.name
-            if period and tier_confirmed
-            else "not_confirmed"
-            if tier_requires_usage
-            else None
-        ),
-        "tier_confirmed": tier_confirmed,
-        "tier_confirmation_rule": (
-            "cycle_total_including_recovered_energy" if tier_requires_usage else "not_applicable"
-        ),
-        "reading_coverage": reading_coverage,
-        "measured_cycle_kwh": Decimal(cumulative_mwh) / Decimal(1_000_000),
-        "recovered_gap_energy_kwh": recovered_gap_kwh,
-        "unknown_gap_count": unresolved_gap_count,
-        "unresolved_counter_reset_count": unresolved_counter_reset_count,
-        "availability_reasons": [
-            *(
-                [
-                    {
-                        "code": "home_baseline_not_configured",
-                        "message": "Home baseline is not configured for this billing cycle.",
-                    }
-                ]
-                if tier_requires_account_threshold and effective_tier_threshold is None
-                else []
-            ),
-            *(
-                [
-                    {
-                        "code": "unknown_gap_energy",
-                        "message": "One or more billing gaps have unresolved energy.",
-                    }
-                ]
-                if unresolved_gap_count
-                else []
-            ),
-            *(
-                [
-                    {
-                        "code": "unclassified_missing_energy",
-                        "message": (
-                            "Missing reading time is not covered by cumulative-meter evidence."
-                        ),
-                    }
-                ]
-                if not cycle_energy_resolved and not unresolved_gap_count
-                else []
-            ),
-            *(
-                [
-                    {
-                        "code": "cumulative_energy_recovered",
-                        "message": "Gap energy is included from the cumulative PZEM meter total.",
-                    }
-                ]
-                if recovered_gap_kwh
-                else []
-            ),
-        ],
-        "tier_1_allowance_kwh": effective_tier_threshold,
-        "price_per_kwh": effective_price,
-        "base_price_per_kwh": period.price_per_kwh if period else None,
-        "cca_adjustment_per_kwh": version.cca_adjustment_per_kwh,
-        "surcharge_percent": version.surcharge_percent,
-        "cumulative_cycle_kwh": cumulative_kwh,
-        "period_start_minute": period.start_minute if period else None,
-        "period_end_minute": period.end_minute if period else None,
-        "next_change_at": next_change_at,
-        "scope": account.cost_scope,
-        "fixed_charges_included": account.cost_scope == "full_account",
-        "baseline_credit_included": account.cost_scope == "full_account"
-        and version.baseline_credit_per_kwh > 0,
-        "cca_or_direct_access": account.cca_provider,
-    }
+        return None
+    instant = aware_utc(received)
+    measured = measurement.get("measured_at")
+    if measurement.get("sensor_time_trusted") and isinstance(measured, datetime):
+        instant = min(instant, aware_utc(measured))
+    deadline = instant + timedelta(seconds=30)
+    return deadline if instant <= now < deadline else None
 
 
 @router.get("/home")
@@ -669,6 +327,36 @@ async def home_dashboard(
     aggregate_circuit_id: str | None = None,
     user: CurrentUser = Depends(require_permission("dashboard.view")),
     session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    return await _home_dashboard(home_id, device_id, aggregate_circuit_id, user, session)
+
+
+@router.get("/home/pricing")
+async def home_pricing(
+    home_id: str | None = None,
+    device_id: str | None = None,
+    aggregate_circuit_id: str | None = None,
+    user: CurrentUser = Depends(require_permission("dashboard.view")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    return await _home_dashboard(
+        home_id,
+        device_id,
+        aggregate_circuit_id,
+        user,
+        session,
+        pricing_only=True,
+    )
+
+
+async def _home_dashboard(
+    home_id: str | None,
+    device_id: str | None,
+    aggregate_circuit_id: str | None,
+    user: CurrentUser,
+    session: AsyncSession,
+    *,
+    pricing_only: bool = False,
 ) -> dict[str, object]:
     if device_id and aggregate_circuit_id:
         raise PermissionDenied("select either one sensor or one verified aggregate")
@@ -680,8 +368,7 @@ async def home_dashboard(
             .order_by(Device.display_order, Device.id)
         )
     ).all()
-    visible_devices = [device for device in devices if device.show_on_dashboard]
-    now = datetime.now(UTC)
+    now = _dashboard_now()
     output_devices: list[dict[str, object]] = []
     device_items: dict[str, dict[str, object]] = {}
     for device in devices:
@@ -697,15 +384,19 @@ async def home_dashboard(
             .order_by(DeviceHeartbeat.received_at.desc())
             .limit(1)
         )
-        last_committed = await session.scalar(
-            select(func.max(NormalizedInterval.end_utc))
-            .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
-            .where(
-                NormalizedInterval.device_id == device.id,
-                or_(
-                    NormalizedInterval.source_kind == "stateless_v2",
-                    RawReading.reset_generation == device.reset_generation,
-                ),
+        last_committed = (
+            None
+            if pricing_only
+            else await session.scalar(
+                select(func.max(NormalizedInterval.end_utc))
+                .outerjoin(RawReading, RawReading.id == NormalizedInterval.raw_reading_id)
+                .where(
+                    NormalizedInterval.device_id == device.id,
+                    or_(
+                        NormalizedInterval.source_kind == "stateless_v2",
+                        RawReading.reset_generation == device.reset_generation,
+                    ),
+                )
             )
         )
         latest_received_at = (
@@ -761,6 +452,8 @@ async def home_dashboard(
                 "frequency_hz": heartbeat.frequency_hz,
                 "power_factor": heartbeat.power_factor,
                 "measured_at": heartbeat.measured_at,
+                "server_received_at": heartbeat.received_at,
+                "sensor_time_trusted": heartbeat.time_status == "trusted",
                 "pzem_status": heartbeat.pzem_status,
             }
         device_item: dict[str, object] = {
@@ -915,38 +608,16 @@ async def home_dashboard(
     month_bounds = _utc_bounds(timezone, now, "month")
     yesterday_bounds, last_week_bounds = _comparison_bounds(timezone, now)
     billing_bounds = _billing_cycle_bounds(timezone, account.billing_day if account else 1, now)
-    current_rate = await _current_rate(session, summary_home_id, now, ids, billing_bounds[0])
-    homes_by_id = {
-        home_id: await session.get(Home, home_id)
-        for home_id in {device.home_id for device in devices}
-    }
-    accounts_by_home_id = {
-        home_id: await session.scalar(
-            select(UtilityAccount).where(UtilityAccount.home_id == home_id)
-        )
-        for home_id in homes_by_id
-    }
-    devices_by_id = {device.id: device for device in visible_devices}
+    current_rate, current_rate_state, next_pricing_refresh_at = (
+        await current_pricing(session, summary_home_id, now)
+        if {"rates.view", "billing.view"}.issubset(user.permissions)
+        else (None, "permission_denied", None)
+    )
     for output_item in output_devices:
-        device = devices_by_id[str(output_item["id"])]
-        card_account = accounts_by_home_id[device.home_id]
-        card_home = homes_by_id[device.home_id]
-        card_timezone = (
-            card_account.timezone
-            if card_account is not None
-            else card_home.timezone
-            if card_home is not None
-            else "UTC"
-        )
-        card_cycle_start = _billing_cycle_bounds(
-            card_timezone, card_account.billing_day if card_account is not None else 1, now
-        )[0]
-        card_rate = await _current_rate(
-            session, device.home_id, now, (device.id,), card_cycle_start
-        )
-        if card_rate is None or card_rate.get("price_per_kwh") is None:
+        output_item["estimated_cost_per_hour"] = None
+        if current_rate is None or current_rate.get("price_per_kwh") is None:
             continue
-        price = Decimal(str(card_rate["price_per_kwh"]))
+        price = Decimal(str(current_rate["price_per_kwh"]))
         item_measurement = output_item.get("measurement")
         power = (
             item_measurement.get("active_power_w") if isinstance(item_measurement, dict) else None
@@ -954,7 +625,7 @@ async def home_dashboard(
         output_item["estimated_cost_per_hour"] = (
             Decimal(current_cost_per_hour_microdollars(Decimal(str(power)), price))
             / Decimal(1_000_000)
-            if power is not None
+            if power is not None and _fresh_load_deadline(output_item, now) is not None
             else None
         )
     aggregate_measurement: dict[str, object] | None = None
@@ -989,6 +660,73 @@ async def home_dashboard(
             "frequency_hz": None,
             "power_factor": None,
         }
+    selected_items = [device_items[member_id] for member_id in ids if member_id in device_items]
+    load_deadlines = [_fresh_load_deadline(item, now) for item in selected_items]
+    fresh_load = (
+        bool(ids)
+        and len(selected_items) == len(ids)
+        and all(item is not None for item in load_deadlines)
+    )
+    if current_rate is not None:
+        selected_power = (
+            sum(
+                (Decimal(str(_measurement(item)["active_power_w"])) for item in selected_items),
+                Decimal("0"),
+            )
+            if fresh_load
+            else None
+        )
+        price_value = current_rate.get("price_per_kwh")
+        current_rate.update(
+            {
+                "estimated_cost_per_hour": (
+                    Decimal(
+                        current_cost_per_hour_microdollars(
+                            selected_power, Decimal(str(price_value))
+                        )
+                    )
+                    / Decimal(1_000_000)
+                    if selected_power is not None and price_value is not None
+                    else None
+                ),
+                "load_state": "live"
+                if fresh_load
+                else "stale"
+                if len(selected_items) == len(ids)
+                and any(_measurement(item) for item in selected_items)
+                else "unavailable",
+                "load_measured_at": min(
+                    (
+                        aware_utc(_measurement(item)["measured_at"])
+                        for item in selected_items
+                        if isinstance(_measurement(item).get("measured_at"), datetime)
+                    ),
+                    default=None,
+                ),
+                "load_fresh_until": min(
+                    (deadline for deadline in load_deadlines if deadline is not None), default=None
+                )
+                if fresh_load
+                else None,
+            }
+        )
+    pricing_response: dict[str, object] = {
+        "home_id": scoped_home_id,
+        "generated_at": now,
+        "timezone": timezone,
+        "current_rate": current_rate,
+        "current_rate_state": current_rate_state,
+        "next_pricing_refresh_at": next_pricing_refresh_at,
+        "summary_scope": {
+            "kind": summary_kind if ids else "unavailable",
+            "device_id": ids[0] if len(ids) == 1 else None,
+            "device_ids": ids,
+            "aggregate": summary_kind == "verified_aggregate",
+            "circuit_id": selected_aggregate_circuit_id,
+        },
+    }
+    if pricing_only:
+        return pricing_response
     summaries = {
         "today": await _summary(session, ids, *today_bounds),
         "yesterday": await _summary(session, ids, *yesterday_bounds),
@@ -1034,11 +772,9 @@ async def home_dashboard(
             "estimate_scope": billing_estimate.scope_kind,
         }
     return {
-        "generated_at": now,
-        "timezone": timezone,
+        **pricing_response,
         "devices": output_devices,
         "summaries": summaries,
-        "current_rate": current_rate,
         "aggregate_measurement": aggregate_measurement,
         "summary_scope": {
             "kind": summary_kind if ids else "unavailable",
