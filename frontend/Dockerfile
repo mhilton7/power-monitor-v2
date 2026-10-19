@@ -14,7 +14,7 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-FROM nginxinc/nginx-unprivileged:1.30.4-alpine3.24@sha256:44e36330f74d4f3a1d4e222acca9e23b401fb87811a7597024502bb759c4dd49
+FROM nginxinc/nginx-unprivileged:1.31.6-alpine3.24@sha256:884e0b7f42f303641b0f4e78755aea647521dca0b89ca3be7992ad78b5c07434
 ARG VERSION=0.1.0-rc.31
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
