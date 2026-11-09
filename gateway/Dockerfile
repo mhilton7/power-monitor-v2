@@ -47,7 +47,7 @@ RUN set -eux; \
     cp /src/POWER-METER-V2-LICENSE.txt \
       /out/licenses/POWER-METER-V2-LICENSE.txt
 
-FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+FROM caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee
 
 ARG VERSION=0.1.0-rc.31
 ARG REVISION=unknown
